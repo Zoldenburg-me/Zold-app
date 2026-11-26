@@ -50,13 +50,13 @@ export interface ReconcileReport {
 /** Compare Monerium's processed orders with the local mirror record. */
 export async function reconcile(): Promise<ReconcileReport> {
   const findings: Finding[] = [];
-  const mirrored = new Set(store.mirroredOrderIds());
+  const mirrored = new Set(await store.mirroredOrderIds());
 
   // --- mirror seam: Monerium's deposits vs the ones we credited ------------
   let moneriumOrders: Awaited<ReturnType<typeof listProcessedIssueOrders>> = [];
   // App credentials OR any account on its own keys: listProcessedIssueOrders
   // already walks both, so an API-keys-only deployment is reconciled too.
-  if (moneriumSandboxEnabled() || usersWithOwnCredentials().length > 0) {
+  if (moneriumSandboxEnabled() || (await usersWithOwnCredentials()).length > 0) {
     moneriumOrders = await listProcessedIssueOrders();
     const known = new Map(moneriumOrders.map((o) => [o.id, o]));
 
@@ -64,7 +64,7 @@ export async function reconcile(): Promise<ReconcileReport> {
       if (mirrored.has(order.id)) continue;
       // Deposits for addresses we don't manage aren't ours to mirror. One
       // that names more than one holder is ours and unbooked: reported.
-      if (moneyInHolder(order.address).kind === "none") continue;
+      if ((await moneyInHolder(order.address)).kind === "none") continue;
       findings.push({
         kind: "UNMIRRORED",
         detail: `Monerium processed issue order ${order.id} for ${order.address} but the app never recorded it`,
@@ -85,10 +85,10 @@ export async function reconcile(): Promise<ReconcileReport> {
   }
 
   // --- conversions: balance growth no swap log accounts for ---------------
-  for (const d of store.cryptoDeposits) {
+  for (const d of (await store.list("cryptoDeposits"))) {
     for (const c of [d.conversion, ...(d.partials ?? []).map((p) => p.conversion)]) {
       if (!c?.otherInflowWei) continue;
-      const address = store.findUser(d.userId)?.address;
+      const address = (await store.findUser(d.userId))?.address;
       findings.push({
         kind: "CONVERSION_OVERLAP",
         detail: `swap ${c.txHash} of deposit ${d.id}: the Safe grew by more than the swap delivered — check the scanner booked that EURe as its own deposit`,
@@ -103,7 +103,7 @@ export async function reconcile(): Promise<ReconcileReport> {
     checked: {
       moneriumOrders: moneriumOrders.length,
       mirroredOrders: mirrored.size,
-      users: store.users.length,
+      users: (await store.list("users")).length,
     },
     findings,
     ok: findings.length === 0,

@@ -29,6 +29,10 @@ const relayChain = () => ({
   rpcUrls: { default: { http: [CANDIDE.rpcUrl] } },
 });
 
+/** Each relay RPC request: 10 s, retried once (viem's default retries three
+ *  times). This bounds a relay send; see `RELAY_TIMEOUT_MS`. */
+const relayTransport = () => http(CANDIDE.rpcUrl, { timeout: 10_000, retryCount: 1 });
+
 /** The relay key (`RELAY_KEY`), on the smart-account chain. It pays gas for
  *  calls anyone may make (a verifier deployment, a signed recovery, a
  *  finalisation); it holds no authority over any contract or Safe. */
@@ -36,12 +40,12 @@ export function relayWallet() {
   return createWalletClient({
     account: privateKeyToAccount(KEYS.relay),
     chain: relayChain(),
-    transport: http(CANDIDE.rpcUrl),
+    transport: relayTransport(),
   });
 }
 
 export function relayReader() {
-  return createPublicClient({ chain: relayChain(), transport: http(CANDIDE.rpcUrl) });
+  return createPublicClient({ chain: relayChain(), transport: relayTransport() });
 }
 
 /**
@@ -102,7 +106,8 @@ let sweeping = false;
  * signature fail (AA24) forever. Permissionless; the relay key pays gas. Only
  * here does anything wait for the receipt: nobody is waiting on the sweep.
  */
-export async function sweepMissingVerifiers(users: User[] = store.users, io: VerifierChain = chainIo): Promise<number> {
+export async function sweepMissingVerifiers(given?: User[], io: VerifierChain = chainIo): Promise<number> {
+  const users = given ?? (await store.list("users"));
   if (sweeping) return 0; // the last run is still waiting on a receipt
   sweeping = true;
   let deployed = 0;
@@ -133,25 +138,31 @@ export async function sweepMissingVerifiers(users: User[] = store.users, io: Ver
  * and that device is gone) and revoke every session the old device held.
  * Callers check the chain first; this function trusts them.
  */
-export function bindRecoveredPasskey(user: User, np: NewPasskey, now: Date): User {
-  const owner = webauthnOwnerFromJwk(np.publicKey.jwk)!;
-  const updated = store.updateUser(user.id, {
-    passkey: {
-      credentialId: np.credentialId,
-      publicKey: np.publicKey,
-      signCount: np.signCount,
-      rpId: np.rpId,
-      attestation: np.attestation,
-      createdAt: np.createdAt,
-    },
-    passkeySafe: {
-      ...user.passkeySafe!,
-      passkeyPublicKey: webauthnOwnerToStore(owner),
-      recoveredAt: now.toISOString(),
-      threshold: 1 as const,
-    },
-    authorizerAddress: undefined,
+export async function bindRecoveredPasskey(user: User, np: NewPasskey, now: Date): Promise<User> {
+  return store.tx(async () => {
+    const owner = webauthnOwnerFromJwk(np.publicKey.jwk)!;
+    const updated = await store.patchUserSub(
+      user.id,
+      "passkeySafe",
+      (ps) => ({
+        ...ps!,
+        passkeyPublicKey: webauthnOwnerToStore(owner),
+        recoveredAt: now.toISOString(),
+        threshold: 1 as const,
+      }),
+      {
+        passkey: {
+          credentialId: np.credentialId,
+          publicKey: np.publicKey,
+          signCount: np.signCount,
+          rpId: np.rpId,
+          attestation: np.attestation,
+          createdAt: np.createdAt,
+        },
+        authorizerAddress: undefined,
+      },
+    );
+    await revokeOtherSessions(user.id);
+    return updated;
   });
-  revokeOtherSessions(user.id);
-  return updated;
 }

@@ -75,6 +75,7 @@ import {
 } from "../shopify/admin.js";
 import type { ShopifyConnection } from "../shopify/types.js";
 import { describeCause, redactedMessage } from "../http/log-cause.js";
+import { mapSeq } from "../seq.js";
 
 /**
  * A merchant-supplied URL we will put in an href or a 302, or nothing.
@@ -147,11 +148,11 @@ type InstallRefusal = { code: "SHOP_CONNECTED_ELSEWHERE" | "SHOP_LINKED_THROUGH_
  *  undefined when it may. A connection belongs to one org; only that org's
  *  flows rewrite it. The shop is the lookup key, as everywhere a
  *  merchant-side id is. A missing org refuses like a missing member. */
-function installRefusal(p: PendingInstall): InstallRefusal | undefined {
-  const existing = store.findShopifyConnectionByShop(p.shop);
+async function installRefusal(p: PendingInstall): Promise<InstallRefusal | undefined> {
+  const existing = await store.findShopifyConnectionByShop(p.shop);
   if (existing && existing.orgId !== p.orgId) return { code: "SHOP_CONNECTED_ELSEWHERE", error: CONNECTED_ELSEWHERE };
-  if (store.activeMerchantLinkForShop(p.shop)) return { code: "SHOP_LINKED_THROUGH_CHECKOUT", error: LINKED_THROUGH_CHECKOUT };
-  const member = store.findOrganisation(p.orgId) ? store.memberFor(p.orgId, p.installerId) : undefined;
+  if ((await store.activeMerchantLinkForShop(p.shop))) return { code: "SHOP_LINKED_THROUGH_CHECKOUT", error: LINKED_THROUGH_CHECKOUT };
+  const member = (await store.findOrganisation(p.orgId)) ? (await store.memberFor(p.orgId, p.installerId)) : undefined;
   if (!member || member.status !== "active" || !roleCan(member.role, "org.update")) {
     return { code: "INSTALLER_NOT_ALLOWED", error: "whoever started this install can no longer connect stores for the organisation — start again from the dashboard" };
   }
@@ -188,11 +189,21 @@ function sameHex(a: string, b: string): boolean {
 
 /** The shop's email-link key, created on first use. Throws when no
  *  encryption key is configured; `canSignPayLinks` says so first. */
-function orderLinkSecret(c: ShopifyConnection): string {
+async function orderLinkSecret(c: ShopifyConnection): Promise<string> {
   if (c.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(c.id, c.orderLinkSecretEnc);
-  const secret = randomBytes(32).toString("hex");
-  store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
-  return secret;
+  // Created once: two first uses at once must not mint two keys, or the
+  // email template of the one that lost would sign links nobody accepts.
+  return store.tx(async () => {
+    await store.lockKey(`shopify-connection:${c.id}`);
+    const now = await store.findShopifyConnectionByShop(c.shop);
+    // The shop reconnected meanwhile (maybe to another org): its key is not
+    // this caller's to read.
+    if (!now || now.id !== c.id) throw new Error("this Shopify connection was replaced; reload");
+    if (now.orderLinkSecretEnc) return SECRETS.shopifyOrderLinkSecret.open(now.id, now.orderLinkSecretEnc);
+    const secret = randomBytes(32).toString("hex");
+    await store.updateShopifyConnection(c.id, { orderLinkSecretEnc: SECRETS.shopifyOrderLinkSecret.seal(c.id, secret) });
+    return secret;
+  });
 }
 
 /** A shop can be given a signed pay link when its key exists or can be made. */
@@ -203,19 +214,19 @@ const orderLinkProof = (secret: string, orderId: string) => createHmac("sha256",
 
 /** One template per connected store: the store's domain is written in, so
  *  the email needs only `{{ id }}` and the `hmac_sha256` filter from Liquid. */
-function payLinkTemplate(base: string, c: ShopifyConnection): string {
-  return `${base}/api/shopify/orders/${encodeURIComponent(c.shop)}/{{ id }}/pay?b={{ id | hmac_sha256: "${orderLinkSecret(c)}" }}`;
+async function payLinkTemplate(base: string, c: ShopifyConnection): Promise<string> {
+  return `${base}/api/shopify/orders/${encodeURIComponent(c.shop)}/{{ id }}/pay?b={{ id | hmac_sha256: "${await orderLinkSecret(c)}" }}`;
 }
 
 /** Does `b` sign this order id under the shop's key? A shop that never had
  *  a key made has no valid link. */
-function emailLinkValid(c: ShopifyConnection | undefined, orderId: string, b: unknown): boolean {
+async function emailLinkValid(c: ShopifyConnection | undefined, orderId: string, b: unknown): Promise<boolean> {
   if (!c?.orderLinkSecretEnc || typeof b !== "string") return false;
-  return sameHex(b.toLowerCase(), orderLinkProof(orderLinkSecret(c), orderId));
+  return sameHex(b.toLowerCase(), orderLinkProof(await orderLinkSecret(c), orderId));
 }
 
-export function publicConnection(c: ShopifyConnection) {
-  const payee = store.findUser(c.payeeUserId);
+export async function publicConnection(c: ShopifyConnection) {
+  const payee = await store.findUser(c.payeeUserId);
   return {
     id: c.id,
     shop: c.shop,
@@ -234,9 +245,9 @@ export function publicConnection(c: ShopifyConnection) {
 /** Whose payment page a store pays into: the org's EUR account's backing
  *  user when there is one, else the installer. Must have a payment page.
  *  The same rule for a merchant link (merchant-links.ts). */
-export function payeeFor(orgId: string, installerId: string): { user?: User; reason?: string; missingPageOf?: string } {
-  const eurAccount = store.accountsOf(orgId).find((a) => a.currency === "EUR" && a.backingUserId);
-  const user = store.findUser(eurAccount?.backingUserId ?? installerId);
+export async function payeeFor(orgId: string, installerId: string): Promise<{ user?: User; reason?: string; missingPageOf?: string }> {
+  const eurAccount = (await store.accountsOf(orgId)).find((a) => a.currency === "EUR" && a.backingUserId);
+  const user = await store.findUser(eurAccount?.backingUserId ?? installerId);
   if (!user) return { reason: "no account to receive into" };
   if (!user.paymentPage?.handle || !user.paymentPage.depositAddress) {
     return {
@@ -249,8 +260,8 @@ export function payeeFor(orgId: string, installerId: string): { user?: User; rea
 
 /** For the Apps card: why Connect store would 409 now, and whether the page
  *  missing is the caller's own (then the card links to theirs). */
-export function payeeBlock(orgId: string, userId: string): { payeeReason?: string; payeePageIsYours?: boolean } {
-  const p = payeeFor(orgId, userId);
+export async function payeeBlock(orgId: string, userId: string): Promise<{ payeeReason?: string; payeePageIsYours?: boolean }> {
+  const p = await payeeFor(orgId, userId);
   return p.user ? {} : { payeeReason: p.reason, payeePageIsYours: p.missingPageOf === userId };
 }
 
@@ -260,10 +271,11 @@ const resolving = new Map<string, Promise<void>>();
 
 /** Tell Shopify a paid checkout request is paid. Idempotent; records the
  *  outcome on the request so the sweep can retry a failure. */
-export function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
+export async function resolveShopifyRequest(r: PaymentRequest): Promise<void> {
   const inFlight = resolving.get(r.id);
   if (inFlight) return inFlight;
-  const run = resolveOnce(store.findPaymentRequest(r.id) ?? r).finally(() => resolving.delete(r.id));
+  // Set before anything is awaited, so a second caller finds it.
+  const run = (async () => resolveOnce((await store.findPaymentRequest(r.id)) ?? r))().finally(() => resolving.delete(r.id));
   resolving.set(r.id, run);
   return run;
 }
@@ -273,11 +285,11 @@ async function resolveOnce(r: PaymentRequest): Promise<void> {
   if (r.source.linkId) return;
   if (r.source.kind !== "shopify" || r.source.resolvedAt || r.state !== "PAID") return;
   if (!r.source.shop || (!r.source.sessionGid && !r.source.orderGid)) return;
-  const connection = store.findShopifyConnectionByShop(r.source.shop);
+  const connection = await store.findShopifyConnectionByShop(r.source.shop);
   if (!connection) {
     // Not an attempt: nothing was sent, and a reconnect should find the budget intact.
     const resolveError = "the store is no longer connected";
-    if (r.source.resolveError !== resolveError) store.updatePaymentRequest(r.id, { source: { ...r.source, resolveError } });
+    if (r.source.resolveError !== resolveError) await store.updatePaymentRequest(r.id, { source: { ...r.source, resolveError } });
     return;
   }
   const attempts = (r.source.resolveAttempts ?? 0) + 1;
@@ -285,7 +297,7 @@ async function resolveOnce(r: PaymentRequest): Promise<void> {
     if (r.source.orderGid) {
       // custom-app: the merchant's "Mark as paid", then the facts on the order.
       await orderMarkAsPaid(connection.shop, tokenOf(connection), r.source.orderGid);
-      store.updatePaymentRequest(r.id, {
+      await store.updatePaymentRequest(r.id, {
         source: { ...r.source, resolvedAt: new Date().toISOString(), resolveAttempts: attempts, resolveError: undefined },
       });
       console.log(`shopify: marked order ${r.source.orderName ?? r.source.orderGid} paid at ${connection.shop} (${r.id})`);
@@ -301,13 +313,13 @@ async function resolveOnce(r: PaymentRequest): Promise<void> {
       return;
     }
     const result = await paymentSessionResolve(connection.shop, tokenOf(connection), r.source.sessionGid!);
-    store.updatePaymentRequest(r.id, {
+    await store.updatePaymentRequest(r.id, {
       source: { ...r.source, resolvedAt: new Date().toISOString(), resolveAttempts: attempts, resolveError: undefined, ...(externalHttpUrl(result.redirectUrl) ? { returnUrl: externalHttpUrl(result.redirectUrl)! } : {}) },
     });
     console.log(`shopify: resolved session for ${r.id} at ${connection.shop}`);
   } catch (err: any) {
     const resolveError = redactedMessage(err).slice(0, 300);
-    store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError } });
+    await store.updatePaymentRequest(r.id, { source: { ...r.source, resolveAttempts: attempts, resolveError } });
     // The sweep stops here; the row keeps the error for the dashboard, and this line is the alert.
     if (attempts === RESOLVE_MAX_ATTEMPTS) {
       console.error(`shopify: gave up telling ${connection.shop} that ${r.id} is paid after ${attempts} attempts: ${resolveError}`);
@@ -339,8 +351,8 @@ export function shopifyRequestRow(r: PaymentRequest, base: string) {
 }
 
 /** Shopify requests matching `keep`, newest first, at most 100. */
-export function newestShopifyRequests(keep: (r: PaymentRequest) => boolean): PaymentRequest[] {
-  return store.paymentRequests
+export async function newestShopifyRequests(keep: (r: PaymentRequest) => boolean): Promise<PaymentRequest[]> {
+  return (await store.list("paymentRequests"))
     .filter((r) => r.source.kind === "shopify" && keep(r))
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
     .slice(0, 100);
@@ -354,18 +366,18 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
   router.get(
     "/orgs/:orgId/shopify",
     wrap(async (req, res) => {
-      const ctx = resolveOrg(req, res, requireSession);
+      const ctx = await resolveOrg(req, res, requireSession);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "org.read")) return;
       // Carries payment codes, and for a member who may change the org each
       // store's email-link key.
       res.setHeader("cache-control", "no-store");
       const manage = roleCan(ctx.member.role, "org.update");
-      const connections = store.shopifyConnectionsForOrg(ctx.org.id);
+      const connections = await store.shopifyConnectionsForOrg(ctx.org.id);
       const shops = new Set(connections.map((c) => c.shop));
       const base = baseUrlFor(req);
       // A linked shop's requests are listed by the merchant-links route.
-      const requests = newestShopifyRequests((r) => !r.source.linkId && Boolean(r.source.shop && shops.has(r.source.shop)))
+      const requests = (await newestShopifyRequests((r) => !r.source.linkId && Boolean(r.source.shop && shops.has(r.source.shop))))
         .map((r) => shopifyRequestRow(r, base));
       res.json({
         ...shopifyAvailable(),
@@ -375,7 +387,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         orderTtlHours: Math.round(SHOPIFY.orderTtlMs / 3_600_000),
         canManage: manage,
         // Why Connect store would 409 now, said before anyone types a shop.
-        ...(manage ? payeeBlock(ctx.org.id, ctx.userId) : {}),
+        ...(manage ? (await payeeBlock(ctx.org.id, ctx.userId)) : {}),
         endpoints: SHOPIFY.mode === "payments-app"
           ? {
               payment: `${base}/api/shopify/payment`,
@@ -390,10 +402,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
             },
         // custom-app: each store's Liquid for its order-confirmation email,
         // a link to the order's pay page signed with that store's key.
-        connections: connections.map((c) => ({
-          ...publicConnection(c),
-          ...(manage && c.mode === "custom-app" && canSignPayLinks(c) ? { payLinkTemplate: payLinkTemplate(base, c) } : {}),
-        })),
+        connections: await mapSeq(connections, async (c) => store.tx(async () => ({
+          ...(await publicConnection(c)),
+          ...(manage && c.mode === "custom-app" && canSignPayLinks(c) ? { payLinkTemplate: await payLinkTemplate(base, c) } : {}),
+        }))),
         requests,
       });
     }),
@@ -402,7 +414,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
   router.post(
     "/orgs/:orgId/shopify/install",
     wrap(async (req, res) => {
-      const ctx = resolveOrg(req, res, requireSession);
+      const ctx = await resolveOrg(req, res, requireSession);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "org.update")) return;
       const avail = shopifyAvailable();
@@ -411,14 +423,14 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       if (!isValidShopDomain(shop)) {
         return res.status(400).json({ error: "shop must be the store's myshopify.com domain, e.g. my-store.myshopify.com" });
       }
-      const existing = store.findShopifyConnectionByShop(shop);
+      const existing = await store.findShopifyConnectionByShop(shop);
       if (existing && existing.orgId !== ctx.org.id) {
         return res.status(409).json({ error: CONNECTED_ELSEWHERE, code: "SHOP_CONNECTED_ELSEWHERE" });
       }
-      if (store.activeMerchantLinkForShop(shop)) {
+      if ((await store.activeMerchantLinkForShop(shop))) {
         return res.status(409).json({ error: LINKED_THROUGH_CHECKOUT, code: "SHOP_LINKED_THROUGH_CHECKOUT" });
       }
-      const payee = payeeFor(ctx.org.id, ctx.userId);
+      const payee = await payeeFor(ctx.org.id, ctx.userId);
       if (!payee.user) return res.status(409).json({ error: payee.reason });
       const state = randomBytes(24).toString("base64url");
       const nonce = randomBytes(24).toString("base64url");
@@ -464,7 +476,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // minutes ago. Ask again before fetching a token, and once more after
       // the exchange (another callback may have connected the shop meanwhile)
       // with no await between that check and the write.
-      const refusedEarly = installRefusal(pending);
+      const refusedEarly = await installRefusal(pending);
       if (refusedEarly) return refuse(refusedEarly);
       let token: { accessToken: string; scope: string };
       try {
@@ -472,39 +484,46 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       } catch (err: any) {
         return back({ error: `Shopify refused the install: ${redactedMessage(err).slice(0, 160)}` });
       }
-      // The row id is part of the AAD, so it is fixed before sealing. Nothing
-      // awaits between here and the write below.
-      const existing = store.findShopifyConnectionByShop(shop);
-      const connectionId = existing?.id ?? randomUUID();
-      let enc: string;
-      try {
-        enc = SECRETS.shopifyAccessToken.seal(connectionId, token.accessToken);
-      } catch (err) {
-        if (err instanceof EncryptionUnavailableError) return back({ error: err.message, code: "NOT_SET_UP" });
-        throw err;
-      }
-      const refusedLate = installRefusal(pending);
-      if (refusedLate) return refuse(refusedLate);
-      const now = new Date().toISOString();
-      const connection = existing
-        ? store.updateShopifyConnection(existing.id, { accessTokenEnc: enc, scope: token.scope, mode: SHOPIFY.mode, payeeUserId: pending.payeeUserId, installedByUserId: pending.installerId, installedAt: now, configuredAt: undefined, configureError: undefined })
-        : store.addShopifyConnection({
-            id: connectionId,
-            orgId: pending.orgId,
-            shop,
-            payeeUserId: pending.payeeUserId,
-            accessTokenEnc: enc,
-            scope: token.scope,
-            mode: SHOPIFY.mode,
-            installedByUserId: pending.installerId,
-            installedAt: now,
-            updatedAt: now,
-          });
-      const payee = store.findUser(pending.payeeUserId);
+      // The row id is part of the AAD, so it is fixed before sealing. The
+      // shop is read, checked again and written in one transaction.
+      const written = await store.tx(async () => {
+        // The org's row held: the installer's membership and role change only
+        // under the same lock, so installRefusal holds until the write.
+        await store.lockOrganisation(pending.orgId);
+        const existing = await store.findShopifyConnectionByShop(shop);
+        const connectionId = existing?.id ?? randomUUID();
+        let enc: string;
+        try {
+          enc = SECRETS.shopifyAccessToken.seal(connectionId, token.accessToken);
+        } catch (err) {
+          if (err instanceof EncryptionUnavailableError) return { answered: back({ error: err.message, code: "NOT_SET_UP" }) };
+          throw err;
+        }
+        const refusedLate = await installRefusal(pending);
+        if (refusedLate) return { answered: refuse(refusedLate) };
+        const now = new Date().toISOString();
+        return { existing, connection: existing
+          ? (await store.updateShopifyConnection(existing.id, { accessTokenEnc: enc, scope: token.scope, mode: SHOPIFY.mode, payeeUserId: pending.payeeUserId, installedByUserId: pending.installerId, installedAt: now, configuredAt: undefined, configureError: undefined }))
+          : (await store.addShopifyConnection({
+              id: connectionId,
+              orgId: pending.orgId,
+              shop,
+              payeeUserId: pending.payeeUserId,
+              accessTokenEnc: enc,
+              scope: token.scope,
+              mode: SHOPIFY.mode,
+              installedByUserId: pending.installerId,
+              installedAt: now,
+              updatedAt: now,
+            })) };
+      });
+      if ("answered" in written) return written.answered;
+      const { existing, connection } = written;
+      const payee = await store.findUser(pending.payeeUserId);
       try {
         if (SHOPIFY.mode === "payments-app") {
           await paymentsAppConfigure(shop, token.accessToken, payee?.paymentPage?.handle ?? pending.orgId, true);
-          store.updateShopifyConnection(connection.id, { configuredAt: new Date().toISOString(), configureError: undefined });
+          await store.updateShopifyConnection(connection.id, { configuredAt: new Date().toISOString(), configureError: undefined });
         } else {
           // custom-app: the store must tell us about new orders. Subscribing
           // here keeps the API self-contained; the app TOML can declare the
@@ -516,10 +535,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           );
           // "already been taken" returns no id; the one we stored last time
           // is still the live subscription, so keep it.
-          store.updateShopifyConnection(connection.id, { configuredAt: new Date().toISOString(), configureError: undefined, webhookSubscriptionId: created.id ?? existing?.webhookSubscriptionId });
+          await store.updateShopifyConnection(connection.id, { configuredAt: new Date().toISOString(), configureError: undefined, webhookSubscriptionId: created.id ?? existing?.webhookSubscriptionId });
         }
       } catch (err: any) {
-        store.updateShopifyConnection(connection.id, { configureError: redactedMessage(err).slice(0, 300) });
+        await store.updateShopifyConnection(connection.id, { configureError: redactedMessage(err).slice(0, 300) });
       }
       back({ shop });
     }),
@@ -528,10 +547,10 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
   router.delete(
     "/orgs/:orgId/shopify/:id",
     wrap(async (req, res) => {
-      const ctx = resolveOrg(req, res, requireSession);
+      const ctx = await resolveOrg(req, res, requireSession);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "org.update")) return;
-      const c = store.shopifyConnectionsForOrg(ctx.org.id).find((x) => x.id === req.params.id);
+      const c = (await store.shopifyConnectionsForOrg(ctx.org.id)).find((x) => x.id === req.params.id);
       if (!c) return res.status(404).json({ error: "no such connection" });
       // Best effort: tell the store the method is gone. A failure here does
       // not keep the connection — the merchant asked to disconnect.
@@ -546,7 +565,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         // token we could not decrypt is logged, since Shopify was not told.
         console.warn(`shopify: disconnect of ${c.shop} could not reach the store: ${describeCause(err)}`);
       }
-      store.removeShopifyConnection(c.id);
+      await store.removeShopifyConnection(c.id);
       res.json({ ok: true });
     }),
   );
@@ -554,7 +573,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
   // ── Shopify side: session webhooks, HMAC-signed ────────────────────────
 
   /** Authenticate a request from Shopify and find the store it is about. */
-  const fromShopify = (req: express.Request, res: express.Response): ShopifyConnection | undefined => {
+  const fromShopify = async (req: express.Request, res: express.Response): Promise<ShopifyConnection | undefined> => {
     if (!SHOPIFY.enabled) {
       res.status(503).json({ error: "Shopify is not configured on this deployment" });
       return undefined;
@@ -564,7 +583,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       return undefined;
     }
     const shop = normaliseShop(req.header("shopify-shop-domain") ?? "");
-    const c = shop ? store.findShopifyConnectionByShop(shop) : undefined;
+    const c = shop ? (await store.findShopifyConnectionByShop(shop)) : undefined;
     if (!c) {
       res.status(404).json({ error: "this store is not connected to Zold" });
       return undefined;
@@ -575,7 +594,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
   router.post(
     "/shopify/payment",
     wrap(async (req, res) => {
-      const c = fromShopify(req, res);
+      const c = await fromShopify(req, res);
       if (!c) return;
       const b = req.body ?? {};
       const sessionId = String(b.id ?? "");
@@ -584,7 +603,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       const base = baseUrlFor(req);
       const pageUrl = (r: PaymentRequest) => `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`;
       // Shopify retries; the same session must get the same page.
-      const existing = store.findPaymentRequestBySource("shopify", sessionId, c.shop);
+      const existing = await store.findPaymentRequestBySource("shopify", sessionId, c.shop);
       if (existing) return res.status(201).json({ redirect_url: pageUrl(existing) });
       const inFlight = opening.get(`${c.shop}|${sessionId}`);
       if (inFlight) return res.status(201).json({ redirect_url: pageUrl(await inFlight) });
@@ -600,7 +619,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
           "Zold takes immediate payment only. Switch this payment method to automatic capture.").catch(() => {});
         return res.status(422).json({ error: "only kind=sale is supported" });
       }
-      const payee = store.findUser(c.payeeUserId);
+      const payee = await store.findUser(c.payeeUserId);
       if (!payee?.paymentPage?.handle) return res.status(409).json({ error: "the receiving account has no payment page" });
       const r = await openOnce(`${c.shop}|${sessionId}`, () => createPaymentRequest(
         payee,
@@ -621,7 +640,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         },
         c.orgId,
       ));
-      store.updateShopifyConnection(c.id, { lastSessionAt: new Date().toISOString() });
+      await store.updateShopifyConnection(c.id, { lastSessionAt: new Date().toISOString() });
       res.status(201).json({ redirect_url: pageUrl(r) });
     }),
   );
@@ -631,7 +650,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
     message: string,
   ) =>
     wrap(async (req, res) => {
-      const c = fromShopify(req, res);
+      const c = await fromShopify(req, res);
       if (!c) return;
       const gid = String(req.body?.gid ?? "");
       if (!gid) return res.status(400).json({ error: "gid is required" });
@@ -661,30 +680,31 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
   router.post(
     "/shopify/webhooks/orders",
     wrap(async (req, res) => {
-      const c = fromShopify(req, res);
+      const c = await fromShopify(req, res);
       if (!c) return;
       const deliveryId = String(req.header("x-shopify-webhook-id") ?? "").trim();
       if (!deliveryId || deliveryId.length > 200) return res.status(400).json({ error: "X-Shopify-Webhook-Id is required" });
-      const seen = store.shopifyDelivery(deliveryId);
-      if (seen && seen.shop !== c.shop) {
+      // The stored row: this delivery, or the one recorded first under its id.
+      const seen = await store.recordShopifyDelivery({ id: deliveryId, shop: c.shop, at: new Date().toISOString(), handled: false });
+      if (seen.shop !== c.shop) {
         return res.status(401).json({ error: "this delivery was signed for another store" });
       }
-      if (seen?.handled) return res.status(200).json({ ok: true, duplicate: true });
-      if (!seen) store.recordShopifyDelivery({ id: deliveryId, shop: c.shop, at: new Date().toISOString(), handled: false });
+      if (seen.handled) return res.status(200).json({ ok: true, duplicate: true });
       // Handled once it has been answered without a server error; a failed one
       // is processed again on Shopify's retry.
       res.once("finish", () => {
-        if (res.statusCode < 500) store.markShopifyDeliveryHandled(deliveryId);
+        if (res.statusCode >= 500) return;
+        // Not marked is processed again on Shopify's retry; an unhandled rejection would exit the API.
+        store.markShopifyDeliveryHandled(deliveryId).catch((e) => console.error(`shopify: delivery ${deliveryId} not marked handled: ${describeCause(e)}`));
       });
       const topic = String(req.header("x-shopify-topic") ?? "");
       const o = req.body ?? {};
       const orderGid = String(o.admin_graphql_api_id ?? (o.id ? `gid://shopify/Order/${o.id}` : ""));
       if (!orderGid) return res.status(400).json({ error: "the order has no id" });
-      const existing = store.findPaymentRequestBySource("shopify", orderGid, c.shop);
+      const existing = await store.findPaymentRequestBySource("shopify", orderGid, c.shop);
       if (topic === "orders/cancelled") {
-        if (existing && effectiveState(existing) === "OPEN" && existing.payments.length === 0) {
-          store.updatePaymentRequest(existing.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
-        }
+        // Open, unexpired and unpaid on the stored row (rules.ts cancelUnpaidOnRow).
+        if (existing) await store.cancelUnpaidPaymentRequest(existing.id);
         return res.status(200).json({ ok: true, cancelled: Boolean(existing) });
       }
       if (topic !== "orders/create") return res.status(200).json({ ok: true, ignored: topic });
@@ -701,7 +721,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       }
       const amount = Number(o.total_price);
       if (!(amount > 0) || amount > MAX_REQUEST_EUR) return res.status(200).json({ ok: true, ignored: "amount" });
-      const payee = store.findUser(c.payeeUserId);
+      const payee = await store.findUser(c.payeeUserId);
       if (!payee?.paymentPage?.handle) {
         console.error(`shopify: order ${o.name} at ${c.shop}: the receiving account has no payment page`);
         return res.status(200).json({ ok: true, ignored: "no payment page" });
@@ -727,7 +747,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
         },
         c.orgId,
       ));
-      store.updateShopifyConnection(c.id, { lastSessionAt: new Date().toISOString() });
+      await store.updateShopifyConnection(c.id, { lastSessionAt: new Date().toISOString() });
       res.status(200).json({ ok: true, code: displayCode(r.code) });
     }),
   );
@@ -742,14 +762,14 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
   };
 
   /** The order's request, its shop and its numeric id, or nothing. */
-  const orderRef = (shopRaw: string, orderRaw: string) => {
+  const orderRef = async (shopRaw: string, orderRaw: string) => {
     const shop = normaliseShop(shopRaw);
     const gid = orderGidOf(orderRaw);
     if (!isValidShopDomain(shop) || !gid) return undefined;
     // The shop in the URL is part of the key: order ids are per-store
     // sequences, so the same number names a different order at every store.
     // A linked shop's orders are read through the checkout service, not here.
-    const found = store.findPaymentRequestBySource("shopify", gid, shop);
+    const found = await store.findPaymentRequestBySource("shopify", gid, shop);
     return { shop, orderId: gid.split("/").pop()!, request: found && !found.source.linkId ? found : undefined };
   };
 
@@ -770,8 +790,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       res.setHeader("access-control-allow-origin", "*");
       res.setHeader("cache-control", "no-store");
       res.setHeader("x-robots-tag", "noindex, nofollow");
-      const r = orderRef(String(req.params.shop), String(req.params.orderId))?.request;
-      const user = r ? store.findUser(r.userId) : undefined;
+      const r = (await orderRef(String(req.params.shop), String(req.params.orderId)))?.request;
+      const user = r ? (await store.findUser(r.userId)) : undefined;
       const t = typeof req.query.t === "string" ? req.query.t : "";
       const proven = Boolean(r?.source.checkoutTokenHash && t && sameHex(sha256Hex(t), r.source.checkoutTokenHash));
       if (!r || !user || !proven) return res.status(404).json({ error: "no payment request for this order yet", pending: true });
@@ -799,8 +819,8 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
     wrap(async (req, res) => {
       res.setHeader("cache-control", "no-store");
       res.setHeader("x-robots-tag", "noindex, nofollow");
-      const ref = orderRef(String(req.params.shop), String(req.params.orderId));
-      if (!ref || !emailLinkValid(store.findShopifyConnectionByShop(ref.shop), ref.orderId, req.query.b)) {
+      const ref = await orderRef(String(req.params.shop), String(req.params.orderId));
+      if (!ref || !(await emailLinkValid(await store.findShopifyConnectionByShop(ref.shop), ref.orderId, req.query.b))) {
         return res.status(403).type("text/plain").send("This link does not open a payment. Use the link in your order confirmation email, or the payment block on the store's thank-you page.");
       }
       if (!ref.request) return res.status(404).type("text/plain").send("The payment for this order is not ready yet. Try again in a minute.");
@@ -810,16 +830,16 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
 
   // ── Buyer side: back to the store ──────────────────────────────────────
 
-  const requestFromCode = (raw: string) => {
+  const requestFromCode = async (raw: string) => {
     const code = normaliseCode(raw);
-    const r = store.findPaymentRequestByCode(code);
+    const r = await store.findPaymentRequestByCode(code);
     return r?.source.kind === "shopify" ? r : undefined;
   };
 
   router.get(
     "/shopify/return/:code",
     wrap(async (req, res) => {
-      const r = requestFromCode(String(req.params.code ?? ""));
+      const r = await requestFromCode(String(req.params.code ?? ""));
       const base = baseUrlFor(req);
       if (!r) return res.status(404).send("no such checkout");
       const page = `${base}/pay/${encodeURIComponent(r.handle)}/${displayCode(r.code)}`;
@@ -827,14 +847,14 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
       // A linked shop: the checkout marks the order paid; the buyer goes to
       // the order's status page.
       if (r.source.linkId) return res.redirect(externalHttpUrl(r.source.orderStatusUrl) ?? page);
-      let fresh = store.findPaymentRequest(r.id)!;
+      let fresh = (await store.findPaymentRequest(r.id))!;
       if (!fresh.source.resolvedAt) {
         try {
           await resolveShopifyRequest(fresh);
         } catch {
           /* recorded on the request; the page explains */
         }
-        fresh = store.findPaymentRequest(r.id)!;
+        fresh = (await store.findPaymentRequest(r.id))!;
       }
       res.redirect(externalHttpUrl(fresh.source.returnUrl) ?? `${page}?notice=store-pending`);
     }),
@@ -843,7 +863,7 @@ export function createShopifyRouter(requireSession: SessionResolver): express.Ro
   router.get(
     "/shopify/cancel/:code",
     wrap(async (req, res) => {
-      const r = requestFromCode(String(req.params.code ?? ""));
+      const r = await requestFromCode(String(req.params.code ?? ""));
       const base = baseUrlFor(req);
       if (!r) return res.status(404).send("no such checkout");
       // A GET that anyone holding the code can follow — and the code travels

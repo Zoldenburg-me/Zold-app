@@ -37,6 +37,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { forEachSeq } from "../services/api/src/seq.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -59,27 +60,27 @@ const check = (name: string, fn: () => void | Promise<void>) =>
     .then(() => { passed++; console.log(`  ok  ${name}`); })
     .catch((err) => { console.error(`FAIL  ${name}\n      ${(err as Error).stack ?? err}`); process.exitCode = 1; });
 
-initStore();
+await initStore();
 const NOW = "2026-10-26T10:00:00.000Z";
 const MONTH = "2026-10";
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" };
 const safe = (b: string) => `0x${b.repeat(20)}`;
-const addUser = (id: string, address: string) =>
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", address, createdAt: "2026-01-01T00:00:00.000Z" } as any);
-const member = (userId: string, role: string) =>
-  store.addMember({ id: `m_${userId}`, orgId: "org_co", userId, role, status: "active", createdAt: NOW } as any);
+const addUser = async (id: string, address: string) =>
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", address, createdAt: "2026-01-01T00:00:00.000Z" } as any);
+const member = async (userId: string, role: string) =>
+  await store.addMember({ id: `m_${userId}`, orgId: "org_co", userId, role, status: "active", createdAt: NOW } as any);
 
-addUser("u_boss", safe("bb"));
-["u_admin", "u_accountant", "u_viewer", "u_payer", "u_outsider"].forEach((u, i) => addUser(u, safe(`c${i}`)));
-store.addOrganisation({ id: "org_co", type: "business", name: "Co", legalName: "Co UG", plan: "business", reporting, address: { line1: "A", postalCode: "1", city: "R", country: "DE" }, invoicing: {}, verifications: {}, createdAt: NOW, updatedAt: NOW } as any);
-member("u_boss", "owner");
-member("u_admin", "admin");
-member("u_accountant", "accountant");
-member("u_viewer", "viewer");
-member("u_payer", "payer");
-store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("bb"), backingUserId: "u_boss", createdAt: NOW } as any);
-store.recordMoneriumIssue({ orderId: "ord_co", userId: "u_boss", amountEur: 70, counterpartyName: "Me at my bank", processedAt: NOW, recordedAt: NOW } as any);
-writeStatementLinesFor(store.findUser("u_boss")!);
+await addUser("u_boss", safe("bb"));
+await forEachSeq(["u_admin", "u_accountant", "u_viewer", "u_payer", "u_outsider"], async (u, i) => await addUser(u, safe(`c${i}`)));
+await store.addOrganisation({ id: "org_co", type: "business", name: "Co", legalName: "Co UG", plan: "business", reporting, address: { line1: "A", postalCode: "1", city: "R", country: "DE" }, invoicing: {}, verifications: {}, createdAt: NOW, updatedAt: NOW } as any);
+await member("u_boss", "owner");
+await member("u_admin", "admin");
+await member("u_accountant", "accountant");
+await member("u_viewer", "viewer");
+await member("u_payer", "payer");
+await store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("bb"), backingUserId: "u_boss", createdAt: NOW } as any);
+await store.recordMoneriumIssue({ orderId: "ord_co", userId: "u_boss", amountEur: 70, counterpartyName: "Me at my bank", processedAt: NOW, recordedAt: NOW } as any);
+await writeStatementLinesFor((await store.findUser("u_boss"))!);
 
 const app = express();
 app.use(express.json());
@@ -132,7 +133,7 @@ await check("the statement, the CSV and the ZIP carry it, and replace refuses it
   assert.ok((await zip()).some((e) => e.name.includes(OLD)));
   const r = await replace("u_boss");
   assert.equal(r.status, 409, "a Beleg that still verifies is not revoked");
-  assert.equal(store.findDocumentByCode(OLD)!.revokedAt, undefined);
+  assert.equal((await store.findDocumentByCode(OLD))!.revokedAt, undefined);
 });
 
 await check("the statement, the CSV and the ZIP index the documents once, not one scan per line", async () => {
@@ -210,31 +211,31 @@ await check("no session 401, a stranger 404, a viewer and a payer 403; nothing i
   assert.equal((await replace("u_outsider")).status, 404);
   assert.equal((await replace("u_viewer")).status, 403);
   assert.equal((await replace("u_payer")).status, 403);
-  assert.equal(store.findDocumentByCode(OLD)!.revokedAt, undefined);
+  assert.equal((await store.findDocumentByCode(OLD))!.revokedAt, undefined);
   assert.equal((await call("POST", `/orgs/org_co/bookkeeping/lines/nope/beleg/replace`, {})).status, 404);
 });
 
 await check("the accountant replaces it: the old one is revoked, frozen and still answers at its code; the new one verifies", async () => {
-  const frozen = JSON.stringify(store.findDocumentByCode(OLD)!.snapshot);
+  const frozen = JSON.stringify((await store.findDocumentByCode(OLD))!.snapshot);
   const r = await replace("u_accountant");
   assert.equal(r.status, 201, JSON.stringify(r.body));
   const NEW: string = r.body.code;
   assert.notEqual(NEW, OLD);
-  const old = store.findDocumentByCode(OLD)!;
+  const old = (await store.findDocumentByCode(OLD))!;
   assert.ok(old.revokedAt, "revoked, not deleted");
   assert.equal(JSON.stringify(old.snapshot), frozen, "the snapshot is untouched");
   const page = (await call("GET", `/v/${OLD}`, undefined, null)).body;
   assert.equal(page.verification.checks.find((c: any) => c.name === "Not revoked").ok, false);
   assert.equal((await call("GET", `/v/${OLD}/beleg.pdf`, undefined, null)).status, 410);
   assert.equal((await recordsCheck(NEW)).ok, true);
-  assert.equal((store.findDocumentByCode(NEW)!.snapshot as any).line.ownTransfer, undefined, "the new one says what the books say now");
+  assert.equal(((await store.findDocumentByCode(NEW))!.snapshot as any).line.ownTransfer, undefined, "the new one says what the books say now");
   const l = await line();
   assert.equal(l.documentCode, NEW);
   assert.equal(l.belegStale, undefined);
   assert.ok((await csv()).includes(NEW));
   const names = (await zip()).map((e) => e.name);
   assert.ok(names.some((n) => n.includes(NEW)) && !names.includes(`MISSING-${MONTH}.txt`), names.join("|"));
-  const audit = store.auditFor("u_accountant").find((a: any) => a.kind === "document.reissued");
+  const audit = (await store.auditFor("u_accountant")).find((a: any) => a.kind === "document.reissued");
   assert.ok(audit, "the replace is in the audit log, under the accountant");
   assert.equal((audit as any).data.lineId, IN);
   assert.ok(!JSON.stringify(audit).includes(OLD) && !JSON.stringify(audit).includes(NEW), "a verification code is a credential: not in the audit log");
@@ -244,36 +245,36 @@ await check("a Beleg issued before a mark keeps verifying, so replace refuses it
   assert.equal((await own(true)).status, 200);
   const NEW = (await line()).documentCode;
   assert.equal((await replace("u_admin")).status, 409, "issued unmarked, then marked: still true");
-  store.updateDocument(store.findDocumentByCode(NEW)!.id, { revokedAt: NOW });
+  await store.updateDocument((await store.findDocumentByCode(NEW))!.id, { revokedAt: NOW });
   const issued = await replace("u_admin");
   assert.equal(issued.status, 201, "nothing live to revoke: replace just issues");
-  assert.equal((store.findDocumentByCode(issued.body.code)!.snapshot as any).line.ownTransfer, true);
+  assert.equal(((await store.findDocumentByCode(issued.body.code))!.snapshot as any).line.ownTransfer, true);
   assert.equal((await own(false)).status, 200);
   assert.ok((await line()).belegStale, "stale again once the mark comes off");
   const byOwner = await replace("u_boss");
   assert.equal(byOwner.status, 201);
-  assert.ok(store.findDocumentByCode(issued.body.code)!.revokedAt);
+  assert.ok((await store.findDocumentByCode(issued.body.code))!.revokedAt);
   assert.equal((await line()).documentCode, byOwner.body.code);
 });
 
 await check("a replacement never carries the old code: its public page does not return it", async () => {
   const NEW: string = (await line()).documentCode;
-  const revoked = store.documentsForOrg("org_co").filter((d) => d.revokedAt && (d.snapshot as any).line?.lineId === IN).map((d) => d.code);
+  const revoked = (await store.documentsForOrg("org_co")).filter((d) => d.revokedAt && (d.snapshot as any).line?.lineId === IN).map((d) => d.code);
   assert.ok(revoked.length >= 2, "this line has replaced Belege behind it");
   const page = (await call("GET", `/v/${NEW}`, undefined, null)).text;
   for (const old of revoked) assert.ok(!page.includes(old), "a revoked Beleg's code is a credential to its figures");
-  assert.equal((store.findDocumentByCode(NEW)!.snapshot as any).line.documentCode, undefined);
+  assert.equal(((await store.findDocumentByCode(NEW))!.snapshot as any).line.documentCode, undefined);
 });
 
 await check("two replaces at once: one replaces, the other finds the new Beleg live and is refused; one live Beleg on the line", async () => {
   assert.equal((await own(true)).status, 200);
-  store.updateDocument(store.findDocumentByCode((await line()).documentCode)!.id, { revokedAt: NOW });
+  await store.updateDocument((await store.findDocumentByCode((await line()).documentCode))!.id, { revokedAt: NOW });
   assert.equal((await replace("u_boss")).status, 201, "a marked Beleg");
   assert.equal((await own(false)).status, 200);
   assert.ok((await line()).belegStale);
   const both = await Promise.all([replace("u_boss"), replace("u_accountant")]);
   assert.deepEqual(both.map((r) => r.status).sort(), [201, 409]);
-  const live = store.documentsForOrg("org_co").filter((d) => !d.revokedAt && (d.snapshot as any).line?.lineId === IN);
+  const live = (await store.documentsForOrg("org_co")).filter((d) => !d.revokedAt && (d.snapshot as any).line?.lineId === IN);
   assert.equal(live.length, 1);
   assert.equal((await line()).documentCode, live[0].code);
 });
@@ -284,41 +285,41 @@ const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 const lineOf = async (id: string, month = MONTH) => (await call("GET", `/orgs/org_co/bookkeeping/statement?month=${month}`)).body.lines.find((l: any) => l.id === id);
 
 await check("a payout Monerium rejected after its Beleg: replace refuses with the reason, revokes nothing and issues nothing", async () => {
-  store.addTransfer({ id: "t_out", userId: "u_boss", rail: "sepa", state: "PAYOUT_SUBMITTED", sendEur: 80, receiveEur: 80, recipientName: "Supplier GmbH", recipientIban: "DE89370400440532013000", reference: "RE-9", txs: [], createdAt: "2026-10-05T10:00:00.000Z", updatedAt: "2026-10-05T10:00:00.000Z" } as any);
-  writeStatementLinesFor(store.findUser("u_boss")!);
+  await store.addTransfer({ id: "t_out", userId: "u_boss", rail: "sepa", state: "PAYOUT_SUBMITTED", sendEur: 80, receiveEur: 80, recipientName: "Supplier GmbH", recipientIban: "DE89370400440532013000", reference: "RE-9", txs: [], createdAt: "2026-10-05T10:00:00.000Z", updatedAt: "2026-10-05T10:00:00.000Z" } as any);
+  await writeStatementLinesFor((await store.findUser("u_boss"))!);
   const OUT = lineId("org_co", "transfer:t_out:payout");
   const issued = await call("POST", `/orgs/org_co/bookkeeping/lines/${OUT}/beleg`, {});
   assert.equal(issued.status, 201, JSON.stringify(issued.body));
-  store.updateTransfer("t_out", { state: "FAILED" } as any);
+  await store.updateTransfer("t_out", { state: "FAILED" } as any);
   assert.match((await recordsCheck(issued.body.code)).detail, /transfer is now FAILED/);
   const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${OUT}/beleg/replace`, {});
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.match(r.body.error, /would not match the books either/);
   assert.match(r.body.error, /transfer is now FAILED/);
-  assert.equal(store.findDocumentByCode(issued.body.code)!.revokedAt, undefined, "the old one is not revoked");
-  assert.equal(store.documentsForOrg("org_co").filter((d) => (d.snapshot as any).line?.lineId === OUT).length, 1, "no second one issued");
+  assert.equal((await store.findDocumentByCode(issued.body.code))!.revokedAt, undefined, "the old one is not revoked");
+  assert.equal((await store.documentsForOrg("org_co")).filter((d) => (d.snapshot as any).line?.lineId === OUT).length, 1, "no second one issued");
   assert.equal((await lineOf(OUT)).belegStale.code, issued.body.code);
 });
 
 await check("a deposit converted in parts: each fill's Beleg verifies and is handed out, before and after the rest is converted", async () => {
   const at = "2026-10-12T10:00:00.000Z";
   const p1 = { creditedEur: 40, receiptPortionEur: 40.4, provider: "dex", rate: 1.1, conversion: { txHash: H(30), at: "2026-10-12T10:01:00.000Z", amountInUnits: "44000000" } };
-  store.addCryptoDeposit({ id: "d_part", userId: "u_boss", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 0, amountUnits: "110000000", amountUsdc: 110,
+  await store.addCryptoDeposit({ id: "d_part", userId: "u_boss", chainId: 31337, token: "USDC", txHash: H(5), logIndex: 0, amountUnits: "110000000", amountUsdc: 110,
     receipt: { amountEur: 101, rate: 1.089, rateProvider: "ecb", rateAsOf: "2026-10-12", ratedAt: at, blockTimestamp: "2026-10-12T09:58:00.000Z" },
     holding: "held", settledAt: at, settlementAsset: "EURE", partials: [p1], txs: [{ step: "safe.swap(usdc->eure)", hash: H(30) }], detectedAt: at, updatedAt: at } as any);
-  writeStatementLinesFor(store.findUser("u_boss")!);
+  await writeStatementLinesFor((await store.findUser("u_boss"))!);
   const P1 = lineId("org_co", "deposit:d_part:disposal:p1");
   const first = await call("POST", `/orgs/org_co/bookkeeping/lines/${P1}/beleg`, {});
   assert.equal(first.status, 201, JSON.stringify(first.body));
   assert.equal((await recordsCheck(first.body.code)).ok, true, "the first fill, the rest still held");
   assert.equal((await lineOf(P1)).documentCode, first.body.code);
-  store.updateCryptoDeposit("d_part", { holding: "converted", settledAt: at, settlementAsset: "EURE", creditedEur: 100, provider: "dex", rate: 1.1, midRate: 1.09, realisedGainEur: -1,
+  await store.updateCryptoDeposit("d_part", { holding: "converted", settledAt: at, settlementAsset: "EURE", creditedEur: 100, provider: "dex", rate: 1.1, midRate: 1.09, realisedGainEur: -1,
     conversion: { txHash: H(31), at: "2026-10-12T11:00:00.000Z", amountInUnits: "66000000" }, txs: [{ step: "safe.swap(usdc->eure)", hash: H(30) }, { step: "safe.swap(usdc->eure)", hash: H(31) }] } as any);
-  writeStatementLinesFor(store.findUser("u_boss")!);
+  await writeStatementLinesFor((await store.findUser("u_boss"))!);
   const FINAL = lineId("org_co", "deposit:d_part:disposal");
   const last = await call("POST", `/orgs/org_co/bookkeeping/lines/${FINAL}/beleg`, {});
   assert.equal(last.status, 201, JSON.stringify(last.body));
-  assert.equal((store.findDocumentByCode(last.body.code)!.snapshot as any).conversion.creditedEur, 60, "the last fill alone");
+  assert.equal(((await store.findDocumentByCode(last.body.code))!.snapshot as any).conversion.creditedEur, 60, "the last fill alone");
   for (const [id, code] of [[P1, first.body.code], [FINAL, last.body.code]]) {
     assert.equal((await recordsCheck(code)).ok, true, `${id} verifies once the rest is converted`);
     assert.equal((await lineOf(id)).documentCode, code);
@@ -332,31 +333,31 @@ console.log("\nA line's link to a Beleg that is not its own (stale or corrupt st
 // come out of org_co's books, whatever org_co's line says.
 const { issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
 const { normaliseCode } = await import("../services/api/src/documents.js");
-store.addUser({ id: "u_other", name: "Fremd Holder", country: "DE", kycStatus: "approved", address: safe("dd"), createdAt: "2026-01-01T00:00:00.000Z" } as any);
-store.addOrganisation({ id: "org_other", type: "business", name: "Other", legalName: "Fremd GmbH", plan: "business", reporting, invoicing: {}, verifications: {}, createdAt: NOW, updatedAt: NOW } as any);
-store.addAccount({ id: "acc_other", orgId: "org_other", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("dd"), backingUserId: "u_other", createdAt: NOW } as any);
-store.recordMoneriumIssue({ orderId: "ord_other", userId: "u_other", amountEur: 55, counterpartyName: "Geheim Kunde", processedAt: NOW, recordedAt: NOW } as any);
-writeStatementLinesFor(store.findUser("u_other")!);
-const OTHER_LINE = store.ledgerOf("org_other").find((e) => e.id === lineId("org_other", "monerium:issue:ord_other"))!;
+await store.addUser({ id: "u_other", name: "Fremd Holder", country: "DE", kycStatus: "approved", address: safe("dd"), createdAt: "2026-01-01T00:00:00.000Z" } as any);
+await store.addOrganisation({ id: "org_other", type: "business", name: "Other", legalName: "Fremd GmbH", plan: "business", reporting, invoicing: {}, verifications: {}, createdAt: NOW, updatedAt: NOW } as any);
+await store.addAccount({ id: "acc_other", orgId: "org_other", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("dd"), backingUserId: "u_other", createdAt: NOW } as any);
+await store.recordMoneriumIssue({ orderId: "ord_other", userId: "u_other", amountEur: 55, counterpartyName: "Geheim Kunde", processedAt: NOW, recordedAt: NOW } as any);
+await writeStatementLinesFor((await store.findUser("u_other"))!);
+const OTHER_LINE = (await store.ledgerOf("org_other")).find((e) => e.id === lineId("org_other", "monerium:issue:ord_other"))!;
 const FOREIGN = (await issueBelegForLine(OTHER_LINE)).doc;
 assert.equal(FOREIGN.orgId, "org_other");
 
-store.recordMoneriumIssue({ orderId: "ord_co2", userId: "u_boss", amountEur: 33, counterpartyName: "Second payer", processedAt: NOW, recordedAt: NOW } as any);
-writeStatementLinesFor(store.findUser("u_boss")!);
+await store.recordMoneriumIssue({ orderId: "ord_co2", userId: "u_boss", amountEur: 33, counterpartyName: "Second payer", processedAt: NOW, recordedAt: NOW } as any);
+await writeStatementLinesFor((await store.findUser("u_boss"))!);
 const IN2 = lineId("org_co", "monerium:issue:ord_co2");
 const OWN2: string = (await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg`, {})).body.code;
 const OTHER_CO_LINE: string = (await line()).documentCode; // IN's live Beleg: org_co's, another line's
-const linkIN2 = (code: string | undefined) => {
-  const e = store.ledgerOf("org_co").find((x) => x.id === IN2)!;
-  store.updateLedgerEntry(IN2, { statement: { ...e.statement!, documentCode: code } });
+const linkIN2 = async (code: string | undefined) => {
+  const e = (await store.ledgerOf("org_co")).find((x) => x.id === IN2)!;
+  await store.updateLedgerEntry(IN2, { statement: { ...e.statement!, documentCode: code } });
 };
-const liveOn = (orgId: string, id: string) => store.documentsForOrg(orgId).filter((d) => d.kind === "beleg" && !d.revokedAt && (d.snapshot as any).line?.lineId === id);
-const ofIN2 = () => store.documents.filter((d) => (d.snapshot as any).line?.lineId === IN2).length;
+const liveOn = async (orgId: string, id: string) => (await store.documentsForOrg(orgId)).filter((d) => d.kind === "beleg" && !d.revokedAt && (d.snapshot as any).line?.lineId === id);
+const ofIN2 = async () => (await store.list("documents")).filter((d) => (d.snapshot as any).line?.lineId === IN2).length;
 // The same frozen Beleg of IN2 filed under another document kind.
-const asStatement = { ...store.findDocumentByCode(OWN2)!, id: "doc_kind", code: "KKKKKKKKKKKKKKK", kind: "statement" as const };
-store.addDocument(asStatement as any);
-const revokedOwn = { ...store.findDocumentByCode(OWN2)!, id: "doc_rev", code: "RRRRRRRRRRRRRRR", revokedAt: NOW };
-store.addDocument(revokedOwn as any);
+const asStatement = { ...(await store.findDocumentByCode(OWN2))!, id: "doc_kind", code: "KKKKKKKKKKKKKKK", kind: "statement" as const };
+await store.addDocument(asStatement as any);
+const revokedOwn = { ...(await store.findDocumentByCode(OWN2))!, id: "doc_rev", code: "RRRRRRRRRRRRRRR", revokedAt: NOW };
+await store.addDocument(revokedOwn as any);
 
 const wrongLinks: [string, string, string[]][] = [
   ["another org's Beleg", FOREIGN.code, ["FREMD HOLDER", "Fremd Holder", "Geheim Kunde", "Fremd GmbH"]],
@@ -368,7 +369,7 @@ const wrongLinks: [string, string, string[]][] = [
 
 for (const [what, code, secrets] of wrongLinks) {
   await check(`a line pointing at ${what}: no statement link, CSV code, ZIP bytes or books-line hint; the Beleg is missing`, async () => {
-    linkIN2(code);
+    await linkIN2(code);
     const l = await lineOf(IN2);
     assert.equal(l.documentCode, undefined, JSON.stringify(l));
     assert.equal(l.belegStale, undefined, "not offered to replace either: it is not this line's");
@@ -392,91 +393,91 @@ for (const [what, code, secrets] of wrongLinks) {
 
 await check("issuing on such a line restores its own live Beleg instead of signing another, and touches nothing it pointed at", async () => {
   for (const [what, code] of wrongLinks) {
-    linkIN2(code);
-    const before = JSON.stringify(store.findDocumentByCode(code) ?? null);
-    const count = store.documents.length;
+    await linkIN2(code);
+    const before = JSON.stringify((await store.findDocumentByCode(code)) ?? null);
+    const count = (await store.list("documents")).length;
     const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg`, {});
     assert.equal(r.status, 200, `${what}: ${JSON.stringify(r.body)}`);
     assert.equal(r.body.issued, false, what);
     assert.equal(r.body.code, OWN2, `${what}: the line's own Beleg, not a second one`);
-    assert.equal(store.documents.length, count, `${what}: nothing signed`);
-    assert.equal(JSON.stringify(store.findDocumentByCode(code) ?? null), before, `${what}: the linked document is untouched`);
+    assert.equal((await store.list("documents")).length, count, `${what}: nothing signed`);
+    assert.equal(JSON.stringify((await store.findDocumentByCode(code)) ?? null), before, `${what}: the linked document is untouched`);
     assert.equal((await lineOf(IN2)).documentCode, OWN2, what);
-    assert.equal(liveOn("org_co", IN2).length, 1, what);
+    assert.equal((await liveOn("org_co", IN2)).length, 1, what);
   }
-  assert.equal(store.findDocumentByCode(FOREIGN.code)!.revokedAt, undefined, "the other org's Beleg is not revoked");
-  assert.equal(liveOn("org_other", OTHER_LINE.id).length, 1);
+  assert.equal((await store.findDocumentByCode(FOREIGN.code))!.revokedAt, undefined, "the other org's Beleg is not revoked");
+  assert.equal((await liveOn("org_other", OTHER_LINE.id)).length, 1);
 });
 
 await check("two live Belege of the line's own: issue, replace and prepare refuse to guess and leave the link as it is", async () => {
-  const twin = { ...store.findDocumentByCode(OWN2)!, id: "doc_twin", code: "TTTTTTTTTTTTTTT" };
-  store.addDocument(twin as any);
-  linkIN2(FOREIGN.code);
-  const count = ofIN2();
+  const twin = { ...(await store.findDocumentByCode(OWN2))!, id: "doc_twin", code: "TTTTTTTTTTTTTTT" };
+  await store.addDocument(twin as any);
+  await linkIN2(FOREIGN.code);
+  const count = await ofIN2();
   const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg`, {});
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.match(r.body.error, /more than one/);
   assert.equal((await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg/replace`, {})).status, 409);
   const prep = await call("POST", `/orgs/org_co/bookkeeping/export/${MONTH}/prepare`);
   assert.ok(prep.body.failed.some((f: any) => f.lineId === IN2), JSON.stringify(prep.body.failed));
-  assert.equal(ofIN2(), count, "nothing signed for the line");
-  assert.equal(store.ledgerOf("org_co").find((x) => x.id === IN2)!.statement!.documentCode, FOREIGN.code, "the link is not guessed");
-  store.updateDocument("doc_twin", { revokedAt: NOW });
+  assert.equal(await ofIN2(), count, "nothing signed for the line");
+  assert.equal((await store.ledgerOf("org_co")).find((x) => x.id === IN2)!.statement!.documentCode, FOREIGN.code, "the link is not guessed");
+  await store.updateDocument("doc_twin", { revokedAt: NOW });
 });
 
 await check("issuing on such a line with no live Beleg of its own: a new Beleg of org_co's for this line, nothing else revoked", async () => {
-  store.updateDocument(store.findDocumentByCode(OWN2)!.id, { revokedAt: NOW });
+  await store.updateDocument((await store.findDocumentByCode(OWN2))!.id, { revokedAt: NOW });
   for (const [what, code] of wrongLinks) {
-    linkIN2(code);
-    const before = JSON.stringify(store.findDocumentByCode(code) ?? null);
+    await linkIN2(code);
+    const before = JSON.stringify((await store.findDocumentByCode(code)) ?? null);
     const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg`, {});
     assert.equal(r.status, 201, `${what}: ${JSON.stringify(r.body)}`);
     assert.equal(r.body.issued, true, what);
     assert.notEqual(r.body.code, code, what);
-    const doc = store.findDocumentByCode(r.body.code)!;
+    const doc = (await store.findDocumentByCode(r.body.code))!;
     assert.equal(doc.orgId, "org_co", what);
     assert.equal((doc.snapshot as any).line.lineId, IN2, what);
     assert.ok(!JSON.stringify(doc.snapshot).includes("Fremd"), what);
-    assert.equal(JSON.stringify(store.findDocumentByCode(code) ?? null), before, `${what}: the linked document is untouched`);
+    assert.equal(JSON.stringify((await store.findDocumentByCode(code)) ?? null), before, `${what}: the linked document is untouched`);
     assert.equal((await lineOf(IN2)).documentCode, r.body.code, what);
     // Back to a line with no live Beleg for the next case: revoke the one just issued.
-    store.updateDocument(doc.id, { revokedAt: NOW });
+    await store.updateDocument(doc.id, { revokedAt: NOW });
   }
-  assert.equal(store.findDocumentByCode(FOREIGN.code)!.revokedAt, undefined, "the other org's Beleg is not revoked");
-  assert.equal(liveOn("org_other", OTHER_LINE.id).length, 1);
+  assert.equal((await store.findDocumentByCode(FOREIGN.code))!.revokedAt, undefined, "the other org's Beleg is not revoked");
+  assert.equal((await liveOn("org_other", OTHER_LINE.id)).length, 1);
 });
 
 await check("replace on a line pointing at another org's Beleg issues one of org_co's and revokes nothing of the other org", async () => {
-  linkIN2(FOREIGN.code);
+  await linkIN2(FOREIGN.code);
   const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg/replace`, {});
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.equal(r.body.revoked, false);
   assert.notEqual(r.body.code, FOREIGN.code);
-  assert.equal(store.findDocumentByCode(FOREIGN.code)!.revokedAt, undefined);
-  assert.equal(store.findDocumentByCode(r.body.code)!.orgId, "org_co");
+  assert.equal((await store.findDocumentByCode(FOREIGN.code))!.revokedAt, undefined);
+  assert.equal((await store.findDocumentByCode(r.body.code))!.orgId, "org_co");
 });
 
 await check("replace on such a line whose own Beleg still verifies restores the link and refuses: nothing true is revoked", async () => {
-  const own = liveOn("org_co", IN2);
+  const own = await liveOn("org_co", IN2);
   assert.equal(own.length, 1);
-  linkIN2(FOREIGN.code);
+  await linkIN2(FOREIGN.code);
   const r = await call("POST", `/orgs/org_co/bookkeeping/lines/${IN2}/beleg/replace`, {});
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.equal((await lineOf(IN2)).documentCode, own[0].code);
-  assert.equal(liveOn("org_co", IN2).length, 1);
+  assert.equal((await liveOn("org_co", IN2)).length, 1);
 });
 
 await check("prepare relinks such a line to its own live Beleg; two prepares at once leave exactly one live Beleg per line", async () => {
-  const own = liveOn("org_co", IN2);
+  const own = await liveOn("org_co", IN2);
   assert.equal(own.length, 1);
-  linkIN2(FOREIGN.code);
+  await linkIN2(FOREIGN.code);
   const both = await Promise.all([call("POST", `/orgs/org_co/bookkeeping/export/${MONTH}/prepare`), call("POST", `/orgs/org_co/bookkeeping/export/${MONTH}/prepare`)]);
   assert.deepEqual(both.map((r) => r.status), [200, 200]);
-  const live = liveOn("org_co", IN2);
+  const live = await liveOn("org_co", IN2);
   assert.deepEqual(live.map((d) => d.code), [own[0].code], "the same Beleg, not a second one");
   assert.equal((await lineOf(IN2)).documentCode, own[0].code);
-  for (const e of store.ledgerOf("org_co").filter((x) => x.statement?.valueDate.startsWith(MONTH))) {
-    assert.ok(liveOn("org_co", e.id).length <= 1, `${e.id} has more than one live Beleg`);
+  for (const e of (await store.ledgerOf("org_co")).filter((x) => x.statement?.valueDate.startsWith(MONTH))) {
+    assert.ok((await liveOn("org_co", e.id)).length <= 1, `${e.id} has more than one live Beleg`);
   }
   assert.ok(!(await csv()).includes(FOREIGN.code));
 });
@@ -485,13 +486,13 @@ console.log("\nHostile document codes and dates in the archive");
 
 await check("belege.zip entry names are relative, unique and stay inside the folder they are unpacked to, whatever the stored code and date say", async () => {
   const { mkdirSync, writeFileSync, readdirSync } = await import("node:fs");
-  const doc = liveOn("org_co", IN2)[0];
+  const doc = (await liveOn("org_co", IN2))[0];
   const hostile = ["../../../etc/passwd", "..\\..\\win.ini", "/abs/olute", "a/b/c", "É../𝔘", ".."];
   for (const code of hostile) {
     // A store written by an older or broken writer: the code and the dates are text.
-    store.updateDocument(doc.id, { code, snapshot: { ...(doc.snapshot as any), line: { ...(doc.snapshot as any).line, valueDate: `${MONTH}-05/../../x` } } } as any);
-    const e = store.ledgerOf("org_co").find((x) => x.id === IN2)!;
-    store.updateLedgerEntry(IN2, { statement: { ...e.statement!, documentCode: code, valueDate: `${MONTH}-05/../../x` } });
+    await store.updateDocument(doc.id, { code, snapshot: { ...(doc.snapshot as any), line: { ...(doc.snapshot as any).line, valueDate: `${MONTH}-05/../../x` } } } as any);
+    const e = (await store.ledgerOf("org_co")).find((x) => x.id === IN2)!;
+    await store.updateLedgerEntry(IN2, { statement: { ...e.statement!, documentCode: code, valueDate: `${MONTH}-05/../../x` } });
     const bytes = (await call("GET", `/orgs/org_co/bookkeeping/export/${MONTH}/belege.zip`)).bytes;
     const entries = listZip(bytes);
     const names = entries.map((x) => x.name);
@@ -514,8 +515,8 @@ await check("belege.zip entry names are relative, unique and stay inside the fol
     assert.equal(readdirSync(dir).length, names.length);
   }
   // Leave the line as the writer would have it.
-  store.updateDocument(doc.id, { revokedAt: NOW });
-  writeStatementLinesFor(store.findUser("u_boss")!);
+  await store.updateDocument(doc.id, { revokedAt: NOW });
+  await writeStatementLinesFor((await store.findUser("u_boss"))!);
 });
 
 console.log("\nThe screens");

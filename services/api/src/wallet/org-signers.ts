@@ -11,6 +11,7 @@ import { orgSigners, type OrgSigners, type SignerMember } from "../domain/org-si
 import type { Member, Organisation } from "../domain/types.js";
 import { safeOwners, safeThreshold } from "./candide.js";
 import { passkeyOwnerAddressOfJwk } from "./safe-signers.js";
+import { findSeq, mapSeq, someSeq } from "../seq.js";
 
 type Address = `0x${string}`;
 
@@ -28,17 +29,17 @@ export const liveOrgSafeReader: OrgSafeReader = {
 /** The address this member's login passkey signs as; null with no login, no
  *  passkey, or a key that is not P-256. Never Member.signerAddress: signing
  *  is by the passkey they log in with. */
-export function ownerAddressOfMember(member: Pick<Member, "userId">): Address | null {
-  const jwk = member.userId ? store.findUser(member.userId)?.passkey?.publicKey?.jwk : undefined;
+export async function ownerAddressOfMember(member: Pick<Member, "userId">): Promise<Address | null> {
+  const jwk = member.userId ? (await store.findUser(member.userId))?.passkey?.publicKey?.jwk : undefined;
   return jwk ? passkeyOwnerAddressOfJwk(jwk) : null;
 }
 
 /** The active owner member of this org whose login passkey signs as
  *  `address`, or undefined. Only this org's members are searched. */
-export function memberForOwner(orgId: string, address: string): Member | undefined {
-  return store.membersOf(orgId).find((m) => {
+export async function memberForOwner(orgId: string, address: string): Promise<Member | undefined> {
+  return await findSeq((await store.membersOf(orgId)), async (m) => {
     if (m.status !== "active" || m.role !== "owner") return false;
-    const a = ownerAddressOfMember(m);
+    const a = await ownerAddressOfMember(m);
     return !!a && a.toLowerCase() === address.toLowerCase();
   });
 }
@@ -46,24 +47,24 @@ export function memberForOwner(orgId: string, address: string): Member | undefin
 /** Whether `address` is a company org's Safe. Its owners sign it through the
  *  org's queue (routes/business/safe-ops.ts, signerRefusal); no route that
  *  signs with one account's passkey may move it. */
-export function isCompanySafe(address: string): boolean {
-  return store.accountsAtAddress(address).some((a) => {
-    const org = store.findOrganisation(a.orgId);
+export async function isCompanySafe(address: string): Promise<boolean> {
+  return await someSeq((await store.accountsAtAddress(address)), async (a) => {
+    const org = await store.findOrganisation(a.orgId);
     return !!org && orgEntity(org) === "company";
   });
 }
 
 /** This org's members, for the join. */
-export function signerMembersOf(orgId: string): SignerMember[] {
-  return store.membersOf(orgId).map((m) => {
-    const user = m.userId ? store.findUser(m.userId) : undefined;
+export async function signerMembersOf(orgId: string): Promise<SignerMember[]> {
+  return await mapSeq((await store.membersOf(orgId)), async (m) => {
+    const user = m.userId ? (await store.findUser(m.userId)) : undefined;
     return {
       memberId: m.id,
       role: m.role,
       status: m.status,
       name: user?.name || m.name || m.email,
       hasUser: !!user,
-      passkeyAddress: user ? ownerAddressOfMember(m) : null,
+      passkeyAddress: user ? (await ownerAddressOfMember(m)) : null,
       ...(m.signerAddress ? { label: m.signerAddress } : {}),
     };
   });
@@ -88,9 +89,9 @@ export async function readOrgSafe(org: Organisation, reader: OrgSafeReader = liv
     if (err instanceof OrgSafePlanRefusal && err.code === "ORG_SAFE_MISSING") return { state: "not_set_up" };
     throw err;
   }
-  const deployed = store.accountsOf(org.id).some((a) => a.currency === "EUR" && a.address?.toLowerCase() === plan.address.toLowerCase());
+  const deployed = (await store.accountsOf(org.id)).some((a) => a.currency === "EUR" && a.address?.toLowerCase() === plan.address.toLowerCase());
   if (!deployed) return { state: "not_set_up" };
   const chain = await reader.read(plan.address);
   assertReadableSafeState(plan.address, chain);
-  return { state: "set_up", safeAddress: plan.address, threshold: chain.threshold, ...orgSigners(signerMembersOf(org.id), chain.owners) };
+  return { state: "set_up", safeAddress: plan.address, threshold: chain.threshold, ...orgSigners(await signerMembersOf(org.id), chain.owners) };
 }

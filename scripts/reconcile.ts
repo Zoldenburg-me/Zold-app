@@ -11,7 +11,7 @@
 import { initStore } from "../services/api/src/store.js";
 import { formatReport, reconcile } from "../services/api/src/reconcile.js";
 
-initStore();
+await initStore();
 const report = await reconcile();
 console.log(formatReport(report));
 process.exit(report.ok ? 0 : 1);

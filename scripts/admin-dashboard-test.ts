@@ -35,14 +35,14 @@ const { operatorKit } = await import("./_operator.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { MONERIUM } = await import("../services/api/src/config.js");
 
-initStore();
+await initStore();
 const now = new Date().toISOString();
 const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
 const safe = (n: string) => `0x${n.repeat(40)}` as `0x${string}`;
 const pk = { x: "1", y: "2" };
 
 // Connected, IBAN active, Zoldenburg guardian on chain.
-store.addUser({
+await store.addUser({
   id: "u_live", name: "Live", email: "live@example.com", country: "DE", kycStatus: "approved", iban: "DE89370400440532013000",
   address: safe("a"), createdAt: now, passkey: { credentialId: "c1", rpId: "localhost", createdAt: now } as any,
   passkeySafe: { address: safe("a"), status: "active", threshold: 1, passkeyPublicKey: pk,
@@ -51,18 +51,18 @@ store.addUser({
     refreshTokenEnc: SECRETS.moneriumRefreshToken.seal("u_live", "user-refresh-token"), profiles: [{ id: "prof-live", kind: "personal", state: "approved" }] },
 } as any);
 // Names a method but holds no token: a live read must refuse, not fall back.
-store.addUser({
+await store.addUser({
   id: "u_hollow", name: "Hollow", email: "hollow@example.com", country: "DE", kycStatus: "pending", iban: "",
   address: safe("b"), createdAt: now, passkeySafe: { address: safe("b"), status: "active", threshold: 1, passkeyPublicKey: pk },
   monerium: { connectedAt: now, method: "oauth", profileId: "prof-hollow" },
   moneriumRefusal: { code: "NO_CORPORATE_PROFILE", error: "no company profile", at: now },
 } as any);
-store.addTransfer({
+await store.addTransfer({
   id: "t_fail", userId: "u_live", quoteId: "q", rail: "sepa", state: "FAILED", sendEur: 10, receiveEur: 10, txs: [],
   recipientName: "Payee GmbH", recipientIban: "DE02120300000000202051",
   error: "redeem refused", createdAt: hourAgo, updatedAt: hourAgo,
 } as any);
-store.recordMoneriumIssue({
+await store.recordMoneriumIssue({
   orderId: "o_in", userId: "u_live", amountEur: 25, counterpartyName: "Payer AG", counterpartyIban: "DE12500105170648489890",
   processedAt: hourAgo, recordedAt: hourAgo,
 });
@@ -120,7 +120,7 @@ await check("no Monerium token, secret or ciphertext reaches any dashboard JSON"
   for (const r of ROUTES) {
     const { status, text } = await get(r);
     assert.equal(status, 200, r);
-    for (const bad of ["accessTokenEnc", "refreshTokenEnc", "clientSecretEnc", "user-oauth-token", store.findUser("u_live")!.monerium!.accessTokenEnc!]) {
+    for (const bad of ["accessTokenEnc", "refreshTokenEnc", "clientSecretEnc", "user-oauth-token", (await store.findUser("u_live"))!.monerium!.accessTokenEnc!]) {
       assert.ok(!text.includes(bad), `${r} leaks ${bad.slice(0, 20)}`);
     }
   }
@@ -157,14 +157,14 @@ await check("a live read refuses an account without a stored token and never ask
 
 await check("a live read uses the account's own token, stores nothing and is audited", async () => {
   moneriumCalls.length = 0;
-  const before = JSON.stringify(store.findUser("u_live"));
+  const before = JSON.stringify(await store.findUser("u_live"));
   const body = JSON.parse((await get("/api/admin/users/u_live/monerium?live=1")).text);
   assert.equal(body.live.available, true);
   assert.ok(body.live.profile.ok && body.live.orders.ok && body.live.ibans.ok);
   assert.ok(moneriumCalls.length >= 6);
   assert.ok(moneriumCalls.every((c) => c.auth === "Bearer user-oauth-token"), "every call on the account's own token");
-  assert.equal(JSON.stringify(store.findUser("u_live")), before, "the live read wrote nothing to the account");
-  const audit = store.auditFor("u_live", 10).find((e: any) => e.kind === "operator.monerium_read");
+  assert.equal(JSON.stringify(await store.findUser("u_live")), before, "the live read wrote nothing to the account");
+  const audit = (await store.auditFor("u_live", 10)).find((e: any) => e.kind === "operator.monerium_read");
   assert.ok(audit && String(audit.data.operator).startsWith("operator:"));
 });
 
@@ -180,14 +180,14 @@ await check("a Stellar payout hash shows once in the route list, a legacy one st
   const H = "ab".repeat(32);
   const H2 = "cd".repeat(32);
   const pickup = { referenceCode: "R1", provider: "anchor:test", status: "PENDING", anchorTransactionId: "anchor-tx" };
-  store.addTransfer({
+  await store.addTransfer({
     id: "t_anchor_sent", userId: "u_live", quoteId: "q", rail: "cash", state: "PAYOUT_READY", sendEur: 10, receiveKes: 1000,
     recipientName: "Payee", recipientPhone: "+254700000000", createdAt: now, updatedAt: now,
     txs: [{ step: "anchor.payment.pending", hash: "0x" }, { step: "anchor.payment.sent", hash: H }],
     pickup: { ...pickup, anchorPaymentHash: H },
   } as any);
   // Before anchor.payment.sent existed, the pickup was the only record of the hash.
-  store.addTransfer({
+  await store.addTransfer({
     id: "t_anchor_legacy", userId: "u_live", quoteId: "q", rail: "cash", state: "PAYOUT_READY", sendEur: 10, receiveKes: 1000,
     recipientName: "Payee", recipientPhone: "+254700000000", createdAt: now, updatedAt: now,
     txs: [{ step: "bridge.xyz.deposit.transfer", hash: "0x33" }],
@@ -202,7 +202,7 @@ await check("a Stellar payout hash shows once in the route list, a legacy one st
 await check("a pickup hash that differs from the recorded send is still shown", async () => {
   const H = "ef".repeat(32);
   const H3 = "12".repeat(32);
-  store.addTransfer({
+  await store.addTransfer({
     id: "t_anchor_differs", userId: "u_live", quoteId: "q", rail: "cash", state: "MANUAL_REVIEW", sendEur: 10, receiveKes: 1000,
     recipientName: "Payee", recipientPhone: "+254700000000", createdAt: now, updatedAt: now,
     txs: [{ step: "anchor.payment.sent", hash: H }],

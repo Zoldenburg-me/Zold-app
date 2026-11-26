@@ -85,9 +85,9 @@ ok("USDC_TO_EURE inside the TTL is probed, not served EURE_TO_USDC's cached rate
 // The quote locked R = 1.16 a moment ago. Inside the TTL the market moves
 // 80 bps against the user; the cap is 50.
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
-initStore();
+await initStore();
 const now = new Date().toISOString();
-store.addQuote({
+await store.addQuote({
   id: "q-provider-cache",
   userId: "u-provider-cache",
   rail: "cash",

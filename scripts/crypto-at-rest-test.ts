@@ -240,8 +240,8 @@ await check("without a key ring a Monerium token refresh refuses before it spend
 });
 await check("a refresh that finishes after the user disconnected does not bring the connection back", async () => {
   const { moneriumAccessToken } = await import("../services/api/src/adapters/monerium-connection.js");
-  initStore();
-  store.addUser({ id: "user-race", monerium: {
+  await initStore();
+  await store.addUser({ id: "user-race", monerium: {
     connectedAt: new Date().toISOString(), method: "oauth",
     accessTokenEnc: SECRETS.moneriumAccessToken.seal("user-race", "old-access"),
     refreshTokenEnc: SECRETS.moneriumRefreshToken.seal("user-race", "old-refresh"),
@@ -249,12 +249,12 @@ await check("a refresh that finishes after the user disconnected does not bring 
   } } as any);
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => {
-    store.updateUser("user-race", { monerium: undefined }); // disconnected while Monerium answered
+    await store.updateUser("user-race", { monerium: undefined }); // disconnected while Monerium answered
     return new Response(JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh", expires_in: 3600 }), { status: 200 });
   }) as typeof fetch;
   try {
-    await assert.rejects(() => moneriumAccessToken(store.findUser("user-race")!));
-    assert.equal(store.findUser("user-race")!.monerium, undefined, "the stale connection was written back");
+    await assert.rejects(async () => moneriumAccessToken((await store.findUser("user-race"))!));
+    assert.equal((await store.findUser("user-race"))!.monerium, undefined, "the stale connection was written back");
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -267,21 +267,21 @@ await check("every registered site names a distinct (table, field)", () => {
 console.log("\nRe-encrypt job");
 
 // Rows as the store held them before v2: two v1 values, one v2 under the old key.
-initStore();
+await initStore();
 const now = new Date().toISOString();
 const shopRow = (id: string, shop: string) => ({
   id, orgId: "org_1", shop, payeeUserId: "u1", scope: "write_orders",
   installedByUserId: "u1", installedAt: now, updatedAt: now,
 });
-store.addShopifyConnection({ ...shopRow("conn-1", "one.myshopify.com"), accessTokenEnc: encryptField("shopify", V1_SECRET, "shpat_one"), orderLinkSecretEnc: encryptField("shopify-link", V1_SECRET, "link_one") });
-store.addShopifyConnection({ ...shopRow("conn-2", "two.myshopify.com"), accessTokenEnc: sealField("shopify", { table: "shopifyConnections", rowId: "conn-2", field: "accessToken" }, "shpat_two", ring1) });
-store.addUser({ id: "user-1", monerium: {
+await store.addShopifyConnection({ ...shopRow("conn-1", "one.myshopify.com"), accessTokenEnc: encryptField("shopify", V1_SECRET, "shpat_one"), orderLinkSecretEnc: encryptField("shopify-link", V1_SECRET, "link_one") });
+await store.addShopifyConnection({ ...shopRow("conn-2", "two.myshopify.com"), accessTokenEnc: sealField("shopify", { table: "shopifyConnections", rowId: "conn-2", field: "accessToken" }, "shpat_two", ring1) });
+await store.addUser({ id: "user-1", monerium: {
   connectedAt: now,
   accessTokenEnc: encryptField("monerium", V1_SECRET, "mon_access"),
   refreshTokenEnc: encryptField("monerium", V1_SECRET, "mon_refresh"),
   apiKeys: { clientId: "client-id-1", clientSecretEnc: encryptField("monerium", V1_SECRET, "mon_secret"), baseUrl: "https://api.monerium.dev", verifiedAt: now },
 } } as any);
-store.addOrganisation({ id: "org_1", name: "Test GmbH", createdAt: now, updatedAt: now, integrations: { getmyinvoices: { apiKeyEnc: encryptField("getmyinvoices", V1_SECRET, "gmi_one"), connectedAt: now, connectedByMemberId: "m1" } } } as any, false);
+await store.addOrganisation({ id: "org_1", name: "Test GmbH", createdAt: now, updatedAt: now, integrations: { getmyinvoices: { apiKeyEnc: encryptField("getmyinvoices", V1_SECRET, "gmi_one"), connectedAt: now, connectedByMemberId: "m1" } } } as any, false);
 
 const JOB = path.join(path.dirname(fileURLToPath(import.meta.url)), "reencrypt-fields.ts");
 const TSX = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "tsx", "dist", "cli.mjs");
@@ -354,23 +354,23 @@ await check("after the move the report says k1 can retire", () => {
   assert.match(r.out, /k1: no row uses it; it can be removed from DATA_ENCRYPTION_KEYS/);
   assert.match(r.out, /no v1 row in these sites/);
 });
-await check("a row already under the active key that does not decrypt fails the dry run", () => {
+await check("a row already under the active key that does not decrypt fails the dry run", async () => {
   const db = onDisk();
   const c1 = db.shopifyConnections.find((c: any) => c.id === "conn-1");
-  initStore();
-  const saved = store.shopifyConnections.find((c) => c.id === "conn-2")!.accessTokenEnc;
-  store.updateShopifyConnection("conn-2", { accessTokenEnc: c1.accessTokenEnc });
+  await initStore();
+  const saved = (await store.list("shopifyConnections")).find((c) => c.id === "conn-2")!.accessTokenEnc;
+  await store.updateShopifyConnection("conn-2", { accessTokenEnc: c1.accessTokenEnc });
   const r = job([], `k2:${K2},k1:${K1}`);
-  store.updateShopifyConnection("conn-2", { accessTokenEnc: saved });
+  await store.updateShopifyConnection("conn-2", { accessTokenEnc: saved });
   assert.notEqual(r.status, 0);
   assert.match(r.out, /shopifyConnections\.accessToken conn-2: does not decrypt/);
 });
-await check("a row that does not decrypt is reported and left as it was, and the job fails", () => {
+await check("a row that does not decrypt is reported and left as it was, and the job fails", async () => {
   const db = onDisk();
   const c1 = db.shopifyConnections.find((c: any) => c.id === "conn-1");
   // Copy conn-1's token into conn-2: the row binding must refuse it.
-  initStore();
-  store.updateShopifyConnection("conn-2", { accessTokenEnc: c1.accessTokenEnc });
+  await initStore();
+  await store.updateShopifyConnection("conn-2", { accessTokenEnc: c1.accessTokenEnc });
   const r = job(["--apply"], `k3:${rootB64()},k2:${K2}`);
   assert.notEqual(r.status, 0);
   assert.match(r.out, /shopifyConnections\.accessToken conn-2: does not decrypt/);

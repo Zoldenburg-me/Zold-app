@@ -334,7 +334,7 @@ try {
   const { abis, addrs, deployerWallet, writeAndWait } = await import("../services/api/src/chain.js");
   const { pollCryptoDepositsOnce } = await import("../services/api/src/adapters/crypto-deposits.js");
   const routes = await import("../services/api/src/routes/payment-requests.js");
-  initStore();
+  await initStore();
 
   const owner = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
   const nowIso = new Date().toISOString();
@@ -350,11 +350,12 @@ try {
     },
     createdAt: nowIso,
   };
-  store.addUser(miriam);
+  await store.addUser(miriam);
 
-  const app = express();
+  const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+  const app = express().use(sendAfterCommit);
   app.use(express.json());
-  app.use("/api", routes.createPaymentRequestRouter((req, res, userId) => {
+  app.use("/api", routes.createPaymentRequestRouter(async (req, res, userId) => {
     if (req.header("x-user") === userId) return { userId };
     res.status(403).json({ error: "forbidden" });
     return undefined;
@@ -396,13 +397,13 @@ try {
     const pageFor = (handle: string, address: `0x${string}`) => ({ ...miriam.paymentPage, handle, depositAddress: address, recipientAddress: address });
     const aAddr = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
     const bAddr = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
-    const amira: any = { ...miriam, id: randomUUID(), name: "Amira A", email: "amira@example.com", address: aAddr, passkeySafe: { status: "active", address: aAddr }, paymentPage: pageFor("acme-test", aAddr) };
-    store.addUser(amira);
+    const amira: any = { ...miriam, passkey: { ...miriam.passkey, credentialId: "cred-a" }, id: randomUUID(), name: "Amira A", email: "amira@example.com", address: aAddr, passkeySafe: { status: "active", address: aAddr }, paymentPage: pageFor("acme-test", aAddr) };
+    await store.addUser(amira);
     const minted = await call("POST", `/api/users/${amira.id}/payment-requests`, { amountEur: 40 }, amira.id);
-    store.updateUser(amira.id, { paymentPage: pageFor("a-other", aAddr) });
+    await store.updateUser(amira.id, { paymentPage: pageFor("a-other", aAddr) });
     check("a link minted under a handle its payee gave up still opens while nobody holds it", (await call("GET", `/api/pay/acme-test/${minted.body.code}`)).status === 200);
-    const bruno: any = { ...miriam, id: randomUUID(), name: "Bruno B", email: "bruno@example.com", address: bAddr, passkeySafe: { status: "active", address: bAddr }, paymentPage: pageFor("acme-test", bAddr) };
-    store.addUser(bruno);
+    const bruno: any = { ...miriam, passkey: { ...miriam.passkey, credentialId: "cred-b" }, id: randomUUID(), name: "Bruno B", email: "bruno@example.com", address: bAddr, passkeySafe: { status: "active", address: bAddr }, paymentPage: pageFor("acme-test", bAddr) };
+    await store.addUser(bruno);
     const squatted = await call("GET", `/api/pay/acme-test/${minted.body.code}`);
     check("once another user claims that handle, the old payee's link under it is a 404", squatted.status === 404, `${squatted.status} ${JSON.stringify(squatted.body).slice(0, 200)}`);
     check("and its QR under that handle too", (await fetch(`${API}/api/pay/acme-test/${minted.body.code}/qr.svg`)).status === 404);
@@ -419,9 +420,9 @@ try {
   await mintUsdc(owner, q25.amountUsdc);
   const n = await pollCryptoDepositsOnce();
   check("the poller saw the deposit (the page is watched while a link is open, auto-convert or not)", n === 1, `${n}`);
-  const r1 = store.findPaymentRequest(created.body.id)!;
-  const d1 = store.cryptoDeposits.find((d) => d.paymentRequestId === r1.id);
-  check("the deposit is attributed to the request by amount", Boolean(d1), JSON.stringify(store.cryptoDeposits));
+  const r1 = (await store.findPaymentRequest(created.body.id))!;
+  const d1 = (await store.list("cryptoDeposits")).find((d) => d.paymentRequestId === r1.id);
+  check("the deposit is attributed to the request by amount", Boolean(d1), JSON.stringify(await store.list("cryptoDeposits")));
   check("the request is PAID with one full crypto payment", r1.state === "PAID" && r1.payments.length === 1 && r1.payments[0].kind === "full" && r1.payments[0].amountUsdc === q25.amountUsdc, JSON.stringify(r1.payments));
   check("auto-convert is off, so the deposit settles on arrival and is held as USDC, convertible any time",
     Boolean(d1!.settledAt) && d1!.holding === "held" && d1!.settlementAsset === "USDC" && d1!.creditedUsdc === q25.amountUsdc && r1.payments[0].settledAsset === "USDC",
@@ -432,40 +433,42 @@ try {
 
   await mintUsdc(owner, 3.21);
   await pollCryptoDepositsOnce();
-  const stray = store.cryptoDeposits.find((d) => d.amountUsdc === 3.21)!;
-  check("money nobody asked for is recorded as an ordinary deposit, attributed to no link", stray && !stray.paymentRequestId && store.findPaymentRequest(r1.id)!.payments.length === 1);
+  const stray = (await store.list("cryptoDeposits")).find((d) => d.amountUsdc === 3.21)!;
+  check("money nobody asked for is recorded as an ordinary deposit, attributed to no link", stray && !stray.paymentRequestId && (await store.findPaymentRequest(r1.id))!.payments.length === 1);
 
   // ── a link raised FOR an invoice carries it all the way to the settlement ──
   // The two events of a crypto-settled euro invoice (an asset acquired at its
   // euro value on receipt, then disposed of) are only auditable if the deposit
   // knows which invoice it paid, without a human linking it by hand.
   const orgId = randomUUID();
-  store.addOrganisation({
+  await store.addOrganisation({
     id: orgId, type: "personal", name: "Miriam Zoldenburg", plan: "starter",
     reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "fifo" },
     verifications: {}, createdAt: nowIso, updatedAt: nowIso,
   } as any);
-  store.addMember({
+  await store.addMember({
     id: randomUUID(), orgId, userId: miriam.id, email: miriam.email, role: "owner",
     status: "active", createdAt: nowIso, updatedAt: nowIso,
   } as any);
   // Her personal org's EUR account IS her Safe — what the store migration writes.
-  store.addAccount({
+  await store.addAccount({
     id: `acc_${randomUUID()}`, orgId, currency: "EUR", label: "EUR account", status: "active",
     provider: "monerium", identifier: {}, address: owner, backingUserId: miriam.id,
     createdAt: nowIso, updatedAt: nowIso,
   } as any);
+  // One issued number per invoice: the store refuses a second (invoices_org_number).
+  let issuedSeq = 0;
   const issuedSnapshot = (grossCents: number, over: any = {}) => ({
-    number: "RE-2026-0001", issueDate: nowIso.slice(0, 10),
+    number: `RE-2026-${String(++issuedSeq).padStart(4, "0")}`, issueDate: nowIso.slice(0, 10),
     issuer: { name: "Miriam Zoldenburg" }, recipient: { name: "A Customer" },
     vatTreatment: { kind: "exempt", reason: "kleinunternehmer" },
     netCents: grossCents, vatCents: 0, grossCents,
     buckets: [{ rate: 0, netCents: grossCents, vatCents: 0 }],
     currency: "EUR", ...over,
   });
-  const mkInvoice = (over: any = {}, issued: any = issuedSnapshot(2500)) => {
+  const mkInvoice = async (over: any = {}, issued: any = issuedSnapshot(2500)) => {
     const id = `inv_${randomUUID()}`;
-    store.addInvoice({
+    await store.addInvoice({
       id, orgId, direction: "outgoing", state: "SUBMITTED", linkTokenHash: randomBytes(16).toString("hex"),
       lines: [{ description: "Design work", quantity: "1", unitPrice: "25.00", amount: "25.00" }],
       currency: "EUR", total: "25.00", createdByMemberId: "m", createdAt: nowIso, updatedAt: nowIso,
@@ -474,10 +477,10 @@ try {
     return id;
   };
 
-  const theirs = mkInvoice();
-  const incoming = mkInvoice({ direction: "incoming" });
-  const settledAlready = mkInvoice({ state: "PAID" });
-  const otherOrg = mkInvoice({ orgId: randomUUID() });
+  const theirs = await mkInvoice();
+  const incoming = await mkInvoice({ direction: "incoming" });
+  const settledAlready = await mkInvoice({ state: "PAID" });
+  const otherOrg = await mkInvoice({ orgId: randomUUID() });
 
   const bad = async (invoiceId: string) =>
     (await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 25, methods: ["crypto"], invoiceId }, miriam.id)).status;
@@ -492,11 +495,11 @@ try {
   const qInv = forInvoice.body.latestQuote.amountUsdc as number;
   await mintUsdc(owner, qInv);
   await pollCryptoDepositsOnce();
-  const dInv = store.cryptoDeposits.find((d) => d.paymentRequestId === forInvoice.body.id)!;
+  const dInv = (await store.list("cryptoDeposits")).find((d) => d.paymentRequestId === forInvoice.body.id)!;
   check("the invoice rides onto the deposit on attribution — nobody linked it by hand", dInv?.invoiceId === theirs, JSON.stringify({ id: dInv?.id, invoiceId: dInv?.invoiceId }));
   // An invoice written in dollars is still collected in euro, at the rate frozen
   // on the document — and the crypto quote follows from that euro figure.
-  const inUsd = mkInvoice({ currency: "USD", total: "1000.00" }, issuedSnapshot(100_000, {
+  const inUsd = await mkInvoice({ currency: "USD", total: "1000.00" }, issuedSnapshot(100_000, {
     currency: "USD",
     conversion: { from: "USD", to: "EUR", rate: 1.1379, rateProvider: "test", rateAsOf: "2026-09-10",
       netCents: 87_881, vatCents: 0, grossCents: 87_881, buckets: [{ rate: 0, netCents: 87_881, vatCents: 0 }] },
@@ -510,7 +513,7 @@ try {
   check("and the crypto quote follows from that euro figure, so a dollar invoice is payable in USDC",
     usdLink.body.latestQuote?.amountUsdc > 1000 && usdLink.body.latestQuote.amountUsdc < 1010, JSON.stringify(usdLink.body.latestQuote));
 
-  const invAfter = store.findInvoice(theirs)!;
+  const invAfter = (await store.findInvoice(theirs))!;
   const st0 = (invAfter.settlements ?? [])[0];
   const st = st0?.method === "bank" || st0?.method === "wallet-receipt" ? undefined : st0;
   check("and the settlement is recorded even though auto-convert is off, because acquiring the asset is itself the event the books need",
@@ -522,8 +525,8 @@ try {
   check("with no conversion block and no realised gain — absent, not zero, because nothing has been disposed of yet",
     st!.conversion === undefined && st!.realisedGainEur === undefined);
   check("the invoice is PAID on arrival, before any conversion — the client paid when the money landed",
-    store.findInvoice(theirs)!.state === "PAID" && st!.amountEur === dInv.receipt?.amountEur,
-    JSON.stringify({ state: store.findInvoice(theirs)!.state, amountEur: st!.amountEur, receipt: dInv.receipt }));
+    (await store.findInvoice(theirs))!.state === "PAID" && st!.amountEur === dInv.receipt?.amountEur,
+    JSON.stringify({ state: (await store.findInvoice(theirs))!.state, amountEur: st!.amountEur, receipt: dInv.receipt }));
 
   // Converting the held USDC later rewrites the same settlement row; it never
   // settles the invoice a second time. The swap itself needs a bundler, so the
@@ -557,7 +560,7 @@ try {
     const firstBefore = eur.toWei((await accountBalances(owner)).safeBalanceEur);
     const firstOut = 12;
     const firstTx = await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(firstOut)] });
-    const part = await settleConvertedDeposit(store.cryptoDeposits.find((d) => d.id === dInv.id)!, miriam,
+    const part = await settleConvertedDeposit((await store.list("cryptoDeposits")).find((d) => d.id === dInv.id)!, miriam,
       { provider: "dex", rate, minOut: eur.toWei(11) }, firstBefore, [{ step: "safe.swap(usdc->eure)", hash: firstTx }],
       { txHash: firstTx, amountInUnits: half.toString() });
     const rest = BigInt(dInv.amountUnits) - half;
@@ -567,39 +570,39 @@ try {
     check("what a partial fill leaves can still be converted",
       depositConversionBlocker(miriam, part) === null, String(depositConversionBlocker(miriam, part)));
     check("the invoice is not marked converted by a partial fill",
-      !((store.findInvoice(theirs)!.settlements ?? []) as any[]).find((x) => x.depositId === dInv.id)?.conversion);
+      !(((await store.findInvoice(theirs))!.settlements ?? []) as any[]).find((x) => x.depositId === dInv.id)?.conversion);
 
     const before = eur.toWei((await accountBalances(owner)).safeBalanceEur);
     const out = 24.93;
     const total = Math.round((firstOut + out) * 100) / 100;
     const restTx = await writeAndWait(deployerWallet!, { address: addrs().eure, abi: abis.MockToken, functionName: "mint", args: [owner, eur.toWei(out)] });
-    const conv = await settleConvertedDeposit(store.cryptoDeposits.find((d) => d.id === dInv.id)!, miriam,
+    const conv = await settleConvertedDeposit((await store.list("cryptoDeposits")).find((d) => d.id === dInv.id)!, miriam,
       { provider: "dex", rate, minOut: eur.toWei(24) }, before,
       [{ step: "safe.swap(usdc->eure)", hash: firstTx }, { step: "safe.swap(usdc->eure)", hash: restTx }], { txHash: restTx });
-    const after = store.findInvoice(theirs)!;
+    const after = (await store.findInvoice(theirs))!;
     const rows = (after.settlements ?? []).filter((x: any) => x.depositId === dInv.id) as any[];
     check("converting the rest leaves ONE settlement row for the deposit, carrying both fills' EURe",
       conv.holding === "converted" && rows.length === 1 && rows[0].conversion?.creditedEur === total &&
         conv.realisedGainEur === Math.round((total - dInv.receipt!.amountEur) * 100) / 100, JSON.stringify(after.settlements));
     check("its amount is still the receipt value and the invoice stays PAID once",
       rows[0].amountEur === dInv.receipt?.amountEur && after.state === "PAID" && rows[0].realisedGainEur === conv.realisedGainEur, JSON.stringify(rows[0]));
-    const payRow = store.findPaymentRequest(forInvoice.body.id)!.payments.filter((p) => p.depositId === dInv.id);
+    const payRow = (await store.findPaymentRequest(forInvoice.body.id))!.payments.filter((p) => p.depositId === dInv.id);
     check("the pay-link payment row is rewritten in place to the EURe now held",
       payRow.length === 1 && payRow[0].settledAsset === "EURE" && payRow[0].settledEur === total, JSON.stringify(payRow));
   }
 
   // A customer who just paid the invoice by bank transfer, quoting its number —
   // the ordinary case, and the one nothing tied to the document before.
-  const bankPaid = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0777" }));
+  const bankPaid = await mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0777" }));
   const sepaOrder = {
     id: "ord-direct-1", kind: "issue", amount: "25.00", address: owner,
     memo: "RE-2026-0777 Danke fuer Ihre Arbeit",
     meta: { state: "processed", processedAt: new Date().toISOString() },
     counterpart: { details: { firstName: "Ada", lastName: "Payer" }, identifier: { iban: "DE02120300000000202051" } },
   };
-  routes.attributeMoneriumOrderToInvoice(sepaOrder as any);
-  routes.attributeMoneriumOrderToInvoice(sepaOrder as any); // the poller re-sees every order
-  const bankInv = store.findInvoice(bankPaid)!;
+  await routes.attributeMoneriumOrderToInvoice(sepaOrder as any);
+  await routes.attributeMoneriumOrderToInvoice(sepaOrder as any); // the poller re-sees every order
+  const bankInv = (await store.findInvoice(bankPaid))!;
   const bs: any = (bankInv.settlements ?? [])[0];
   check("a plain SEPA credit quoting the invoice number lands on that invoice, with the payer, their IBAN and the memo",
     (bankInv.settlements ?? []).length === 1 && bs?.method === "bank" && bs.counterpartyName === "Ada Payer" &&
@@ -615,71 +618,71 @@ try {
   }
   check("so a paid invoice cannot be collected a second time", againStatus === 409, String(againStatus));
   const invDomain = await import("../services/api/src/domain/invoices.js");
-  check("and it cannot be deleted", (() => { try { invDomain.assertDeletable(store.findInvoice(bankPaid)!); return false; } catch { return true; } })());
-  const partly = mkInvoice({}, issuedSnapshot(5000, { number: "RE-2026-0778" }));
-  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
+  check("and it cannot be deleted", await (async () => { try { invDomain.assertDeletable((await store.findInvoice(bankPaid))!); return false; } catch { return true; } })());
+  const partly = await mkInvoice({}, issuedSnapshot(5000, { number: "RE-2026-0778" }));
+  await routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
   {
     const { updateInvoice } = store;
     let invoiceWrites = 0;
     store.updateInvoice = (...a: Parameters<typeof updateInvoice>) => (invoiceWrites++, updateInvoice(...a));
     try {
-      routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
+      await routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-half", memo: "RE-2026-0778" } as any);
     } finally {
       store.updateInvoice = updateInvoice;
     }
     check("re-seeing a credit already on a part-paid invoice writes nothing", invoiceWrites === 0, String(invoiceWrites));
   }
-  const partlyInv = store.findInvoice(partly)!;
+  const partlyInv = (await store.findInvoice(partly))!;
   check("a credit short of the total leaves the invoice SUBMITTED and collectable for the rest",
     partlyInv.state === "SUBMITTED" && (partlyInv.settlements ?? []).length === 1, JSON.stringify({ state: partlyInv.state }));
   check("but an invoice with any payment on it cannot be deleted",
     (() => { try { invDomain.assertDeletable(partlyInv); return false; } catch { return true; } })());
-  const unrelated = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0888" }));
-  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-2", memo: "Miete September" } as any);
-  check("a credit naming no invoice touches none of them", (store.findInvoice(unrelated)!.settlements ?? []).length === 0);
-  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-3", address: `0x${"99".repeat(20)}` } as any);
+  const unrelated = await mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0888" }));
+  await routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-2", memo: "Miete September" } as any);
+  check("a credit naming no invoice touches none of them", ((await store.findInvoice(unrelated))!.settlements ?? []).length === 0);
+  await routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-3", address: `0x${"99".repeat(20)}` } as any);
   check("and a credit to an address we do not know is ignored rather than guessed at",
-    (store.findInvoice(bankPaid)!.settlements ?? []).length === 1);
-  const twoA = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0901" }));
-  const twoB = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0902" }));
-  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-4", memo: "RE-2026-0901 und RE-2026-0902" } as any);
+    ((await store.findInvoice(bankPaid))!.settlements ?? []).length === 1);
+  const twoA = await mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0901" }));
+  const twoB = await mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0902" }));
+  await routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-4", memo: "RE-2026-0901 und RE-2026-0902" } as any);
   check("a credit naming two invoices is booked on neither — it cannot be split by guessing",
-    (store.findInvoice(twoA)!.settlements ?? []).length === 0 && (store.findInvoice(twoB)!.settlements ?? []).length === 0);
+    ((await store.findInvoice(twoA))!.settlements ?? []).length === 0 && ((await store.findInvoice(twoB))!.settlements ?? []).length === 0);
   // Monerium issues several currencies and links one address on several chains:
   // only an EURe issue on our chain is a euro paid into this account.
   const { MONERIUM } = await import("../services/api/src/config.js");
   for (const [n, chain, currency] of [["0951", "ethereum", "eur"], ["0952", MONERIUM.chain, "gbp"], ["0953", "ethereum", "gbp"]]) {
-    const inv = mkInvoice({}, issuedSnapshot(2500, { number: `RE-2026-${n}` }));
-    routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: `ord-elsewhere-${n}`, chain, currency, memo: `RE-2026-${n}` } as any);
-    const after = store.findInvoice(inv)!;
+    const inv = await mkInvoice({}, issuedSnapshot(2500, { number: `RE-2026-${n}` }));
+    await routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: `ord-elsewhere-${n}`, chain, currency, memo: `RE-2026-${n}` } as any);
+    const after = (await store.findInvoice(inv))!;
     check(`a ${currency.toUpperCase()} issue on ${chain} quoting the invoice number books nothing and leaves it SUBMITTED`,
       after.state === "SUBMITTED" && (after.settlements ?? []).length === 0, JSON.stringify({ state: after.state, settlements: after.settlements }));
   }
-  const onOurChain = mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0954" }));
-  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-ours-0954", chain: MONERIUM.chain, currency: "eur", memo: "RE-2026-0954" } as any);
+  const onOurChain = await mkInvoice({}, issuedSnapshot(2500, { number: "RE-2026-0954" }));
+  await routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-ours-0954", chain: MONERIUM.chain, currency: "eur", memo: "RE-2026-0954" } as any);
   check("while an EURe issue on our chain, with both fields set, still pays it",
-    store.findInvoice(onOurChain)!.state === "PAID", JSON.stringify(store.findInvoice(onOurChain)!.settlements));
+    (await store.findInvoice(onOurChain))!.state === "PAID", JSON.stringify((await store.findInvoice(onOurChain))!.settlements));
 
   // A business org Miriam is only a MEMBER of: its account is someone else's Safe.
   const bizOrg = randomUUID();
-  store.addOrganisation({
+  await store.addOrganisation({
     id: bizOrg, type: "business", name: "Somebody GmbH", plan: "business",
     reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "fifo" },
     verifications: {}, createdAt: nowIso, updatedAt: nowIso,
   } as any);
-  store.addMember({
+  await store.addMember({
     id: randomUUID(), orgId: bizOrg, userId: miriam.id, email: miriam.email, role: "viewer",
     status: "active", createdAt: nowIso, updatedAt: nowIso,
   } as any);
-  store.addAccount({
+  await store.addAccount({
     id: `acc_${randomUUID()}`, orgId: bizOrg, currency: "EUR", label: "EUR account", status: "active",
     provider: "monerium", identifier: {}, address: `0x${"77".repeat(20)}`, backingUserId: randomUUID(),
     createdAt: nowIso, updatedAt: nowIso,
   } as any);
-  const bizInv = mkInvoice({ orgId: bizOrg }, issuedSnapshot(2500, { number: "SG-2026-0555" }));
-  routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-5", memo: "SG-2026-0555" } as any);
+  const bizInv = await mkInvoice({ orgId: bizOrg }, issuedSnapshot(2500, { number: "SG-2026-0555" }));
+  await routes.attributeMoneriumOrderToInvoice({ ...sepaOrder, id: "ord-direct-5", memo: "SG-2026-0555" } as any);
   check("money reaching a member's own Safe does not close the company's invoice it quotes",
-    (store.findInvoice(bizInv)!.settlements ?? []).length === 0);
+    ((await store.findInvoice(bizInv))!.settlements ?? []).length === 0);
   let refusedStatus: number | undefined;
   try {
     await routes.createPaymentRequest(miriam, { methods: ["crypto"], expiresAt: new Date(Date.now() + 3_600_000).toISOString(), invoiceId: bizInv }, { kind: "app" } as any, bizOrg);
@@ -694,7 +697,7 @@ try {
   check("the payer's amount is quoted and recorded on the link", quoted.status === 200 && quoted.body.methods.crypto.amountUsdc > 13, JSON.stringify(quoted.body));
   await mintUsdc(owner, quoted.body.methods.crypto.amountUsdc);
   await pollCryptoDepositsOnce();
-  const r2 = store.findPaymentRequest(openReq.body.id)!;
+  const r2 = (await store.findPaymentRequest(openReq.body.id))!;
   check("the deposit matches the payer's own quote; the link stays OPEN and shows €12 received", r2.state === "OPEN" && r2.payments.length === 1 && r2.payments[0].amountEur === 12, JSON.stringify(r2.payments));
   check("a bank-only link refuses to quote crypto", (await call("POST", `/api/pay/miriam/${(await call("POST", `/api/users/${miriam.id}/payment-requests`, { methods: ["bank"] }, miriam.id)).body.code}/quote`, { amountEur: 5 })).status === 409);
 
@@ -702,7 +705,7 @@ try {
   const q50 = part.body.latestQuote.amountUsdc as number;
   await mintUsdc(owner, Math.round(q50 * 0.6 * 1e6) / 1e6);
   await pollCryptoDepositsOnce();
-  let r3 = store.findPaymentRequest(part.body.id)!;
+  let r3 = (await store.findPaymentRequest(part.body.id))!;
   check("60% of the amount is a partial payment and the link stays open for the rest", r3.state === "OPEN" && r3.payments[0]?.kind === "partial" && r3.payments[0].amountEur === 30, JSON.stringify(r3.payments));
   const rest = await call("GET", `/api/pay/miriam/${part.body.code}`);
   const restUsdc = rest.body.methods.crypto?.amountUsdc as number;
@@ -710,7 +713,7 @@ try {
     rest.body.outstandingEur === 20 && restUsdc > 0 && restUsdc < q50 * 0.45, JSON.stringify(rest.body.methods.crypto));
   await mintUsdc(owner, restUsdc);
   await pollCryptoDepositsOnce();
-  r3 = store.findPaymentRequest(part.body.id)!;
+  r3 = (await store.findPaymentRequest(part.body.id))!;
   check("paying what the page shows closes it at €50, not over", r3.state === "PAID" && r3.payments.length === 2 && pr.paidEur(r3) === 50, JSON.stringify(r3.payments));
 
   console.log("4/4 bank side and housekeeping…");
@@ -721,48 +724,81 @@ try {
 
   const live = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 40, methods: ["bank"] }, miriam.id);
   const liveCode = live.body.code.replace(/-/g, "");
-  store.addTransfer({
+  await store.addTransfer({
     id: "t-paid", userId: "someone-else", quoteId: "q", rail: "sepa", recipientName: "Miriam Zoldenburg", recipientIban: miriam.iban,
     reference: `${live.body.code} invoice`, state: "PAID", sendEur: 40.99, receiveEur: 40, receiveKes: 0, txs: [], createdAt: nowIso, updatedAt: nowIso,
   } as any);
   const swept = await routes.sweepPaymentRequests();
-  const r4 = store.findPaymentRequest(live.body.id)!;
+  const r4 = (await store.findPaymentRequest(live.body.id))!;
   check("the sweep books our own PAID payout carrying the code, and the link is PAID", swept.matched === 1 && r4.state === "PAID" && r4.payments[0].transferId === "t-paid", JSON.stringify(r4.payments));
-  const merged = routes.attributeMoneriumOrder({ id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } });
+  const merged = await routes.attributeMoneriumOrder({ id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } });
   check("Monerium's view of the same credit merges onto that row instead of doubling it", merged!.payments.length === 1 && merged!.payments[0].payerName === "Payer Ltd" && merged!.payments[0].orderId === "ord-9");
   {
     // The poller re-sees every order every pass: one already on the row writes nothing.
     const writes: string[] = [];
-    const { updatePaymentRequest, updateInvoice } = store;
+    const { updatePaymentRequest, updateInvoice, recordPaymentRequestPayment, settleInvoice } = store;
     store.updatePaymentRequest = (...a: Parameters<typeof updatePaymentRequest>) => (writes.push(`request ${a[0]}`), updatePaymentRequest(...a));
     store.updateInvoice = (...a: Parameters<typeof updateInvoice>) => (writes.push(`invoice ${a[0]}`), updateInvoice(...a));
+    // These decide on the stored row whether to write: counted when they do.
+    store.recordPaymentRequestPayment = async (...a: Parameters<typeof recordPaymentRequestPayment>) => {
+      const r = await recordPaymentRequestPayment(...a);
+      if (r.written) writes.push(`request ${a[0]}`);
+      return r;
+    };
+    store.settleInvoice = async (...a: Parameters<typeof settleInvoice>) => {
+      const r = await settleInvoice(...a);
+      if (r) writes.push(`invoice ${a[0]}`);
+      return r;
+    };
     try {
-      const again = routes.attributeMoneriumOrder({ id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } });
+      const again = await routes.attributeMoneriumOrder({ id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } });
       await routes.sweepPaymentRequests();
       check("a poll and a sweep over an already-recorded paid order write nothing", again?.id === live.body.id && writes.length === 0, writes.join(", "));
       // A crash between the request write and the invoice write: the next poll heals the invoice, once.
-      const healed = mkInvoice({}, issuedSnapshot(4000, { number: "RE-2026-0999" }));
-      updatePaymentRequest(live.body.id, { invoiceId: healed });
+      const healed = await mkInvoice({}, issuedSnapshot(4000, { number: "RE-2026-0999" }));
+      await updatePaymentRequest(live.body.id, { invoiceId: healed });
       const ord9 = { id: "ord-9", kind: "issue", amount: "40", address: owner, memo: `${live.body.code} invoice`, meta: { state: "processed", processedAt: nowIso }, counterpart: { details: { name: "Payer Ltd" } } };
-      routes.attributeMoneriumOrder(ord9);
-      routes.attributeMoneriumOrder(ord9);
+      await routes.attributeMoneriumOrder(ord9);
+      await routes.attributeMoneriumOrder(ord9);
       check("an invoice settlement a crash left unwritten is written by the next poll, and only once",
-        writes.join(",") === `invoice ${healed}` && (store.findInvoice(healed)!.settlements?.[0] as any)?.orderId === "ord-9", writes.join(", "));
+        writes.join(",") === `invoice ${healed}` && ((await store.findInvoice(healed))!.settlements?.[0] as any)?.orderId === "ord-9", writes.join(", "));
     } finally {
-      Object.assign(store, { updatePaymentRequest, updateInvoice });
+      Object.assign(store, { updatePaymentRequest, updateInvoice, recordPaymentRequestPayment, settleInvoice });
     }
   }
   void bankCode; void liveCode;
 
   const soon = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 5, methods: ["bank"], expiresAt: new Date(Date.now() + 90_000).toISOString() }, miriam.id);
-  store.updatePaymentRequest(soon.body.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+  await store.updatePaymentRequest(soon.body.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
   check("an expired link reads EXPIRED on its page before the sweep runs", (await call("GET", `/api/pay/miriam/${soon.body.code}`)).body.state === "EXPIRED");
   const swept2 = await routes.sweepPaymentRequests();
-  check("and the sweep writes it down", swept2.expired === 1 && store.findPaymentRequest(soon.body.id)!.state === "EXPIRED");
+  check("and the sweep writes it down", swept2.expired === 1 && (await store.findPaymentRequest(soon.body.id))!.state === "EXPIRED");
 
   const list = await call("GET", `/api/users/${miriam.id}/payment-requests`, undefined, miriam.id);
   // 9, not 14: the five refused invoice links left no row behind.
   check("the owner's list carries every link, newest first, with what the payee can offer — and nothing a refusal created", list.body.requests.length === 9 && list.body.methods.length === 2 && Date.parse(list.body.requests[0].createdAt) >= Date.parse(list.body.requests[1].createdAt), `${list.body.requests.length}`);
+  {
+    // §2: the sweep reads the open requests, then awaits; a payment recorded
+    // in between keeps the request PAID. The payment is made to land after
+    // the sweep's read and before its write, on either backend.
+    const late = await call("POST", `/api/users/${miriam.id}/payment-requests`, { amountEur: 6, methods: ["bank"], expiresAt: new Date(Date.now() + 90_000).toISOString() }, miriam.id);
+    await store.updatePaymentRequest(late.body.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+    const { updatePaymentRequestFrom } = store;
+    let paid: Promise<unknown> | undefined;
+    Object.assign(store, {
+      updatePaymentRequestFrom: async (...a: Parameters<typeof updatePaymentRequestFrom>) => {
+        await (paid ??= store.updatePaymentRequest(late.body.id, { state: "PAID", paidAt: nowIso }));
+        return updatePaymentRequestFrom(...a);
+      },
+    });
+    let swept3: Awaited<ReturnType<typeof routes.sweepPaymentRequests>>;
+    try {
+      swept3 = await routes.sweepPaymentRequests();
+    } finally {
+      Object.assign(store, { updatePaymentRequestFrom });
+    }
+    check("a payment recorded while the expiry sweep runs keeps the request PAID", swept3.expired === 0 && (await store.findPaymentRequest(late.body.id))!.state === "PAID", JSON.stringify(swept3));
+  }
 
   {
     // A page whose deposit address is a Candide forwarder, claimed before the
@@ -773,7 +809,7 @@ try {
     candide.usdc = addrs().usdc;
     const safe = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
     const ravi: any = {
-      ...miriam, id: randomUUID(), email: "ravi@example.com", address: safe, passkeySafe: { status: "active", address: safe },
+      ...miriam, passkey: { ...miriam.passkey, credentialId: "cred-r" }, id: randomUUID(), email: "ravi@example.com", address: safe, passkeySafe: { status: "active", address: safe },
       paymentPage: {
         handle: "ravi", depositAddress: FORWARDER, recipientAddress: safe,
         forwarder: { provider: "candide", recipient: safe, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: `0x${"ee".repeat(20)}`, active: true, expiresAt: new Date(Date.now() + 10 * 86_400_000).toISOString(), activatedAt: nowIso },
@@ -784,19 +820,19 @@ try {
         settlementAsset: "EURE", autoConvert: false, createdAt: nowIso, updatedAt: nowIso,
       },
     };
-    store.addUser(ravi);
+    await store.addUser(ravi);
     const tip = await call("POST", `/api/users/${ravi.id}/payment-requests`, { methods: ["crypto", "bank"] }, ravi.id);
     const fixed = await call("POST", `/api/users/${ravi.id}/payment-requests`, { amountEur: 20 }, ravi.id);
 
     candide.up = false;
-    check("an old page's EURe + USDC list is never served", publicPayee(store.findUser(ravi.id)!, { chainId: 31337, token: { symbol: "USDC", address: addrs().usdc, decimals: 6 } }).supportedTokens === undefined);
-    check("and while Candide cannot refresh it, the page is closed", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+    check("an old page's EURe + USDC list is never served", publicPayee((await store.findUser(ravi.id))!, { chainId: 31337, token: { symbol: "USDC", address: addrs().usdc, decimals: 6 } }).supportedTokens === undefined);
+    check("and while Candide cannot refresh it, the page is closed", (await livePaymentPage((await store.findUser(ravi.id))!)) === false);
     const closed = await call("GET", `/api/pay/ravi/${fixed.body.code}`);
     check("its request page shows no crypto address, only the bank method", closed.status === 200 && closed.body.methods.crypto === undefined && closed.body.methods.bank?.iban === ravi.iban && !JSON.stringify(closed.body).includes(FORWARDER), JSON.stringify(closed.body.methods));
     const refused = await call("POST", `/api/pay/ravi/${tip.body.code}/quote`, { amountEur: 7 });
-    check("and the quote route refuses rather than quote for an address it may not show", refused.status === 503 && store.findPaymentRequest(tip.body.id)!.cryptoQuotes.length === 0, JSON.stringify(refused));
+    check("and the quote route refuses rather than quote for an address it may not show", refused.status === 503 && (await store.findPaymentRequest(tip.body.id))!.cryptoQuotes.length === 0, JSON.stringify(refused));
     const before = candide.calls;
-    await livePaymentPage(store.findUser(ravi.id)!);
+    await livePaymentPage((await store.findUser(ravi.id))!);
     await call("GET", `/api/pay/ravi/${fixed.body.code}`);
     check("a failed renewal is not retried on every hit", candide.calls === before, `${candide.calls - before} calls`);
 
@@ -804,16 +840,16 @@ try {
     const realNow = Date.now;
     Date.now = () => realNow() + RENEW_RETRY_MS + 1000;
     try {
-      check("after the back-off a renewal is tried again, and opens the page", (await livePaymentPage(store.findUser(ravi.id)!)) === true && candide.calls > before);
+      check("after the back-off a renewal is tried again, and opens the page", (await livePaymentPage((await store.findUser(ravi.id))!)) === true && candide.calls > before);
     } finally {
       Date.now = realNow;
     }
-    const page = store.findUser(ravi.id)!.paymentPage!;
+    const page = (await store.findUser(ravi.id))!.paymentPage!;
     check("the refreshed list is what Candide's routes forward: USDC only", !!page.routesReadAt && page.supportedTokens?.map((t) => t.symbol).join() === "USDC", JSON.stringify(page.supportedTokens));
     const open = await call("GET", `/api/pay/ravi/${fixed.body.code}`);
     check("and the request page shows the forwarder again", open.body.methods.crypto?.address === FORWARDER, JSON.stringify(open.body.methods));
 
-    store.updateUser(ravi.id, { paymentPage: { ...page, forwarder: { ...page.forwarder!, expiresAt: new Date(Date.now() - 60_000).toISOString() } } });
+    await store.updateUser(ravi.id, { paymentPage: { ...page, forwarder: { ...page.forwarder!, expiresAt: new Date(Date.now() - 60_000).toISOString() } } });
     candide.up = false;
     const lapsed = await call("POST", `/api/pay/ravi/${tip.body.code}/quote`, { amountEur: 7 });
     check("a lapsed forwarder is not quoted against on the quote route", lapsed.status === 503, JSON.stringify(lapsed));
@@ -826,103 +862,103 @@ try {
     let t = 2 * RENEW_RETRY_MS;
     const pastBackoff = () => { t += RENEW_RETRY_MS + 1000; Date.now = () => realNow2() + t; };
     try {
-      store.updateUser(ravi.id, { paymentPage: inactive(store.findUser(ravi.id)!.paymentPage!) });
+      await store.updateUser(ravi.id, { paymentPage: inactive((await store.findUser(ravi.id))!.paymentPage!) });
       candide.active = false;
       pastBackoff();
-      check("a page whose stored activation is not active is closed while Candide still says not active", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      check("a page whose stored activation is not active is closed while Candide still says not active", (await livePaymentPage((await store.findUser(ravi.id))!)) === false);
       const shown = await call("GET", `/api/pay/ravi/${fixed.body.code}`);
       check("and its request page shows no crypto address", shown.body.methods?.crypto === undefined && !JSON.stringify(shown.body).includes(FORWARDER), JSON.stringify(shown.body.methods));
-      check("the refused renewal stored nothing", store.findUser(ravi.id)!.paymentPage!.forwarder!.active === false);
+      check("the refused renewal stored nothing", (await store.findUser(ravi.id))!.paymentPage!.forwarder!.active === false);
       candide.active = true;
       pastBackoff();
-      check("once Candide activates it, the renewal opens the page", (await livePaymentPage(store.findUser(ravi.id)!)) === true && store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true);
+      check("once Candide activates it, the renewal opens the page", (await livePaymentPage((await store.findUser(ravi.id))!)) === true && (await store.findUser(ravi.id))!.paymentPage!.forwarder!.active === true);
 
       // Stored active, inside the renewal window, and Candide now answers the
       // same address as not active: a definite answer, not an outage.
-      const renewDue = () => { const p = store.findUser(ravi.id)!.paymentPage!; store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, expiresAt: new Date(realNow2() + t + 6 * 3600_000).toISOString() } } }); };
-      renewDue();
+      const renewDue = async () => { const p = (await store.findUser(ravi.id))!.paymentPage!; await store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, expiresAt: new Date(realNow2() + t + 6 * 3600_000).toISOString() } } }); };
+      await renewDue();
       candide.active = false;
       pastBackoff();
-      check("a renewal Candide answers not active closes a stored-active page", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
-      check("and records the activation as not active", store.findUser(ravi.id)!.paymentPage!.forwarder!.active === false);
-      check("the backoff that follows keeps it closed", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      check("a renewal Candide answers not active closes a stored-active page", (await livePaymentPage((await store.findUser(ravi.id))!)) === false);
+      check("and records the activation as not active", (await store.findUser(ravi.id))!.paymentPage!.forwarder!.active === false);
+      check("the backoff that follows keeps it closed", (await livePaymentPage((await store.findUser(ravi.id))!)) === false);
       const unquoted = await call("POST", `/api/pay/ravi/${tip.body.code}/quote`, { amountEur: 7 });
       check("and the quote route refuses it", unquoted.status === 503, JSON.stringify(unquoted));
       candide.active = true;
       candide.up = false;
       pastBackoff();
-      check("a later outage does not reopen it", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      check("a later outage does not reopen it", (await livePaymentPage((await store.findUser(ravi.id))!)) === false);
       candide.up = true;
       pastBackoff();
-      check("only a same-address active renewal reopens it", (await livePaymentPage(store.findUser(ravi.id)!)) === true && store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true);
+      check("only a same-address active renewal reopens it", (await livePaymentPage((await store.findUser(ravi.id))!)) === true && (await store.findUser(ravi.id))!.paymentPage!.forwarder!.active === true);
 
       // Inside the renewal window, Candide unreachable: the old activation is
       // active, listed and still running, so the page stays open on it.
-      renewDue();
+      await renewDue();
       candide.up = false;
       pastBackoff();
-      check("an active page inside the renewal window stays open while Candide is down", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
-      check("and through the backoff that follows", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+      check("an active page inside the renewal window stays open while Candide is down", (await livePaymentPage((await store.findUser(ravi.id))!)) === true);
+      check("and through the backoff that follows", (await livePaymentPage((await store.findUser(ravi.id))!)) === true);
       candide.up = true;
 
       // What POST /handle writes for the same handle: a fresh activation.
-      const saveActive = () => {
-        const p = store.findUser(ravi.id)!.paymentPage!;
+      const saveActive = async () => {
+        const p = (await store.findUser(ravi.id))!.paymentPage!;
         const at = new Date(realNow2() + t + 1).toISOString();
-        store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, activatedAt: at, activationId: randomUUID(), expiresAt: later }, routesReadAt: at, updatedAt: at } });
+        await store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, activatedAt: at, activationId: randomUUID(), expiresAt: later }, routesReadAt: at, updatedAt: at } });
         return at;
       };
       // A renewal asked before the page was saved, answered "not active" after.
-      renewDue();
+      await renewDue();
       candide.active = false;
       let release!: () => void;
       candide.hold = new Promise<void>((r) => (release = r));
       candide.held = 0;
       pastBackoff();
-      const late = livePaymentPage(store.findUser(ravi.id)!);
+      const late = livePaymentPage((await store.findUser(ravi.id))!);
       for (let i = 0; i < 200 && candide.held === 0; i++) await new Promise((r) => setTimeout(r, 10));
       check("(the renewal is waiting on Candide's answer)", candide.held === 1);
-      const savedAt = saveActive();
+      const savedAt = await saveActive();
       candide.hold = undefined;
       release();
       await late;
-      const afterLate = store.findUser(ravi.id)!.paymentPage!.forwarder!;
+      const afterLate = (await store.findUser(ravi.id))!.paymentPage!.forwarder!;
       check("a late not-active answer to an earlier renewal does not overwrite the activation just saved", afterLate.active === true && afterLate.activatedAt === savedAt, JSON.stringify(afterLate));
-      check("nor close the saved page through its backoff", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+      check("nor close the saved page through its backoff", (await livePaymentPage((await store.findUser(ravi.id))!)) === true);
 
       // The same race, with the save stamped in the very millisecond of the
       // activation the renewal started from: only the activation id tells them apart.
-      renewDue();
+      await renewDue();
       candide.hold = new Promise<void>((r) => (release = r));
       candide.held = 0;
       pastBackoff();
-      const sameMs = livePaymentPage(store.findUser(ravi.id)!);
+      const sameMs = livePaymentPage((await store.findUser(ravi.id))!);
       for (let i = 0; i < 200 && candide.held === 0; i++) await new Promise((r) => setTimeout(r, 10));
       check("(a second renewal is waiting on Candide's answer)", candide.held === 1);
       {
-        const p = store.findUser(ravi.id)!.paymentPage!;
-        store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, activationId: randomUUID(), expiresAt: later } } });
+        const p = (await store.findUser(ravi.id))!.paymentPage!;
+        await store.updateUser(ravi.id, { paymentPage: { ...p, forwarder: { ...p.forwarder!, active: true, activationId: randomUUID(), expiresAt: later } } });
       }
       candide.hold = undefined;
       release();
       await sameMs;
-      check("a late not-active answer does not overwrite a save stamped in the same millisecond", store.findUser(ravi.id)!.paymentPage!.forwarder!.active === true, JSON.stringify(store.findUser(ravi.id)!.paymentPage!.forwarder));
-      check("nor close that page through its backoff", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+      check("a late not-active answer does not overwrite a save stamped in the same millisecond", (await store.findUser(ravi.id))!.paymentPage!.forwarder!.active === true, JSON.stringify((await store.findUser(ravi.id))!.paymentPage!.forwarder));
+      check("nor close that page through its backoff", (await livePaymentPage((await store.findUser(ravi.id))!)) === true);
 
       // A renewal that closed the page, then the page is saved: no waiting out the backoff.
-      renewDue();
+      await renewDue();
       pastBackoff();
-      check("(a not-active renewal closes the page again)", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
+      check("(a not-active renewal closes the page again)", (await livePaymentPage((await store.findUser(ravi.id))!)) === false);
       candide.active = true;
-      saveActive();
-      check("saving the page clears that backoff: it opens at once", (await livePaymentPage(store.findUser(ravi.id)!)) === true);
+      await saveActive();
+      check("saving the page clears that backoff: it opens at once", (await livePaymentPage((await store.findUser(ravi.id))!)) === true);
 
       // A renewal that comes back with another address: the page keeps its address and stays closed.
-      store.updateUser(ravi.id, { paymentPage: { ...store.findUser(ravi.id)!.paymentPage!, forwarder: { ...store.findUser(ravi.id)!.paymentPage!.forwarder!, expiresAt: new Date(realNow2() + t + 60_000).toISOString() } } });
+      await store.updateUser(ravi.id, { paymentPage: { ...(await store.findUser(ravi.id))!.paymentPage!, forwarder: { ...(await store.findUser(ravi.id))!.paymentPage!.forwarder!, expiresAt: new Date(realNow2() + t + 60_000).toISOString() } } });
       candide.address = "0x4444444444444444444444444444444444444444";
       pastBackoff();
-      check("a renewal that moves the address does not open the page", (await livePaymentPage(store.findUser(ravi.id)!)) === false);
-      check("nor replace the address the page shows", store.findUser(ravi.id)!.paymentPage!.depositAddress === FORWARDER);
+      check("a renewal that moves the address does not open the page", (await livePaymentPage((await store.findUser(ravi.id))!)) === false);
+      check("nor replace the address the page shows", (await store.findUser(ravi.id))!.paymentPage!.depositAddress === FORWARDER);
     } finally {
       Date.now = realNow2;
       candide.active = true;
@@ -934,7 +970,7 @@ try {
   {
     // A share target that glued the message onto the link.
     const { createPageRouter } = await import("../services/api/src/routes/pages.js");
-    const pages = express().use(createPageRouter());
+    const pages = express().use(sendAfterCommit).use(createPageRouter());
     const ps = pages.listen(0);
     const port = (ps.address() as any).port;
     const get = (p: string) => fetch(`http://127.0.0.1:${port}${p}`, { redirect: "manual" });

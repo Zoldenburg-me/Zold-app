@@ -15,7 +15,7 @@ import express from "express";
 import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, EMAIL_VERIFICATION, HARNESS, SECURITY } from "../config.js";
-import { emailHeldBy } from "../domain/email.js";
+import { emailHeldBy, emailLockKey } from "../domain/email.js";
 import { accountBalances, shownBalances } from "../chain.js";
 import { store, type User } from "../store.js";
 import { rateLimit } from "../http/policy.js";
@@ -49,7 +49,7 @@ import { describeCause, redactedMessage } from "../http/log-cause.js";
  * decides who is calling.
  */
 export interface AuthDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => { id: string } | undefined;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<{ id: string } | undefined>;
 }
 
 
@@ -119,7 +119,7 @@ export async function verifyPasskeyStepUp(
       "step_up",
       stepUpBinding(user.id, action, target),
     );
-    if (!store.recordPasskeyUse(user.id, credentialId, signCount)) {
+    if (!(await store.recordPasskeyUse(user.id, credentialId, signCount))) {
       throw new Error("this passkey is no longer the account's passkey");
     }
     return true;
@@ -136,9 +136,9 @@ export function createAuthRouter(deps: AuthDeps) {
   router.delete(
     "/session",
     wrap(async (req, res) => {
-      const session = requireSession(req, res);
+      const session = await requireSession(req, res);
       if (!session) return;
-      store.revokeSession(session.id);
+      await store.revokeSession(session.id);
       res.status(204).end();
     }),
   );
@@ -146,12 +146,12 @@ export function createAuthRouter(deps: AuthDeps) {
   router.get(
     "/session",
     wrap(async (req, res) => {
-      const session = requireSession(req, res);
+      const session = await requireSession(req, res);
       if (!session) return;
-      const user = store.findUser(session.userId);
+      const user = await store.findUser(session.userId);
       if (!user) return res.status(404).json({ error: "session user not found" });
       const balances = await shownBalances(user.address);
-      res.json({ ...publicUser(user), ...balances });
+      res.json({ ...(await publicUser(user)), ...balances });
     }),
   );
 
@@ -170,7 +170,7 @@ export function createAuthRouter(deps: AuthDeps) {
       // Login is unbound by necessity — there is no session yet.
       let binding: string | undefined;
       if (purpose !== "login") {
-        const session = requireSession(req, res);
+        const session = await requireSession(req, res);
         if (!session) return;
         binding = session.userId;
         if (purpose === "step_up") {
@@ -191,15 +191,15 @@ export function createAuthRouter(deps: AuthDeps) {
   router.post(
     "/users/:id/passkey",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      const session = requireUserSession(req, res, user.id);
+      const session = await requireUserSession(req, res, user.id);
       if (!session) return;
       const { credentialId, attestation, clientDataJSON } = req.body ?? {};
       if (!credentialId || typeof credentialId !== "string" || !attestation || !clientDataJSON) {
         return res.status(400).json({ error: "credentialId, attestation and clientDataJSON required" });
       }
-      if (store.findUserByCredential(credentialId)) {
+      if ((await store.findUserByCredential(credentialId))) {
         return res.status(409).json({ error: "credential already registered" });
       }
       // A deployed Safe's owner is on chain, so a new passkey is added there:
@@ -238,35 +238,44 @@ export function createAuthRouter(deps: AuthDeps) {
       // ONE CLAIMABLE ACCOUNT PER EMAIL, re-asserted here. Signup checks it,
       // but two passkey-less rows on one email both pass that check; the first
       // passkey is what makes a row claimable, so it is where the invariant
-      // has to hold. Nothing is awaited between this check and the write.
-      if (!user.passkey?.publicKey && user.email &&
-          emailHeldBy(store.usersByEmail(user.email).filter((u) => u.id !== user.id), EMAIL_VERIFICATION.enabled)) {
+      // has to hold. The check and the write are one transaction.
+      const updated = await store.tx(async () => {
+        // The row and then its address held: two rows on one email
+        // registering their first passkey at once each lock only their own row.
+        const now = (await store.lockUser(user.id)) ?? user;
+        if (now.email) await store.lockKey(emailLockKey(now.email));
+        if (!now.passkey?.publicKey && now.email &&
+            emailHeldBy((await store.usersByEmail(now.email)).filter((u) => u.id !== now.id), EMAIL_VERIFICATION.enabled)) {
+          return undefined;
+        }
+        const plannedSafe = passkeySafePlan(now, reg.key);
+        return await store.updateUser(user.id, {
+          passkey: {
+            ...passkey,
+          },
+          ...(plannedSafe ? { passkeySafe: plannedSafe } : {}),
+        });
+      });
+      if (!updated) {
         return res.status(409).json({
           error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
           code: "EMAIL_IN_USE",
         });
       }
-      const plannedSafe = passkeySafePlan(user, reg.key);
-      const updated = store.updateUser(user.id, {
-        passkey: {
-          ...passkey,
-        },
-        ...(plannedSafe ? { passkeySafe: plannedSafe } : {}),
-      });
       // A bearer copied before the swap would otherwise keep working under the
       // new passkey until it expires.
-      if (replacing) revokeOtherSessions(user.id, session.id);
-      res.status(201).json(publicUser(updated));
+      if (replacing) await revokeOtherSessions(user.id, session.id);
+      res.status(201).json(await publicUser(updated));
     }),
   );
 
   router.post(
     "/users/:id/passkey-safe/deployment",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      if (!requireCapability(user, "safe", res)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
+      if (!(await requireCapability(user, "safe", res))) return;
       if (!user.passkey?.publicKey || !user.passkeySafe) {
         return res.status(409).json({ error: "register a passkey before preparing the passkey Safe" });
       }
@@ -302,12 +311,13 @@ export function createAuthRouter(deps: AuthDeps) {
       }
       if (deployment.challenge === "0x") {
         // An earlier "unconfirmed" deployment may have landed with the guardian.
-        const updated = await markSignupGuardian(store.updateUser(user.id, {
+        // From the stored plan: a guardian or channel written during the
+        // bundler calls stays.
+        const updated = await markSignupGuardian(await store.patchUserSub(user.id, "passkeySafe", (ps) => activatePasskeySafePlan(ps!), {
           address: user.passkeySafe.address,
           wallet: { type: "candide-safe", deployed: true },
-          passkeySafe: activatePasskeySafePlan(user.passkeySafe),
         }));
-        return res.json(publicUser(updated));
+        return res.json(await publicUser(updated));
       }
       prunePendingPasskeySafeDeployments();
       const requestId = randomUUID();
@@ -330,9 +340,9 @@ export function createAuthRouter(deps: AuthDeps) {
   router.post(
     "/users/:id/passkey-safe/deployment/:requestId",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (!user.passkeySafe) return res.status(409).json({ error: "no passkey Safe plan for this account" });
       prunePendingPasskeySafeDeployments();
       const pending = pendingPasskeySafeDeployments.get(req.params.requestId);
@@ -382,10 +392,11 @@ export function createAuthRouter(deps: AuthDeps) {
         });
       }
       const opHash = op.userOpHash;
-      let updated = store.updateUser(user.id, {
+      // From the stored plan: a guardian or channel written during the
+      // bundler calls stays.
+      let updated = await store.patchUserSub(user.id, "passkeySafe", (ps) => activatePasskeySafePlan(ps!), {
         address: user.passkeySafe.address,
         wallet: { type: "candide-safe", deployed: true, deployOpHash: opHash ?? undefined },
-        passkeySafe: activatePasskeySafePlan(user.passkeySafe),
       });
       updated = await markSignupGuardian(updated);
       // The Safe can be linked to Monerium now, but the link signature is a
@@ -395,7 +406,7 @@ export function createAuthRouter(deps: AuthDeps) {
       // provisioning actually stands so both the client and a reload know the
       // one remaining step.
       if (updated.kycStatus === "approved" && !updated.iban && updated.funding?.status !== "active") {
-        updated = store.updateUser(user.id, {
+        updated = await store.updateUser(user.id, {
           funding: {
             ...(updated.funding ?? {}),
             mode: "sandbox",
@@ -406,8 +417,8 @@ export function createAuthRouter(deps: AuthDeps) {
       }
       // Fire-and-forget: the testnet faucet seeds the new Safe with EURe, and
       // its failure must never fail a deployment that already succeeded.
-      void faucetFundSafe(user.id);
-      res.status(201).json({ ...publicUser(updated), deployOpHash: opHash });
+      void faucetFundSafe(user.id).catch((e) => console.error(`faucet: funding the new Safe of ${user.id} failed: ${describeCause(e)}`));
+      res.status(201).json({ ...(await publicUser(updated)), deployOpHash: opHash });
     }),
   );
 
@@ -423,12 +434,13 @@ export function createAuthRouter(deps: AuthDeps) {
       if (!rateLimit(`c:${tokenHash(String(credentialId))}`, SECURITY.authRateLimitPerMin, "credential")) {
         return res.status(429).json({ error: "rate limited — slow down" });
       }
-      const user = store.findUserByCredential(credentialId);
+      const user = await store.findUserByCredential(credentialId);
       if (!user?.passkey?.publicKey) {
         return res.status(404).json({ error: "no verified passkey for this credential — register again" });
       }
+      let signCount: number;
       try {
-        const { signCount } = await verifyAssertion(
+        ({ signCount } = await verifyAssertion(
           authenticatorData,
           clientDataJSON,
           signature,
@@ -436,16 +448,18 @@ export function createAuthRouter(deps: AuthDeps) {
           user.passkey.signCount ?? 0,
           user.passkey.rpId ?? SECURITY.rpId,
           SECURITY.origins,
-        );
-        if (!store.recordPasskeyUse(user.id, credentialId, signCount)) {
-          throw new Error("this passkey is no longer the account's passkey");
-        }
+        ));
       } catch (err: any) {
         return res.status(401).json({ error: redactedMessage(err) });
       }
-      // Minted before the next await, so a recovery that lands during it
-      // revokes this session too.
-      const session = withSession(user);
+      // The passkey check and the session are one transaction: a recovery
+      // either lands before it (the check fails) or after it (and revokes
+      // this session with the others).
+      const session = await store.tx(async () => {
+        const used = await store.recordPasskeyUse(user.id, credentialId, signCount);
+        return used ? await withSession(used) : undefined;
+      });
+      if (!session) return res.status(401).json({ error: "this passkey is no longer the account's passkey" });
       const balances = await shownBalances(user.address);
       res.json({ ...session, ...balances });
     }),
@@ -474,10 +488,8 @@ async function markSignupGuardian(user: User): Promise<User> {
     return user;
   }
   const activeAt = new Date().toISOString();
-  return store.updateUser(user.id, {
-    passkeySafe: {
-      ...user.passkeySafe,
-      socialGuardians: user.passkeySafe.socialGuardians!.map((g) => (g === guardian ? { ...g, status: "active" as const, activeAt } : g)),
-    },
-  });
+  return await store.patchUserSub(user.id, "passkeySafe", (ps) => ({
+    ...ps!,
+    socialGuardians: ps!.socialGuardians!.map((g) => (g.address === guardian.address ? { ...g, status: "active" as const, activeAt } : g)),
+  }));
 }

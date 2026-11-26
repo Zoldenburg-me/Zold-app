@@ -45,12 +45,12 @@ const SAFE = `0x${"aa".repeat(20)}` as const;
 const H = (n: number) => `0x${n.toString(16).padStart(64, "0")}`;
 const now = new Date().toISOString();
 
-initStore();
+await initStore();
 const user: any = { id: "u_1", name: "Zoldenburg UG", country: "DE", kycStatus: "approved", address: SAFE, iban: "EE382200221020145685", createdAt: "2026-01-01T00:00:00.000Z", passkey: { credentialId: "c" }, passkeySafe: { status: "active", address: SAFE } };
-store.addUser(user);
-store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", legalName: "Zoldenburg UG (haftungsbeschränkt)", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
-store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: { iban: "EE382200221020145685" }, address: SAFE, backingUserId: "u_1", createdAt: now, updatedAt: now });
-store.addPaymentRequest({
+await store.addUser(user);
+await store.addOrganisation({ id: "org_1", type: "business", name: "Zoldenburg UG", legalName: "Zoldenburg UG (haftungsbeschränkt)", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now });
+await store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: { iban: "EE382200221020145685" }, address: SAFE, backingUserId: "u_1", createdAt: now, updatedAt: now });
+await store.addPaymentRequest({
   id: "pr_1", code: "ABCDEFGHJKMNPQR", userId: "u_1", orgId: "org_1", handle: "zold", amountEur: 119, currency: "EUR", methods: ["crypto"], state: "PAID",
   externalInvoiceNumber: "RE-2026-0042", cryptoQuotes: [], payments: [{ id: "p1", method: "crypto", ref: "deposit:d-1", depositId: "d-1", amountEur: 119, amountUsdc: 137, kind: "full", at: now }],
   source: { kind: "app" }, expiresAt: now, createdAt: now, updatedAt: now,
@@ -65,17 +65,17 @@ const deposit: any = {
   txs: [{ step: "safe.swap(usdc->eure)", hash: H(7) }, { step: "userOperation", hash: H(6) }],
   detectedAt: "2026-09-10T10:00:00.000Z", updatedAt: "2026-09-10T10:02:30.000Z",
 };
-store.addCryptoDeposit(deposit);
-writeStatementLines();
-const line = store.ledgerOf("org_1").find((e) => e.statement?.key === "deposit:d-1:disposal")!;
+await store.addCryptoDeposit(deposit);
+await writeStatementLines();
+const line = (await store.ledgerOf("org_1")).find((e) => e.statement?.key === "deposit:d-1:disposal")!;
 assert.ok(line, "the writer produced the disposal line");
-const receiptLine = store.ledgerOf("org_1").find((e) => e.statement?.key === "deposit:d-1:held")!;
+const receiptLine = (await store.ledgerOf("org_1")).find((e) => e.statement?.key === "deposit:d-1:held")!;
 assert.ok(receiptLine, "the writer produced the receipt line");
 
 console.log("\nSnapshot");
 
-await check("the receipt line's Beleg is the receipt alone: value on arrival, no conversion", () => {
-  const snap = buildBeleg(receiptLine, { holder: { name: "Zoldenburg UG", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit, paymentRequest: store.findPaymentRequest("pr_1") });
+await check("the receipt line's Beleg is the receipt alone: value on arrival, no conversion", async () => {
+  const snap = buildBeleg(receiptLine, { holder: { name: "Zoldenburg UG", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit, paymentRequest: await store.findPaymentRequest("pr_1") });
   assert.equal(snap.line.event, "crypto_held");
   assert.equal(snap.line.amountCents, 12014);
   assert.equal(snap.receipt!.valueEur, 120.14);
@@ -86,8 +86,8 @@ await check("the receipt line's Beleg is the receipt alone: value on arrival, no
   assert.equal(belegStillAgrees(snap, { entry: receiptLine, deposit: { ...deposit, holding: "held" } }).ok, true);
 });
 
-await check("a USDC-paid invoice's disposal Beleg carries every fact the accountant needs", () => {
-  const snap = buildBeleg(line, { holder: { name: "Zoldenburg UG", addressLines: ["DE"], iban: user.iban, safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit, paymentRequest: store.findPaymentRequest("pr_1") });
+await check("a USDC-paid invoice's disposal Beleg carries every fact the accountant needs", async () => {
+  const snap = buildBeleg(line, { holder: { name: "Zoldenburg UG", addressLines: ["DE"], iban: user.iban, safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit, paymentRequest: await store.findPaymentRequest("pr_1") });
   assert.equal(snap.kind, "beleg");
   assert.deepEqual(snap.invoice, { number: "RE-2026-0042", source: "external" });
   assert.equal(snap.receipt!.amount, 137);
@@ -302,44 +302,44 @@ await check("issuing is once per line and the code is written back onto the line
   assert.equal(first.doc.kind, "beleg");
   assert.equal(first.doc.orgId, "org_1");
   assert.equal(first.doc.userId, "u_1");
-  const again = await issueBelegForLine(store.ledgerOf("org_1").find((e) => e.id === line.id)!);
+  const again = await issueBelegForLine((await store.ledgerOf("org_1")).find((e) => e.id === line.id)!);
   assert.equal(again.issued, false);
   assert.equal(again.doc.code, first.doc.code);
-  assert.equal(store.ledgerOf("org_1").find((e) => e.id === line.id)!.statement!.documentCode, first.doc.code);
-  assert.equal(store.documentsForOrg("org_1").length, 1);
+  assert.equal((await store.ledgerOf("org_1")).find((e) => e.id === line.id)!.statement!.documentCode, first.doc.code);
+  assert.equal((await store.documentsForOrg("org_1")).length, 1);
 });
 
 await check("two issues for one line at once make one Beleg, not two", async () => {
   const fresh = { ...line, id: "led_race", statement: { ...line.statement!, key: "race", documentCode: undefined } } as any;
-  store.addLedgerEntries([fresh]);
-  const before = store.documents.length;
+  await store.addLedgerEntries([fresh]);
+  const before = (await store.list("documents")).length;
   const [a, b] = await Promise.all([issueBelegForLine(fresh), issueBelegForLine(fresh)]);
   assert.equal(a.doc.code, b.doc.code);
   assert.deepEqual([a.issued, b.issued].sort(), [false, true]);
-  assert.equal(store.documents.length - before, 1);
+  assert.equal((await store.list("documents")).length - before, 1);
 });
 
 await check("the signature verifies; a changed figure fails", async () => {
-  const doc = store.documentsForOrg("org_1")[0];
+  const doc = (await store.documentsForOrg("org_1"))[0];
   assert.deepEqual(await verifyZoldAttestation(doc), { ok: true });
   const tampered: any = { ...doc, snapshot: { ...doc.snapshot, conversion: { ...(doc.snapshot as any).conversion, creditedEur: 1190.62 } } };
   assert.equal((await verifyZoldAttestation(tampered)).ok, false);
   assert.notEqual(snapshotDigest(tampered.snapshot), doc.attestations.zold.digest);
 });
 
-await check("re-verification checks the records the Beleg was built from", () => {
-  const doc = store.documentsForOrg("org_1")[0];
+await check("re-verification checks the records the Beleg was built from", async () => {
+  const doc = (await store.documentsForOrg("org_1"))[0];
   const snap = doc.snapshot as any;
-  const entry = store.ledgerOf("org_1").find((e) => e.id === line.id)!;
-  assert.equal(belegStillAgrees(snap, { entry, deposit: store.cryptoDeposits[0] }).ok, true);
-  const corrected = { ...store.cryptoDeposits[0], creditedEur: 100 };
+  const entry = (await store.ledgerOf("org_1")).find((e) => e.id === line.id)!;
+  assert.equal(belegStillAgrees(snap, { entry, deposit: (await store.list("cryptoDeposits"))[0] }).ok, true);
+  const corrected = { ...(await store.list("cryptoDeposits"))[0], creditedEur: 100 };
   const r = belegStillAgrees(snap, { entry, deposit: corrected as any });
   assert.equal(r.ok, false);
   assert.match(r.detail, /credited amount differs/);
-  const unconverted = belegStillAgrees(snap, { entry, deposit: { ...store.cryptoDeposits[0], holding: "refused" } as any });
+  const unconverted = belegStillAgrees(snap, { entry, deposit: { ...(await store.list("cryptoDeposits"))[0], holding: "refused" } as any });
   assert.equal(unconverted.ok, false);
   assert.match(unconverted.detail, /now refused/);
-  assert.match(belegStillAgrees(snap, { entry: undefined, deposit: store.cryptoDeposits[0] }).detail, /no longer exists/);
+  assert.match(belegStillAgrees(snap, { entry: undefined, deposit: (await store.list("cryptoDeposits"))[0] }).detail, /no longer exists/);
 });
 
 await check("the holder name says whether Monerium verified it, and a company name only borrows a verification it matches", () => {
@@ -365,11 +365,11 @@ await check("the public PDF is served while live and refused once revoked; the v
   const server = express().use("/api", createDocumentsRouter({ requireUserSession: () => undefined } as any)).listen(0);
   try {
     const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v`;
-    const doc = store.documentsForOrg("org_1")[0];
+    const doc = (await store.documentsForOrg("org_1"))[0];
     const live = await fetch(`${base}/${doc.code}/beleg.pdf`);
     assert.equal(live.status, 200);
     assert.equal(live.headers.get("content-type"), "application/pdf");
-    store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
+    await store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
     const revoked = await fetch(`${base}/${doc.code}/beleg.pdf`);
     assert.equal(revoked.status, 410);
     assert.equal(((await revoked.json()) as any).revoked, true);

@@ -85,7 +85,7 @@ export function assertQueueOpen(): void {
  * one of the org's own accounts and {challenge, userOperation, nonce} agree:
  * the digest recomputed from the op, and the op's own sender and nonce.
  */
-export function queueSafeOp(args: {
+export async function queueSafeOp(args: {
   org: Organisation;
   member: Member;
   safeAddress: `0x${string}`;
@@ -98,45 +98,51 @@ export function queueSafeOp(args: {
   /** The guardian a recovery-guardian op adds; checked again before each signature. */
   guardianAddress?: `0x${string}`;
   now?: number;
-}): PendingSafeOp {
-  assertQueueOpen();
-  const { org, member, prepared } = args;
-  if (org.type !== "business") throw new SafeOpRefusal(409, "NOT_A_BUSINESS", "Only a business organisation has a Safe with several owners.");
-  if (member.orgId !== org.id || member.status !== "active" || !canQueueSafeOp(member.role)) {
-    throw new SafeOpRefusal(403, "CANNOT_QUEUE", `Your role (${member.role}) cannot queue payments.`);
-  }
-  if (!/^0x[0-9a-fA-F]{64}$/.test(prepared.challenge)) throw new Error("a queued op needs its 32-byte digest");
-  const safe = args.safeAddress.toLowerCase();
-  if (!store.accountsOf(org.id).some((a) => a.address?.toLowerCase() === safe)) {
-    throw new SafeOpRefusal(409, "NOT_THE_ORG_SAFE", "This Safe is not one of the organisation's accounts.");
-  }
-  const op = prepared.userOperation as Partial<UserOperationV9> | null;
-  let digest: string | null = null;
-  if (op && typeof op === "object" && typeof op.sender === "string" && op.sender.toLowerCase() === safe && op.nonce === prepared.nonce) {
-    try { digest = safeOperationDigest(args.safeAddress, op as UserOperationV9); } catch { digest = null; }
-  }
-  if (!digest || digest.toLowerCase() !== prepared.challenge.toLowerCase()) {
-    throw new SafeOpRefusal(409, "OP_MISMATCH", "The operation does not match its digest, Safe or nonce.");
-  }
-  const now = args.now ?? Date.now();
-  return store.addSafeOp({
-    id: `sop_${randomUUID()}`,
-    orgId: org.id,
-    safeAddress: args.safeAddress,
-    chainId: Number(CANDIDE.chainId),
-    kind: args.kind,
-    summary: args.summary,
-    digest: prepared.challenge,
-    userOperation: encodeUserOperation(prepared.userOperation),
-    nonce: prepared.nonce.toString(),
-    createdByMemberId: member.id,
-    createdAt: new Date(now).toISOString(),
-    updatedAt: new Date(now).toISOString(),
-    expiresAt: new Date(now + SAFE_OP_TTL_MS).toISOString(),
-    state: "PENDING",
-    signatures: [],
-    dropped: [],
-    ...(args.guardianAddress ? { guardianAddress: args.guardianAddress } : {}),
+}): Promise<PendingSafeOp> {
+  return store.tx(async () => {
+    assertQueueOpen();
+    const { prepared } = args;
+    // The org's row held and the member read under it: a role change or
+    // deactivation (which take the same lock) lands before or after, whole.
+    const org = (await store.lockOrganisation(args.org.id)) ?? args.org;
+    const member = (await store.findMember(args.member.id)) ?? args.member;
+    if (org.type !== "business") throw new SafeOpRefusal(409, "NOT_A_BUSINESS", "Only a business organisation has a Safe with several owners.");
+    if (member.orgId !== org.id || member.status !== "active" || !canQueueSafeOp(member.role)) {
+      throw new SafeOpRefusal(403, "CANNOT_QUEUE", `Your role (${member.role}) cannot queue payments.`);
+    }
+    if (!/^0x[0-9a-fA-F]{64}$/.test(prepared.challenge)) throw new Error("a queued op needs its 32-byte digest");
+    const safe = args.safeAddress.toLowerCase();
+    if (!(await store.accountsOf(org.id)).some((a) => a.address?.toLowerCase() === safe)) {
+      throw new SafeOpRefusal(409, "NOT_THE_ORG_SAFE", "This Safe is not one of the organisation's accounts.");
+    }
+    const op = prepared.userOperation as Partial<UserOperationV9> | null;
+    let digest: string | null = null;
+    if (op && typeof op === "object" && typeof op.sender === "string" && op.sender.toLowerCase() === safe && op.nonce === prepared.nonce) {
+      try { digest = safeOperationDigest(args.safeAddress, op as UserOperationV9); } catch { digest = null; }
+    }
+    if (!digest || digest.toLowerCase() !== prepared.challenge.toLowerCase()) {
+      throw new SafeOpRefusal(409, "OP_MISMATCH", "The operation does not match its digest, Safe or nonce.");
+    }
+    const now = args.now ?? Date.now();
+    return await store.addSafeOp({
+      id: `sop_${randomUUID()}`,
+      orgId: org.id,
+      safeAddress: args.safeAddress,
+      chainId: Number(CANDIDE.chainId),
+      kind: args.kind,
+      summary: args.summary,
+      digest: prepared.challenge,
+      userOperation: encodeUserOperation(prepared.userOperation),
+      nonce: prepared.nonce.toString(),
+      createdByMemberId: member.id,
+      createdAt: new Date(now).toISOString(),
+      updatedAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + SAFE_OP_TTL_MS).toISOString(),
+      state: "PENDING",
+      signatures: [],
+      dropped: [],
+      ...(args.guardianAddress ? { guardianAddress: args.guardianAddress } : {}),
+    });
   });
 }
 
@@ -156,10 +162,10 @@ export async function refreshSafeOp(
   const view = await chain.read(op.safeAddress, BigInt(op.nonce));
   const check = checkAgainstChain(op, view, now);
   if (check.dropped.length) {
-    store.dropSafeOpSignatures(op.id, check.dropped.map((s) => s.ownerAddress), "no longer an owner of the Safe", new Date(now).toISOString());
+    await store.dropSafeOpSignatures(op.id, check.dropped.map((s) => s.ownerAddress), "no longer an owner of the Safe", new Date(now).toISOString());
   }
-  if (check.end) store.endPendingSafeOp(op.id, check.end);
-  return { op: store.findSafeOp(op.id)!, view, check };
+  if (check.end) await store.endPendingSafeOp(op.id, check.end);
+  return { op: (await store.findSafeOp(op.id))!, view, check };
 }
 
 /**
@@ -171,29 +177,29 @@ export async function refreshSafeOp(
 export async function relayIfReady(op: PendingSafeOp, chain: SafeOpChain, now = Date.now()): Promise<PendingSafeOp> {
   const fresh = await refreshSafeOp(op, chain, now);
   if (fresh.op.state !== "PENDING" || !fresh.check.thresholdMet) return fresh.op;
-  const claimed = store.claimSafeOpRelay(op.id);
-  if (!claimed) return store.findSafeOp(op.id)!;
+  const claimed = await store.claimSafeOpRelay(op.id);
+  if (!claimed) return (await store.findSafeOp(op.id))!;
   let outcome: SubmittedOperation;
   try {
     const owners = new Set(fresh.view.owners.map((o) => o.toLowerCase()));
     const signed = claimed.signatures.filter((s) => owners.has(s.ownerAddress.toLowerCase()));
     outcome = await chain.relay(claimed, signed.slice(0, fresh.check.threshold));
   } catch (err) {
-    if (err instanceof BundlerRefusedError) return store.finishSafeOp(op.id, { state: "FAILED", reason: err.message });
+    if (err instanceof BundlerRefusedError) return await store.finishSafeOp(op.id, { state: "FAILED", reason: err.message });
     if (err instanceof SafeOperationUncertainError) {
-      return store.finishSafeOp(op.id, { state: "MANUAL_REVIEW", reason: err.message, userOpHash: err.userOpHash });
+      return await store.finishSafeOp(op.id, { state: "MANUAL_REVIEW", reason: err.message, userOpHash: err.userOpHash });
     }
-    return store.finishSafeOp(op.id, { state: "MANUAL_REVIEW", reason: `the relay did not answer clearly: ${redactedMessage(err)}` });
+    return await store.finishSafeOp(op.id, { state: "MANUAL_REVIEW", reason: `the relay did not answer clearly: ${redactedMessage(err)}` });
   }
   if (outcome.success === false) {
-    return store.finishSafeOp(op.id, {
+    return await store.finishSafeOp(op.id, {
       state: "FAILED",
       reason: "the operation was included but the Safe call reverted — nothing changed",
       ...(outcome.userOpHash ? { userOpHash: outcome.userOpHash } : {}),
       ...(outcome.txHash ? { txHash: outcome.txHash } : {}),
     });
   }
-  return store.finishSafeOp(op.id, {
+  return await store.finishSafeOp(op.id, {
     state: "EXECUTED",
     ...(outcome.userOpHash ? { userOpHash: outcome.userOpHash } : {}),
     ...(outcome.txHash ? { txHash: outcome.txHash } : {}),

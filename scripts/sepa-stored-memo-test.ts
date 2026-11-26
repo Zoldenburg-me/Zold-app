@@ -40,7 +40,7 @@ const { MONERIUM } = await import("../services/api/src/config.js");
 const { moneriumRedeemMessage, paymentMemo } = await import("../services/api/src/sepa.js");
 const chain = await import("../services/api/src/chain.js");
 
-initStore();
+await initStore();
 (chain.publicClient as any).getBytecode = async () => undefined;
 
 const device = privateKeyToAccount(generatePrivateKey());
@@ -48,7 +48,7 @@ const SAFE = "0x00000000000000000000000000000000000000b1";
 const TO = "0x0000000000000000000000000000000000000002";
 const IBAN = "DE89370400440532013000";
 const stamp = new Date().toISOString();
-store.addUser({
+await store.addUser({
   id: "u-memo",
   name: "Memo Test",
   country: "DE",
@@ -87,9 +87,9 @@ let echo: (body: any) => string | undefined = (body) => body.memo;
 const deadline = () => Math.floor(Date.now() / 1000) + 120;
 
 /** A transfer as the builder left it, with `memo` as the memo it stored. */
-function built(id: string, reference: string | undefined, memo: string, sendEur = 40) {
+async function built(id: string, reference: string | undefined, memo: string, sendEur = 40) {
   const d = deadline();
-  store.addTransfer({
+  await store.addTransfer({
     id,
     userId: "u-memo",
     quoteId: `q-${id}`,
@@ -118,7 +118,7 @@ function built(id: string, reference: string | undefined, memo: string, sendEur 
 }
 
 async function send(id: string, d: number) {
-  const t = store.findTransfer(id)!;
+  const t = (await store.findTransfer(id))!;
   const signature = await device.signTypedData(
     chain.paymentAuthorizationTypedData({
       account: SAFE,
@@ -129,7 +129,7 @@ async function send(id: string, d: number) {
       deadline: d,
     }) as any,
   );
-  return executeSepaTransfer(t, store.findUser("u-memo")!, { deadline: d, signature });
+  return executeSepaTransfer(t, (await store.findUser("u-memo"))!, { deadline: d, signature });
 }
 
 let n = 0;
@@ -141,9 +141,10 @@ const cases: Array<[string, string | undefined]> = [
   ["22222222-3333-4444-8555-666666666666", ""],
   ["33333333-4444-4555-8666-777777777777", "€€€"],
 ];
-const deadlines = cases.map(([id, ref]) => built(id, ref, `Powered by Zold ${id}`));
+const deadlines: number[] = [];
+for (const [id, ref] of cases) deadlines.push(await built(id, ref, `Powered by Zold ${id}`));
 // A crash after the build: the next process reads the rows back from disk.
-initStore();
+await initStore();
 for (const [i, [id, ref]] of cases.entries()) {
   assert.notEqual(paymentMemo(id, ref), `Powered by Zold ${id}`, "the stored memo is not what paymentMemo makes today");
   const after = await send(id, deadlines[i]);
@@ -153,19 +154,19 @@ for (const [i, [id, ref]] of cases.entries()) {
   ok(`reference ${JSON.stringify(ref)} built under the old format: one order, carrying the stored memo, after a restart`);
 }
 await pollRedeemOrdersOnce();
-for (const [id] of cases) assert.equal(store.findTransfer(id)!.state, "PAID", "Monerium's echo matches the stored memo");
+for (const [id] of cases) assert.equal((await store.findTransfer(id))!.state, "PAID", "Monerium's echo matches the stored memo");
 ok("each settles PAID when Monerium echoes the stored memo");
 
 // (c) A normal reference: built and sent today, the memo is unchanged.
 const NORMAL = "44444444-5555-4666-8777-888888888888";
 const memoNow = paymentMemo(NORMAL, "INV-2026/0042");
 assert.equal(memoNow, "INV-2026/0042 Powered by Zold 44444444");
-const dNormal = built(NORMAL, "INV-2026/0042", memoNow);
+const dNormal = await built(NORMAL, "INV-2026/0042", memoNow);
 const normal = await send(NORMAL, dNormal);
 assert.equal(normal.state, "PAYOUT_SUBMITTED", normal.error);
 assert.equal(placed.get(normal.sepa!.orderId!).memo, memoNow);
 await pollRedeemOrdersOnce();
-assert.equal(store.findTransfer(NORMAL)!.state, "PAID");
+assert.equal((await store.findTransfer(NORMAL))!.state, "PAID");
 ok("a normal reference sends and settles on the same memo as before");
 
 // Fail closed: an echo that is not the stored memo is never PAID.
@@ -175,10 +176,10 @@ for (const [label, wrong] of [
 ] as const) {
   const id = label === "no memo" ? "66666666-7777-4888-8999-000000000000" : "55555555-6666-4777-8888-999999999999";
   echo = wrong;
-  const after = await send(id, built(id, "", `Powered by Zold ${id}`));
+  const after = await send(id, await built(id, "", `Powered by Zold ${id}`));
   assert.equal(after.state, "PAYOUT_SUBMITTED", after.error);
   await pollRedeemOrdersOnce();
-  const end = store.findTransfer(id)!;
+  const end = (await store.findTransfer(id))!;
   assert.equal(end.state, "MANUAL_REVIEW", `Monerium echoing ${label}`);
   assert.match(end.error ?? "", /does not match this transfer \(payment memo/);
   ok(`Monerium echoing ${label} holds the transfer in review, never PAID`);
@@ -191,8 +192,8 @@ for (const [id, memo] of [
   ["88888888-9999-4aaa-8bbb-cccccccccccc", ""],
   ["99999999-aaaa-4bbb-8ccc-dddddddddddd", "  "],
 ] as const) {
-  const d = built(id, "", "");
-  store.updateTransfer(id, { moneriumRedeem: { ...store.findTransfer(id)!.moneriumRedeem!, memo } as any });
+  const d = await built(id, "", "");
+  await store.updateTransfer(id, { moneriumRedeem: { ...(await store.findTransfer(id))!.moneriumRedeem!, memo } as any });
   const before = placed.size;
   const after = await send(id, d);
   assert.equal(placed.size, before, "no order without a stored memo");
@@ -206,7 +207,7 @@ for (const [id, memo] of [
 // reaches DEBITED and records no fee step.
 {
   const id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-  const d = built(id, "", "  ", 41.5);
+  const d = await built(id, "", "  ", 41.5);
   const states: string[] = [];
   const update = store.updateTransfer.bind(store);
   (store as any).updateTransfer = (tid: string, patch: any) => {
@@ -220,7 +221,7 @@ for (const [id, memo] of [
     assert.match(after.error ?? "", /no signed payment reference/);
   } finally { (store as any).updateTransfer = update; }
   assert.ok(!states.includes("DEBITED"), `reached ${states.join(" -> ")}`);
-  assert.ok(!store.findTransfer(id)!.txs.some((t) => /fee/.test(t.step)), "a fee step was recorded");
+  assert.ok(!(await store.findTransfer(id))!.txs.some((t) => /fee/.test(t.step)), "a fee step was recorded");
   assert.equal(placed.size, before, "an order was placed");
   ok("with a fee > 0, a blank stored memo fails before the fee debit: never DEBITED, no fee taken");
 }
@@ -230,7 +231,7 @@ for (const [id, memo] of [
   const auth = { ...moneriumRedeemMessage(40, IBAN, new Date().toISOString()), memo: "Powered by Zold 12345678", signature: "0x1234" as const };
   const before = placed.size;
   await assert.rejects(
-    redeemToIban(store.findUser("u-memo")!, 40, { iban: IBAN, firstName: "R", lastName: "N", country: "DE" }, "Powered by Zold 87654321", auth),
+    redeemToIban((await store.findUser("u-memo"))!, 40, { iban: IBAN, firstName: "R", lastName: "N", country: "DE" }, "Powered by Zold 87654321", auth),
     /does not match this payout/,
   );
   assert.equal(placed.size, before, "an order was placed");

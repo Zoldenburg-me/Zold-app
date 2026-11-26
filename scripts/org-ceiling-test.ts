@@ -27,11 +27,11 @@ process.env.WALLET_SYNC_ENABLED = "0";
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { CEILINGS } = await import("../services/api/src/domain/ceilings.js");
-initStore();
+await initStore();
 
 const NOW = new Date().toISOString();
 for (const id of ["u_many", "u_other"]) {
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", accountType: "personal", createdAt: NOW } as any);
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", accountType: "personal", createdAt: NOW } as any);
 }
 
 const app = express();
@@ -67,7 +67,7 @@ const max = CEILINGS.businessOrgsPerUser;
 await check("an org the user was only invited to does not count", async () => {
   const theirs = await createOrg("u_other", "business", 0);
   assert.ok(theirs.status < 300, `u_other could not create an org: ${theirs.status}`);
-  store.addMember({
+  await store.addMember({
     id: "mem_invited",
     orgId: theirs.body.org?.id ?? theirs.body.id,
     userId: "u_many",
@@ -91,7 +91,7 @@ await check("the next business org is refused with LIMIT_REACHED", async () => {
   assert.equal(r.status, 409);
   assert.equal(r.body.code, "LIMIT_REACHED");
   assert.equal(r.body.limit, max);
-  const owned = store.organisationsForUser("u_many").filter(({ org, member }) => org.type === "business" && member.role === "owner");
+  const owned = (await store.organisationsForUser("u_many")).filter(({ org, member }) => org.type === "business" && member.role === "owner");
   assert.equal(owned.length, max);
 });
 

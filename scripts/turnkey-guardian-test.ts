@@ -319,9 +319,9 @@ await check("the API public key is derived from the private key as compressed P-
   assert.match(tk.turnkeyApiPublicKey(), /^0[23][0-9a-f]{64}$/);
 });
 
-await check("capabilities() publishes the switch, the two login client ids, email and passkey", () => {
-  assert.equal(capabilities().turnkeyGuardians, true);
-  assert.deepEqual(capabilities().turnkeyLogins, { google: "google-client.apps.googleusercontent.com", apple: "com.zoldhq.signin", email: true, passkey: true });
+await check("capabilities() publishes the switch, the two login client ids, email and passkey", async () => {
+  assert.equal((await capabilities()).turnkeyGuardians, true);
+  assert.deepEqual((await capabilities()).turnkeyLogins, { google: "google-client.apps.googleusercontent.com", apple: "com.zoldhq.signin", email: true, passkey: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -334,13 +334,14 @@ const pk = { x: "0x01", y: "0x02" };
 const baseUser = (id: string, extra: Record<string, unknown> = {}) => ({
   id, name: id, email: `${id}@example.com`, country: "DE", kycStatus: "approved", iban: "", address: addr("a"), createdAt: now, ...extra,
 });
-store.addUser(baseUser("u_ok", { passkeySafe: { address: addr("a"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
-store.addUser(baseUser("u_nosafe") as any);
-store.addUser(baseUser("u_mail", { passkeySafe: { address: addr("5"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
-store.addUser(baseUser("u_key", { passkeySafe: { address: addr("6"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
-store.addUser(baseUser("u_planned", { passkeySafe: { address: addr("d"), status: "planned", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
-store.addUser(baseUser("u_twin", { address: addr("c"), passkeySafe: { address: addr("c"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
-store.addUser(baseUser("u_imported", { passkeySafe: { address: addr("b"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now, importedAt: now } }) as any);
+await store.addUser(baseUser("u_ok", { passkeySafe: { address: addr("a"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+await store.addUser(baseUser("u_nosafe") as any);
+await store.addUser(baseUser("u_race6", { address: addr("7"), passkeySafe: { address: addr("7"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+await store.addUser(baseUser("u_mail", { passkeySafe: { address: addr("5"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+await store.addUser(baseUser("u_key", { passkeySafe: { address: addr("6"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+await store.addUser(baseUser("u_planned", { passkeySafe: { address: addr("d"), status: "planned", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+await store.addUser(baseUser("u_twin", { address: addr("c"), passkeySafe: { address: addr("c"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now } }) as any);
+await store.addUser(baseUser("u_imported", { passkeySafe: { address: addr("b"), status: "active", threshold: 1, passkeyPublicKey: pk, createdAt: now, importedAt: now } }) as any);
 
 const calls: { op: string; arg?: unknown }[] = [];
 let createGate: Promise<void> = Promise.resolve();
@@ -466,7 +467,7 @@ const safeOps: SafeOps = {
 
 let switchOn = true;
 // The session stub stands in for server.ts: the header names the signed-in user.
-const requireUserSession = (req: express.Request, res: express.Response, userId: string) => {
+const requireUserSession = async (req: express.Request, res: express.Response, userId: string) => {
   if (req.get("x-test-user") === userId) return true;
   res.status(401).json({ error: "sign in" });
   return false;
@@ -543,11 +544,38 @@ try {
     assert.deepEqual(Object.keys(r.body.guardian).sort(), ["address", "createdAt", "kind", "status", "turnkeySubOrgId"]);
     assert.equal(r.body.guardian.kind, "self-social");
     assert.equal(r.body.guardian.status, "created");
-    const stored = store.findUser("u_ok")!.passkeySafe!.socialGuardians!;
+    const stored = (await store.findUser("u_ok"))!.passkeySafe!.socialGuardians!;
     assert.equal(stored.length, 1);
     assert.equal(stored[0].address, addr("1"));
     assert.equal(stored[0].turnkeySubOrgId, "sub-1");
-    assert.ok(!JSON.stringify(store.findUser("u_ok")).includes("accounts.google.com"), "no token or issuer stored");
+    assert.ok(!JSON.stringify(await store.findUser("u_ok")).includes("accounts.google.com"), "no token or issuer stored");
+  });
+
+  await check("a change to the Safe plan landing just before the guardian is written survives it", async () => {
+    // Another writer of passkeySafe (a Candide channel, the verifier) lands
+    // right before whichever write the route makes.
+    const s = store as any;
+    const originals = { updateUser: s.updateUser, patchUserSub: s.patchUserSub };
+    let landed = false;
+    const landFirst = (name: keyof typeof originals) => async (...args: unknown[]) => {
+      if (!landed && args[0] === "u_race6") {
+        landed = true;
+        await originals.patchUserSub("u_race6", "passkeySafe", (ps: any) => ({ ...ps, recoveryChoice: { choice: "declined", at: now } }));
+      }
+      return originals[name](...args);
+    };
+    s.updateUser = landFirst("updateUser");
+    s.patchUserSub = landFirst("patchUserSub");
+    try {
+      const r = await call("POST", "/users/u_race6/guardians", addBody(googleClaims({ sub: "race-6" })), "u_race6");
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+    } finally {
+      Object.assign(s, originals);
+    }
+    const ps = (await store.findUser("u_race6"))!.passkeySafe!;
+    assert.ok(landed);
+    assert.equal(ps.socialGuardians?.length, 1, "the guardian is there");
+    assert.equal((ps as any).recoveryChoice?.choice, "declined", "and so is the change made meanwhile");
   });
 
   await check("the same login again reuses its sub-org: no second create, no duplicate row", async () => {
@@ -555,14 +583,14 @@ try {
     const r = await call("POST", "/users/u_ok/guardians", addBody(), "u_ok");
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.deepEqual(calls.map((c) => c.op), ["find", "address"]);
-    assert.equal(store.findUser("u_ok")!.passkeySafe!.socialGuardians!.length, 1);
+    assert.equal((await store.findUser("u_ok"))!.passkeySafe!.socialGuardians!.length, 1);
   });
 
   await check("at signup a planned Safe records the login: the deployment adds it", async () => {
     const r = await call("POST", "/users/u_planned/guardians", addBody(), "u_planned");
     assert.equal(r.status, 201, JSON.stringify(r.body));
     assert.equal(r.body.guardian.status, "created");
-    assert.equal(store.findUser("u_planned")!.passkeySafe!.socialGuardians!.length, 1);
+    assert.equal((await store.findUser("u_planned"))!.passkeySafe!.socialGuardians!.length, 1);
   });
 
   await check("the owner can list their guardians", async () => {
@@ -631,8 +659,8 @@ try {
   });
 
   // ---- adding the guardian on chain ----------------------------------------
-  store.updateUser("u_ok", { passkey: { credentialId: "cred-ok", rpId: "localhost", publicKey: { kty: "EC" }, createdAt: now } as any });
-  const sub1 = () => store.findUser("u_ok")!.passkeySafe!.socialGuardians!.find((g) => g.turnkeySubOrgId === "sub-1")!;
+  await store.updateUser("u_ok", { passkey: { credentialId: "cred-ok", rpId: "localhost", publicKey: { kty: "EC" }, createdAt: now } as any });
+  const sub1 = async () => (await store.findUser("u_ok"))!.passkeySafe!.socialGuardians!.find((g) => g.turnkeySubOrgId === "sub-1")!;
 
   await check("add on chain: another user's session is refused", async () => {
     const r = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_twin");
@@ -686,7 +714,7 @@ try {
     assert.match(r.body.challenge, /^[A-Za-z0-9_-]+$/);
     assert.equal(r.body.submitTo, `/api/recovery/turnkey/users/u_ok/ops/${r.body.requestId}`);
     requestId = r.body.requestId;
-    assert.equal(sub1().status, "created", "nothing is active before the chain says so");
+    assert.equal((await sub1()).status, "created", "nothing is active before the chain says so");
   });
 
   await check("add on chain: preparing again replaces the earlier op (one pending op per user)", async () => {
@@ -746,8 +774,8 @@ try {
     const r = await call("POST", `/users/u_ok/ops/${requestId}`, { signature: "good" }, "u_ok");
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.guardian.status, "active");
-    assert.equal(sub1().status, "active");
-    assert.ok(sub1().activeAt);
+    assert.equal((await sub1()).status, "active");
+    assert.ok((await sub1()).activeAt);
     assert.deepEqual(safeCalls.map((c) => c.op), ["assert", "read", "submit", "read"], "the chain is re-checked before submitting and read after, not trusted");
   });
 
@@ -757,7 +785,7 @@ try {
   });
 
   await check("add on chain: a guardian the chain already lists turns active without an op", async () => {
-    store.updateUser("u_ok", { passkeySafe: { ...store.findUser("u_ok")!.passkeySafe!, socialGuardians: [{ ...sub1(), status: "created", activeAt: undefined }] } });
+    await store.updateUser("u_ok", { passkeySafe: { ...(await store.findUser("u_ok"))!.passkeySafe!, socialGuardians: [{ ...(await sub1()), status: "created", activeAt: undefined }] } });
     safeCalls.length = 0;
     const r = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");
     assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -767,19 +795,19 @@ try {
 
   await check("add on chain: a reverted op, or one the chain does not show, leaves the guardian `created`", async () => {
     // u_twin owns sub-org "sub-2" (subject 777) from the parallel-add check.
-    store.updateUser("u_twin", { passkey: { credentialId: "cred-twin", rpId: "localhost", publicKey: { kty: "EC" }, createdAt: now } as any });
+    await store.updateUser("u_twin", { passkey: { credentialId: "cred-twin", rpId: "localhost", publicKey: { kty: "EC" }, createdAt: now } as any });
     chain.guardians = [];
     chain.moduleEnabled = true;
-    const twin = () => store.findUser("u_twin")!.passkeySafe!.socialGuardians![0];
+    const twin = async () => (await store.findUser("u_twin"))!.passkeySafe!.socialGuardians![0];
     for (const [label, set] of [["reverted", () => (chain.revert = true)], ["not listed", () => (chain.listAfterSubmit = false)]] as const) {
-      const prep = await call("POST", `/users/u_twin/guardians/${twin().turnkeySubOrgId}/add`, {}, "u_twin");
+      const prep = await call("POST", `/users/u_twin/guardians/${(await twin()).turnkeySubOrgId}/add`, {}, "u_twin");
       assert.equal(prep.status, 201, `${label}: ${JSON.stringify(prep.body)}`);
       set();
       const r = await call("POST", `/users/u_twin/ops/${prep.body.requestId}`, { signature: "good" }, "u_twin");
       chain.revert = false;
       chain.listAfterSubmit = true;
       assert.equal(r.status, 502, label);
-      assert.equal(twin().status, "created", label);
+      assert.equal((await twin()).status, "created", label);
     }
     chain.guardians = [];
     chain.moduleEnabled = false;
@@ -800,7 +828,7 @@ try {
 
   // ---- one guardian at a time, and removing the Google/Apple one ------------
   await check("Zoldenburg is refused while a Google/Apple guardian is on the account", async () => {
-    store.updateUser("u_ok", { passkeySafe: { ...store.findUser("u_ok")!.passkeySafe!, socialGuardians: [{ ...sub1(), status: "active" }] } });
+    await store.updateUser("u_ok", { passkeySafe: { ...(await store.findUser("u_ok"))!.passkeySafe!, socialGuardians: [{ ...(await sub1()), status: "active" }] } });
     const r = await fetch(`${base.replace("/recovery/turnkey", "")}/users/u_ok/recovery/zoldenburg`, {
       method: "POST", headers: { "content-type": "application/json", "x-test-user": "u_ok" }, body: JSON.stringify({ acknowledged: true }),
     });
@@ -827,26 +855,26 @@ try {
     const prep = await call("POST", "/users/u_ok/guardians/sub-1/remove", {}, "u_ok");
     assert.equal(prep.status, 201, JSON.stringify(prep.body));
     assert.deepEqual(safeCalls.find((c) => c.op === "revokeTx")?.arg, { address: addr("1"), guardians: [addr("1")] });
-    assert.ok(sub1(), "nothing changes before the passkey approves");
+    assert.ok(await sub1(), "nothing changes before the passkey approves");
     const r = await call("POST", `/users/u_ok/ops/${prep.body.requestId}`, { signature: "good" }, "u_ok");
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.removed, true);
-    assert.equal(store.findUser("u_ok")!.passkeySafe!.socialGuardians!.length, 0);
+    assert.equal((await store.findUser("u_ok"))!.passkeySafe!.socialGuardians!.length, 0);
     assert.deepEqual(chain.guardians, []);
   });
 
   await check("remove: a row the chain never listed goes without an op", async () => {
-    store.updateUser("u_ok", { passkeySafe: { ...store.findUser("u_ok")!.passkeySafe!, socialGuardians: [{ kind: "self-social", address: addr("1"), turnkeySubOrgId: "sub-1", status: "created", createdAt: now }] } });
+    await store.updateUser("u_ok", { passkeySafe: { ...(await store.findUser("u_ok"))!.passkeySafe!, socialGuardians: [{ kind: "self-social", address: addr("1"), turnkeySubOrgId: "sub-1", status: "created", createdAt: now }] } });
     safeCalls.length = 0;
     const r = await call("POST", "/users/u_ok/guardians/sub-1/remove", {}, "u_ok");
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.removed, true);
     assert.ok(!safeCalls.some((c) => c.op === "prepare"));
-    assert.equal(store.findUser("u_ok")!.passkeySafe!.socialGuardians!.length, 0);
+    assert.equal((await store.findUser("u_ok"))!.passkeySafe!.socialGuardians!.length, 0);
   });
 
   await check("remove: dropping a row the chain never listed also drops its prepared add", async () => {
-    store.updateUser("u_ok", { passkeySafe: { ...store.findUser("u_ok")!.passkeySafe!, socialGuardians: [{ kind: "self-social", address: addr("1"), turnkeySubOrgId: "sub-1", status: "created", createdAt: now }] } });
+    await store.updateUser("u_ok", { passkeySafe: { ...(await store.findUser("u_ok"))!.passkeySafe!, socialGuardians: [{ kind: "self-social", address: addr("1"), turnkeySubOrgId: "sub-1", status: "created", createdAt: now }] } });
     chain.guardians = [];
     chain.moduleEnabled = true;
     const prep = await call("POST", "/users/u_ok/guardians/sub-1/add", {}, "u_ok");

@@ -63,7 +63,7 @@ done
 rm node_modules
 
 # The allowlist. Anything not matched here is not in production.
-KEEP='^(services/api/(src|public|site)/|package\.json$|package-lock\.json$|tsconfig\.json$|\.env\.example$|\.gitignore$|LICENSE$|SECURITY\.md$)'
+KEEP='^(services/api/(src|public|site|migrations)/|package\.json$|package-lock\.json$|tsconfig\.json$|\.env\.example$|\.gitignore$|LICENSE$|SECURITY\.md$)'
 git ls-files -z | grep -zvE "$KEEP" | xargs -0 git rm -q --
 rm -rf contracts
 mkdir -p contracts/artifacts/contracts
@@ -77,6 +77,7 @@ const fs = require("fs");
 const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const tsx = p.devDependencies?.tsx;
 if (!tsx) throw new Error("package.json has no tsx devDependency");
+if (!fs.existsSync("services/api/migrations/0001_init.sql")) throw new Error("services/api/migrations is missing: an API on Postgres checks its schema against these files");
 if (!fs.existsSync("services/api/src/operators/enrol-cli.ts")) throw new Error("services/api/src/operators/enrol-cli.ts is missing: production could not enrol an operator");
 const out = {
   name: p.name,

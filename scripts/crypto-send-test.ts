@@ -40,6 +40,10 @@ process.env.ENS_RESOLVER_ADDRESS = "0x00000000000000000000000000000000000e45e5";
 process.env.ENS_GATEWAY_KEY = (await import("viem")).keccak256((await import("viem")).toHex("zold crypto-send-test gateway key"));
 
 const { store, initStore } = await import("../services/api/src/store.js");
+
+// The live rows, for arranging state no store method writes (store/db.ts).
+
+const dbm = await import("../services/api/src/store/db.js");
 const { addrs } = await import("../services/api/src/chain.js");
 const { FX } = await import("../services/api/src/config.js");
 const { safeFundedEurToday } = await import("../services/api/src/orchestrator.js");
@@ -57,7 +61,7 @@ let testUsdc: `0x${string}` | undefined;
 const prepare: typeof prepareTransferExecution = async (...a) => ({ ...(preparedToken = a[1], await prepareTransferExecution(...a)), ...(gasInToken ? { gasTokenCost: gasInToken } : {}) });
 const { buildActivity } = await import("../services/api/src/transfers/activity.js");
 const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
-initStore();
+await initStore();
 
 const SAFE = "0x1111111111111111111111111111111111111111";
 const ALICE = "0x2222222222222222222222222222222222222222" as const;
@@ -82,7 +86,7 @@ const passkey = await makeSoftwarePasskey("cs", ORIGIN);
 const other = await makeSoftwarePasskey("cs-other", ORIGIN);
 const hex = (b64: string) => "0x" + Buffer.from(b64, "base64url").toString("hex");
 const now = new Date().toISOString();
-store.addUser({
+await store.addUser({
   id: "u-cs", name: "Kim", country: "DE", kycStatus: "approved", address: SAFE,
   wallet: { type: "candide-safe", deployed: true },
   passkey: { credentialId: passkey.credentialId, publicKey: { alg: "ES256", jwk: passkey.jwk }, signCount: 0, rpId: "localhost" },
@@ -92,19 +96,19 @@ store.addUser({
 
 // Kim's page forwards through a Candide address that takes USDC only; Lee's
 // page has no forwarder, so its address is Lee's Safe.
-store.addUser({
+await store.addUser({
   id: "u-kim", name: "Kim", country: "DE", kycStatus: "approved", address: KIM_SAFE, createdAt: now,
   paymentPage: { handle: "kim", depositAddress: FWD, forwarder: { provider: "candide", recipient: KIM_SAFE, destinationChainId: 31337, sourceChainIds: [31337], custodialWithdrawer: KIM_SAFE, active: true, activatedAt: now },
     supportedTokens: [{ chainId: 31337, symbol: "USDC", address: addrs().usdc, decimals: 6 }], routesReadAt: now, settlementAsset: "USDC", autoConvert: false, createdAt: now },
 } as any);
-store.addUser({
+await store.addUser({
   id: "u-lee", name: "Lee", country: "DE", kycStatus: "approved", address: KIM_SAFE.replace("5555", "5556"), createdAt: now,
   paymentPage: { handle: "lee", depositAddress: KIM_SAFE.replace("5555", "5556"), settlementAsset: "EURE", autoConvert: false, createdAt: now },
 } as any);
 names["lee.zoldhq.com"] = KIM_SAFE.replace("5555", "5556") as `0x${string}`;
 // Ann's page address is her passkey Safe, which differs from her stored address.
 const ANN_SAFE = "0x6666666666666666666666666666666666666666" as const;
-store.addUser({
+await store.addUser({
   id: "u-ann", name: "Ann", country: "DE", kycStatus: "approved", address: "0x6666666666666666666666666666666666666667", createdAt: now,
   passkeySafe: { status: "active", address: ANN_SAFE, threshold: 1, importedAt: now },
   paymentPage: { handle: "ann", depositAddress: ANN_SAFE, settlementAsset: "EURE", autoConvert: false, createdAt: now },
@@ -116,7 +120,7 @@ names["kimsafe.zoldhq.com"] = KIM_SAFE;
 const app = express();
 app.use(express.json());
 app.use("/api", createCryptoSendsRouter({
-  requireUserSession: () => ({ id: "s" }),
+  requireUserSession: async () => ({ id: "s" }),
   resolveName: async (n) => {
     if (!(n in names)) return { ok: false, status: 400, code: "BAD_NAME", error: "not a valid ENS name" };
     const a = names[n];
@@ -152,7 +156,7 @@ try {
     const executionAssertion = await passkey.assert(c.data.safeExecution.challenge);
     const both = await Promise.all([1, 2].map(() => post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion })));
     assert.deepEqual(both.map((r) => r.status).sort(), [200, 409], JSON.stringify(both));
-    const s = store.findCryptoSend(c.data.id)!;
+    const s = (await store.findCryptoSend(c.data.id))!;
     assert.equal(s.state, "SENT");
     assert.ok(s.txHash, "the tx hash is recorded");
   });
@@ -165,10 +169,10 @@ try {
     names["alice.eth"] = ALICE;
     assert.equal(r.status, 409);
     assert.equal(r.data.code, "ADDRESS_CHANGED");
-    const s = store.findCryptoSend(c.data.id)!;
+    const s = (await store.findCryptoSend(c.data.id))!;
     assert.equal(s.state, "FAILED");
     assert.ok(!s.txHash);
-    const used = safeFundedEurToday("u-cs");
+    const used = await safeFundedEurToday("u-cs");
     assert.equal(used, 10, `only the sent €10 counts, got ${used}`);
   });
 
@@ -184,10 +188,10 @@ try {
     const r = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(c.data.safeExecution.challenge) });
     names["alice.eth"] = ALICE;
     assert.equal(r.status, 502);
-    assert.equal(store.findCryptoSend(c.data.id)!.state, "CREATED");
+    assert.equal((await store.findCryptoSend(c.data.id))!.state, "CREATED");
     const again = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(c.data.safeExecution.challenge) });
     assert.equal(again.status, 200, JSON.stringify(again.data));
-    assert.equal(store.findCryptoSend(c.data.id)!.state, "SENT");
+    assert.equal((await store.findCryptoSend(c.data.id))!.state, "SENT");
   });
 
   await t("a Zold page's forwarder takes USDC only: EURe is refused, USDC goes through", async () => {
@@ -206,25 +210,25 @@ try {
     assert.equal(lee.status, 201, JSON.stringify(lee.data));
     assert.equal((await create({ to: "ann.zoldhq.com", confirmedAddress: ANN_SAFE, amount: "1" })).status, 201, "a page whose address is the passkey Safe takes EURe");
     assert.equal((await create({ to: "kimsafe.zoldhq.com", confirmedAddress: KIM_SAFE, amount: "1" })).status, 201, "a name pointing at a user's Safe takes EURe");
-    const held = safeFundedEurToday("u-cs");
+    const held = await safeFundedEurToday("u-cs");
     const gone = await create({ to: "gone.zoldhq.com", confirmedAddress: MALLORY, amount: "1" });
     assert.equal(gone.data.code, "PAGE_TOKEN_REFUSED", "a name under our parent we cannot place fails closed");
-    assert.equal(safeFundedEurToday("u-cs"), held, "a refusal holds nothing against the cap");
+    assert.equal(await safeFundedEurToday("u-cs"), held, "a refusal holds nothing against the cap");
     assert.equal((await create({ to: "gone.zoldhq.com", confirmedAddress: MALLORY, token: "USDC", amount: "1" })).data.code, "PAGE_TOKEN_REFUSED", "nor USDC: it cannot be checked");
   });
 
   await t("a forwarder that cannot forward now takes nothing: expired, never read, or no route here", async () => {
-    const page = store.findUser("u-kim")!.paymentPage!;
-    const was = JSON.parse(JSON.stringify(page));
+    const was = (await store.findUser("u-kim"))!.paymentPage!;
+    const setPage = (page: any) => store.updateUser("u-kim", { paymentPage: page });
     const usdc = () => create({ to: "kim.eth", confirmedAddress: FWD, token: "USDC", amount: "1" });
-    page.forwarder!.expiresAt = new Date(Date.now() - 1000).toISOString();
+    await setPage({ ...was, forwarder: { ...was.forwarder!, expiresAt: new Date(Date.now() - 1000).toISOString() } });
     const expired = await usdc();
-    Object.assign(page, JSON.parse(JSON.stringify(was)));
-    delete (page as any).routesReadAt;
+    const { routesReadAt: _unread, ...neverRead } = was as any;
+    await setPage(neverRead);
     const unread = await usdc();
-    Object.assign(page, JSON.parse(JSON.stringify(was)), { supportedTokens: [{ chainId: 42161, symbol: "USDC", address: addrs().usdc, decimals: 6 }] });
+    await setPage({ ...was, supportedTokens: [{ chainId: 42161, symbol: "USDC", address: addrs().usdc, decimals: 6 }] });
     const elsewhere = await usdc();
-    Object.assign(page, JSON.parse(JSON.stringify(was)));
+    await setPage(was);
     for (const [why, r] of [["expired", expired], ["never read from its routes", unread], ["routes only on another chain", elsewhere]] as const) {
       assert.equal(r.data.code, "PAGE_TOKEN_REFUSED", `${why}: ${JSON.stringify(r.data)}`);
       assert.match(r.data.error, /can't take payments from here right now/);
@@ -271,18 +275,18 @@ try {
     assert.equal(r.status, 201, JSON.stringify(r.data));
     assert.equal(preparedToken, TEST_USDC, "the passkey approves the test USDC, not the app's dollar");
     assert.equal(r.data.capEur, 1, "valued as a dollar at the mid");
-    assert.equal(store.cryptoSends.find((c) => c.id === r.data.id)?.token, "USDC_TEST");
+    assert.equal((await store.list("cryptoSends")).find((c) => c.id === r.data.id)?.token, "USDC_TEST");
     assert.equal((await create({ to: TEST_USDC, confirmedAddress: TEST_USDC })).data.code, "BURN_ADDRESS");
     testUsdc = undefined;
   });
 
   await t("the daily cap counts USDC at the mid, and no rate means no send", async () => {
-    const before = safeFundedEurToday("u-cs");
+    const before = await safeFundedEurToday("u-cs");
     const u = await create({ to: ALICE, confirmedAddress: ALICE, token: "USDC", amount: "125" });
     assert.equal(u.status, 201, JSON.stringify(u.data));
     assert.equal(u.data.capEur, 100, "125 USDC at 1.25 USD per EUR is €100");
-    assert.equal(safeFundedEurToday("u-cs") - before, 100);
-    const left = FX.DAILY_CAP_EUR - safeFundedEurToday("u-cs");
+    assert.equal((await safeFundedEurToday("u-cs")) - before, 100);
+    const left = FX.DAILY_CAP_EUR - (await safeFundedEurToday("u-cs"));
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, amount: String(Math.floor(left) + 1) })).data.code, "DAILY_CAP");
     rate = undefined;
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, token: "USDC", amount: "1" })).data.code, "NO_RATE");
@@ -291,9 +295,9 @@ try {
 
   await t("an expired unsigned send stops counting and cannot be approved", async () => {
     const c = await create({ to: ALICE, confirmedAddress: ALICE, amount: "1" });
-    const before = safeFundedEurToday("u-cs");
-    store.findCryptoSend(c.data.id)!.deadline = Math.floor(Date.now() / 1000) - 1;
-    assert.equal(before - safeFundedEurToday("u-cs"), 1);
+    const before = await safeFundedEurToday("u-cs");
+    dbm.db.cryptoSends.find((x) => x.id === c.data.id)!.deadline = Math.floor(Date.now() / 1000) - 1;
+    assert.equal(before - (await safeFundedEurToday("u-cs")), 1);
     const r = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(c.data.safeExecution.challenge) });
     assert.equal(r.status, 410);
   });
@@ -304,7 +308,7 @@ try {
     assert.equal(wrongKey.status, 403);
     const wrongChallenge = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(Buffer.from("other").toString("base64url")) });
     assert.equal(wrongChallenge.status, 401);
-    assert.equal(store.findCryptoSend(c.data.id)!.state, "CREATED", "a refused signature does not consume the send");
+    assert.equal((await store.findCryptoSend(c.data.id))!.state, "CREATED", "a refused signature does not consume the send");
   });
 
   await t("with CRYPTO_SEND_ENABLED off, create and approve both refuse", async () => {
@@ -315,11 +319,11 @@ try {
     process.env.CRYPTO_SEND_ENABLED = "1";
     assert.equal(made.data.code, "CRYPTO_SEND_OFF");
     assert.equal(approve.data.code, "CRYPTO_SEND_OFF");
-    assert.equal(store.findCryptoSend(c.data.id)!.state, "CREATED");
+    assert.equal((await store.findCryptoSend(c.data.id))!.state, "CREATED");
   });
 
   await t("Activity lists approved sends from the server, never unsigned ones or private fields", async () => {
-    const mine = store.cryptoSends.filter((c) => c.userId === "u-cs");
+    const mine = (await store.list("cryptoSends")).filter((c) => c.userId === "u-cs");
     const rows = buildActivity({ transfers: [], deposits: [], issues: [], cryptoSends: mine }).filter((r) => r.kind === "crypto_out") as any[];
     assert.ok(rows.some((r) => r.state === "SENT" && r.txHash), "a sent payment is there with its tx hash");
     assert.ok(rows.some((r) => r.state === "FAILED"), "a refused one is there as failed");
@@ -328,7 +332,7 @@ try {
   });
 
   await t("the books carry a line for each sent crypto send, at its euro value, and none for the rest", async () => {
-    const mine = store.cryptoSends.filter((c) => c.userId === "u-cs");
+    const mine = (await store.list("cryptoSends")).filter((c) => c.userId === "u-cs");
     const lines = projectStatementLines({
       orgId: "o1", accountId: "a1", userId: "u-cs", safeAddress: SAFE, timeZone: "UTC",
       transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
@@ -346,7 +350,7 @@ try {
     const all = projectStatementLines({
       orgId: "o1", accountId: "a1", userId: "u-cs", safeAddress: SAFE, timeZone: "UTC",
       transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
-      cryptoSends: store.cryptoSends.filter((c) => c.userId === "u-cs"), swapsHaveExecuted: false,
+      cryptoSends: (await store.list("cryptoSends")).filter((c) => c.userId === "u-cs"), swapsHaveExecuted: false,
     }).filter((l) => l.statement?.event === "crypto_out");
     const eure = all.find((l) => l.tags.includes("eure"))!;
     assert.equal(eure.direction, "out");
@@ -357,7 +361,7 @@ try {
     assert.equal(dollars.amount, "10.00", "12.5 USDC at 1.25 USD per EUR is €10.00");
     assert.match(dollars.note ?? "", /disposal gain or loss .* is not computed/);
     // Sent but not confirmed may still fail, and a line is never deleted: not booked.
-    const pending = store.cryptoSends.find((c) => c.userId === "u-cs" && c.state === "SENT" && c.token === "EURE")!;
+    const pending = (await store.list("cryptoSends")).find((c) => c.userId === "u-cs" && c.state === "SENT" && c.token === "EURE")!;
     const at = (c: typeof pending) => projectStatementLines({
       orgId: "o1", accountId: "a1", userId: "u-cs", safeAddress: SAFE, timeZone: "UTC",
       transfers: [], deposits: [], issueOrders: [], sweeps: [], invoices: [], paymentRequests: [],
@@ -370,13 +374,13 @@ try {
   await t("gas paid in USDC is reserved: a full-balance USDC send says the most it can send", async () => {
     balance = 100n * 10n ** 6n; // 100 USDC
     gasInToken = { token: addrs().usdc, units: 250_000n }; // 0.25 USDC
-    const before = safeFundedEurToday("u-cs");
+    const before = await safeFundedEurToday("u-cs");
     const all = await create({ to: ALICE, confirmedAddress: ALICE, token: "USDC", amount: "100" });
     assert.equal(all.status, 409, JSON.stringify(all.data));
     assert.equal(all.data.code, "INSUFFICIENT_FOR_GAS");
     assert.equal(all.data.maxSendable, "99.75");
     assert.match(all.data.error, /the most you can send is 99\.75/);
-    assert.equal(safeFundedEurToday("u-cs"), before, "the cap hold is released");
+    assert.equal(await safeFundedEurToday("u-cs"), before, "the cap hold is released");
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE, token: "USDC", amount: "99.75" })).status, 201);
     // EURe with USDC gas: the gas is not taken from EURe, so no reserve.
     balance = 100n * 10n ** 18n;
@@ -405,12 +409,12 @@ try {
     const down = await post(`/crypto-sends/${made.data.id}/authorize`, { executionAssertion: await passkey.assert(made.data.safeExecution.challenge) });
     screenDown = false;
     assert.equal(down.status, 503);
-    assert.equal(store.findCryptoSend(made.data.id)!.state, "CREATED", "nothing was sent and it can be approved again");
+    assert.equal((await store.findCryptoSend(made.data.id))!.state, "CREATED", "nothing was sent and it can be approved again");
     sanctioned.add(MALLORY);
     const listed = await post(`/crypto-sends/${made.data.id}/authorize`, { executionAssertion: await passkey.assert(made.data.safeExecution.challenge) });
     sanctioned.clear();
     assert.equal(listed.status, 403);
-    assert.equal(store.findCryptoSend(made.data.id)!.state, "FAILED");
+    assert.equal((await store.findCryptoSend(made.data.id))!.state, "FAILED");
   });
 
   await t("isSanctioned: test chains pass unread, a real chain needs its oracle, a failed read throws", async () => {
@@ -426,31 +430,57 @@ try {
     const pendingSend = async () => {
       const made = await create({ to: ALICE, confirmedAddress: ALICE, amount: "1" });
       assert.equal(made.status, 201);
-      store.claimCryptoSend(made.data.id);
-      store.updateCryptoSend(made.data.id, { userOpHash: `0x${made.data.id.replace(/-/g, "")}`, error: "sent, not yet confirmed" });
+      await store.claimCryptoSend(made.data.id);
+      await store.updateCryptoSend(made.data.id, { userOpHash: `0x${made.data.id.replace(/-/g, "")}`, error: "sent, not yet confirmed" });
       return made.data.id as string;
     };
     const [lands, reverts] = [await pendingSend(), await pendingSend()];
     await settleUnconfirmedCryptoSends(async () => null);
-    assert.equal(store.findCryptoSend(lands)!.state, "SUBMITTED", "no receipt yet");
+    assert.equal((await store.findCryptoSend(lands))!.state, "SUBMITTED", "no receipt yet");
     await settleUnconfirmedCryptoSends(async () => { throw new Error("bundler down"); });
-    assert.equal(store.findCryptoSend(lands)!.state, "SUBMITTED", "a failed read changes nothing");
-    const hashOf = (id: string) => store.findCryptoSend(id)!.userOpHash;
-    await settleUnconfirmedCryptoSends(async (h) => ({ success: h === hashOf(lands), txHash: "0xabc" }));
-    assert.equal(store.findCryptoSend(lands)!.state, "SENT");
-    assert.equal(store.findCryptoSend(lands)!.txHash, "0xabc");
-    assert.equal(store.findCryptoSend(lands)!.error, undefined);
-    assert.equal(store.findCryptoSend(reverts)!.state, "FAILED");
+    assert.equal((await store.findCryptoSend(lands))!.state, "SUBMITTED", "a failed read changes nothing");
+    const hashOf = async (id: string) => dbm.db.cryptoSends.find((x) => x.id === id)!.userOpHash;
+    await settleUnconfirmedCryptoSends(async (h) => ({ success: h === (await hashOf(lands)), txHash: "0xabc" }));
+    assert.equal((await store.findCryptoSend(lands))!.state, "SENT");
+    assert.equal((await store.findCryptoSend(lands))!.txHash, "0xabc");
+    assert.equal((await store.findCryptoSend(lands))!.error, undefined);
+    assert.equal((await store.findCryptoSend(reverts))!.state, "FAILED");
+  });
+
+  await t("the connection lost while the confirmed outcome is written: the send is never FAILED; committed it stays SENT, rolled back it stays SUBMITTED with its hash and the sweep settles it", async () => {
+    const updateCryptoSend = store.updateCryptoSend;
+    try {
+      for (const cut of ["before", "after"] as const) {
+        const c = await create({ to: ALICE, confirmedAddress: ALICE, amount: "1" });
+        assert.equal(c.status, 201);
+        store.updateCryptoSend = (async (id, patch) => {
+          if (id !== c.data.id || patch.state !== "SENT") return updateCryptoSend(id, patch);
+          store.updateCryptoSend = updateCryptoSend;
+          if (cut === "after") await updateCryptoSend(id, patch);
+          throw new Error("Connection terminated unexpectedly");
+        }) as typeof updateCryptoSend;
+        const r = await post(`/crypto-sends/${c.data.id}/authorize`, { executionAssertion: await passkey.assert(c.data.safeExecution.challenge) });
+        assert.equal(r.status, 500, `${cut}: ${JSON.stringify(r.data)}`);
+        const s = (await store.findCryptoSend(c.data.id))!;
+        assert.equal(s.state, cut === "after" ? "SENT" : "SUBMITTED", cut);
+        assert.ok(s.userOpHash, `${cut}: the operation hash is kept`);
+        if (cut === "before") {
+          await settleUnconfirmedCryptoSends(async (h) => (h === s.userOpHash ? { success: true, txHash: "0xdef" } : null));
+          assert.equal((await store.findCryptoSend(c.data.id))!.state, "SENT", "the sweep settles it from the receipt");
+        }
+      }
+    } finally {
+      store.updateCryptoSend = updateCryptoSend;
+    }
   });
 
   await t("KYC is not the gate: a pending account sends, a segment without a balance does not", async () => {
-    const u = store.findUser("u-cs")!;
-    u.kycStatus = "pending";
+    const u = (await store.findUser("u-cs"))!;
+    await store.updateUser(u.id, { kycStatus: "pending" });
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).status, 201);
-    u.kycStatus = "approved";
-    u.segment = { value: "BLOCKED_US" } as any;
+    await store.updateUser(u.id, { kycStatus: "approved", segment: { value: "BLOCKED_US" } as any });
     assert.equal((await create({ to: ALICE, confirmedAddress: ALICE })).status, 403);
-    delete u.segment;
+    await store.updateUser(u.id, { segment: u.segment });
   });
 } catch (err: any) {
   failed = true;

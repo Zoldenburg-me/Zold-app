@@ -86,11 +86,11 @@ const check = async (name: string, fn: () => void | Promise<void>) => {
   }
 };
 
-initStore();
+await initStore();
 const now = new Date().toISOString();
 const SAFE = `0x${"aa".repeat(20)}` as const;
 
-store.addUser({
+await store.addUser({
   id: "u_owner",
   name: "Owner",
   country: "DE",
@@ -109,13 +109,13 @@ store.addUser({
   },
   createdAt: now,
 } as any);
-store.addUser({ id: "u_reviewer", name: "Reviewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
-store.addOrganisation(businessOrg("org_1", "Zoldenburg UG"));
-store.addMember(member("m_owner", "org_1", "u_owner", "owner"));
-store.addMember(member("m_reviewer", "org_1", "u_reviewer", "admin"));
-store.addAccount(activeEurAccount("acc_1", "org_1", { address: SAFE, backingUserId: "u_owner" }, { label: "EUR", moneriumProfile: { id: PROFILE_ID, kind: "corporate", name: "Zoldenburg UG", checkedAt: NOW } }));
+await store.addUser({ id: "u_reviewer", name: "Reviewer", country: "DE", kycStatus: "approved", address: `0x${"bb".repeat(20)}`, createdAt: now } as any);
+await store.addOrganisation(businessOrg("org_1", "Zoldenburg UG"));
+await store.addMember(member("m_owner", "org_1", "u_owner", "owner"));
+await store.addMember(member("m_reviewer", "org_1", "u_reviewer", "admin"));
+await store.addAccount(activeEurAccount("acc_1", "org_1", { address: SAFE, backingUserId: "u_owner" }, { label: "EUR", moneriumProfile: { id: PROFILE_ID, kind: "corporate", name: "Zoldenburg UG", checkedAt: NOW } }));
 
-const contact = (id: string, name: string, iban: string) => {
+const contact = async (id: string, name: string, iban: string) => {
   const c = {
     id,
     orgId: "org_1",
@@ -125,14 +125,14 @@ const contact = (id: string, name: string, iban: string) => {
     createdAt: now,
     updatedAt: now,
   };
-  store.addContact(c as any);
+  await store.addContact(c as any);
   return c;
 };
-const first = contact("c_first", "First Supplier GmbH", "DE89370400440532013000");
-const second = contact("c_second", "Second Supplier GmbH", "DE02120300000000202051");
+const first = await contact("c_first", "First Supplier GmbH", "DE89370400440532013000");
+const second = await contact("c_second", "Second Supplier GmbH", "DE02120300000000202051");
 
-const invoice = (id: string, number: string) =>
-  store.addInvoice({
+const invoice = async (id: string, number: string) =>
+  await store.addInvoice({
     id,
     direction: "incoming",
     orgId: "org_1",
@@ -146,10 +146,10 @@ const invoice = (id: string, number: string) =>
     createdAt: now,
     updatedAt: now,
   } as any);
-invoice("inv_first", "R-1");
-invoice("inv_second", "R-2");
+await invoice("inv_first", "R-1");
+await invoice("inv_second", "R-2");
 
-const line = (id: string, c: ReturnType<typeof contact>, invoiceId: string) => {
+const line = (id: string, c: Awaited<ReturnType<typeof contact>>, invoiceId: string) => {
   const l = {
     id,
     contactId: c.id,
@@ -160,7 +160,7 @@ const line = (id: string, c: ReturnType<typeof contact>, invoiceId: string) => {
   };
   return { ...l, destination: { ...l.destination, fingerprint: currentFingerprint(l as any, c as any) } };
 };
-store.addDraft({
+await store.addDraft({
   id: "d_batch",
   orgId: "org_1",
   source: { kind: "account", accountId: "acc_1" },
@@ -185,13 +185,13 @@ const builder: TransferFactory = async (quote, recipient) => {
 
 const app = express();
 app.use(express.json());
-const requireSession = (req: any, res: any) => {
+const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");
   if (id) return { userId: id };
   res.status(401).json({ error: "no session" });
   return undefined;
 };
-const deps = { ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession) };
+const deps = { ctxOf: async (req: any, res: any) => await resolveOrg(req, res, requireSession) };
 app.use("/api/orgs", createDraftRoutes(deps, builder, async () => ({ safeBalanceEur: 1000 })));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
@@ -230,7 +230,7 @@ await check("the response says nothing moved and lists the transfer left unsigne
   assert.match(run.data.note, /Nothing moved/);
 });
 
-const after = store.findDraft("d_batch")!;
+const after = (await store.findDraft("d_batch"))!;
 await check("the draft is FAILED with the reason and the unsigned transfer recorded", () => {
   assert.equal(after.state, "FAILED");
   assert.match(after.failureReason!, /Line l2 could not be prepared: a passkey Safe is required/);
@@ -239,25 +239,66 @@ await check("the draft is FAILED with the reason and the unsigned transfer recor
   assert.equal(after.activity.at(-1)?.actorMemberId, "m_owner");
 });
 
-await check("the invoice the batch had not reached is released for a fresh draft", () => {
-  const inv = store.findInvoice("inv_second")!;
+await check("the invoice the batch had not reached is released for a fresh draft", async () => {
+  const inv = (await store.findInvoice("inv_second"))!;
   assert.equal(inv.state, "SUBMITTED");
   assert.equal(inv.payment?.draftId, undefined);
 });
 
-await check("the invoice whose line was built follows its transfer, not the draft", () => {
-  const inv = store.findInvoice("inv_first")!;
+await check("the invoice whose line was built follows its transfer, not the draft", async () => {
+  const inv = (await store.findInvoice("inv_first"))!;
   assert.equal(inv.state, "PAYING");
   assert.equal(inv.payment?.transferId, "t_first");
 });
 
 const replay = await execute();
-await check("a FAILED draft cannot be re-fired: no third build, no new transfer", () => {
+await check("a FAILED draft cannot be re-fired: no third build, no new transfer", async () => {
   assert.equal(replay.status, 409);
   assert.match(replay.data.error, /This draft is FAILED/);
   assert.equal(built.length, 2);
-  assert.deepEqual(store.findDraft("d_batch")!.transferIds, ["t_first"]);
+  assert.deepEqual((await store.findDraft("d_batch"))!.transferIds, ["t_first"]);
 });
+
+// An address-book edit that lands between the drift check and the bank read
+// (an await apart, so a real gap on Postgres) is refused, never planned.
+{
+  await store.addDraft({
+    id: "d_swap",
+    orgId: "org_1",
+    source: { kind: "account", accountId: "acc_1" },
+    state: "REVIEWED",
+    lines: [{ ...line("l_swap", first, "inv_first"), invoiceId: undefined }],
+    createdByMemberId: "m_owner",
+    reviewedByMemberId: "m_reviewer",
+    reviewedAt: now,
+    activity: [],
+    createdAt: now,
+    updatedAt: now,
+  } as any);
+  // The drift check reads contactsOf; the planning loop reads findContact.
+  const findContact = store.findContact.bind(store);
+  (store as any).findContact = async (id: string) => {
+    const c = await findContact(id);
+    return c && id === "c_first" ? { ...c, bankAccounts: [{ ...c.bankAccounts[0], iban: "GB29NWBK60161331926819" }] } : c;
+  };
+  const before = built.length;
+  let swap: { status: number; data: any };
+  try {
+    const res = await fetch(`${API}/api/orgs/org_1/drafts/d_swap/execute`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-user": "u_owner" },
+    });
+    swap = { status: res.status, data: await res.json() };
+  } finally {
+    (store as any).findContact = findContact;
+  }
+  await check("a bank account edited after the drift check is refused before anything is built", async () => {
+    assert.equal(swap.status, 422, JSON.stringify(swap.data));
+    assert.match(swap.data.problems?.[0]?.reason ?? "", /changed after the draft was approved/);
+    assert.equal(built.length, before, "a transfer was built to the edited IBAN");
+    assert.equal((await store.findDraft("d_swap"))!.state, "REVIEWED");
+  });
+}
 
 server.close();
 fake.close();

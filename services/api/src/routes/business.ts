@@ -42,7 +42,7 @@ export function createBusinessRouter(
 ): express.Router {
   const r = express.Router();
   const deps = {
-    ctxOf: (req: express.Request, res: express.Response) => resolveOrg(req, res, requireSession),
+    ctxOf: async (req: express.Request, res: express.Response) => await resolveOrg(req, res, requireSession),
   };
 
   r.use(createDraftRoutes(deps, buildTransferFromQuote));

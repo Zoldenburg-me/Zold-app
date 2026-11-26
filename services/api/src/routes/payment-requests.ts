@@ -6,6 +6,7 @@
  * the bottom are what the crypto poller and the Monerium order poller call
  * when money shows up; they hold no network of their own.
  */
+import { deferToCommit } from "../store/backend.js";
 import { wrap } from "./util.js";
 import { usdToken } from "../usd-token.js";
 import express from "express";
@@ -52,7 +53,7 @@ import {
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { describeCause } from "../http/log-cause.js";
 
-type SessionCheck = (req: express.Request, res: express.Response, userId: string) => unknown;
+type SessionCheck = (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 
 
 /**
@@ -89,7 +90,7 @@ export async function payerContext(req: express.Request, r: PaymentRequest, user
     token: payToken(),
     baseUrl: baseUrlFor(req),
     quote,
-    payeeName: payeeNameFor(r),
+    payeeName: await payeeNameFor(r),
     cryptoLive: await livePaymentPage(user),
   };
 }
@@ -97,9 +98,9 @@ export async function payerContext(req: express.Request, r: PaymentRequest, user
 
 /** Amounts this payee has quoted on requests still open — the set a new quote
  *  must not collide with. */
-function openQuotedAmounts(userId: string, exceptRequestId?: string): number[] {
-  return store
-    .paymentRequestsForUser(userId)
+async function openQuotedAmounts(userId: string, exceptRequestId?: string): Promise<number[]> {
+  return (await store
+    .paymentRequestsForUser(userId))
     .filter((r) => r.id !== exceptRequestId && effectiveState(r) === "OPEN")
     .flatMap((r) => r.cryptoQuotes.map((q) => q.amountUsdc));
 }
@@ -124,9 +125,18 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
   } catch {
     return { request: r };
   }
-  const quote = quoteCrypto(amountEur, mid, [...openQuotedAmounts(r.userId, r.id), ...r.cryptoQuotes.map((q) => q.amountUsdc)]);
-  const updated = store.updatePaymentRequest(r.id, { cryptoQuotes: withQuote(r, quote) });
-  return { request: updated, quote };
+  // The amounts taken and the new one are read and written in one
+  // transaction that holds the payee: two quotes picked from the same reading
+  // could share an amount, and a deposit is attributed by amount alone.
+  return await store.tx(async () => {
+    await store.lockUser(r.userId);
+    const now = (await store.findPaymentRequest(r.id)) ?? r;
+    const again = currentQuote(now, amountEur);
+    if (again) return { request: now, quote: again };
+    const quote = quoteCrypto(amountEur, mid, [...(await openQuotedAmounts(now.userId, now.id)), ...now.cryptoQuotes.map((q) => q.amountUsdc)]);
+    const updated = await store.updatePaymentRequest(now.id, { cryptoQuotes: withQuote(now, quote) });
+    return { request: updated, quote };
+  });
 }
 
 /**
@@ -144,8 +154,8 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
  * A settled invoice is refused: two live ways to pay one invoice lets it be
  * paid twice.
  */
-function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, payee: User) {
-  const invoice = store.findInvoice(invoiceId);
+async function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, payee: User) {
+  const invoice = await store.findInvoice(invoiceId);
   if (!invoice) throw new PaymentRequestError("no such invoice", 404);
   if (!orgId || invoice.orgId !== orgId) {
     throw new PaymentRequestError("that invoice belongs to another organisation", 403);
@@ -154,7 +164,7 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
   // the organisation's account — otherwise any member could raise a link that
   // routes a customer's payment for the company's invoice into their own
   // account and still close the invoice.
-  if (!orgsBackedBy(payee.id).has(invoice.orgId)) {
+  if (!(await orgsBackedBy(payee.id)).has(invoice.orgId)) {
     throw new PaymentRequestError(
       "that invoice's organisation is not paid into your account — only the person whose account backs it can collect it",
       403,
@@ -189,11 +199,11 @@ function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, 
  * Monerium) never has one, and still invoices and collects into its Safe. A
  * bank credit into that Safe quoting a personal-space invoice settles it too.
  */
-export function orgsBackedBy(userId: string): Set<string> {
-  const backed = new Set(store.accounts.filter((a) => a.backingUserId === userId).map((a) => a.orgId));
-  for (const { org, member } of store.organisationsForUser(userId)) {
+export async function orgsBackedBy(userId: string): Promise<Set<string>> {
+  const backed = new Set((await store.list("accounts")).filter((a) => a.backingUserId === userId).map((a) => a.orgId));
+  for (const { org, member } of (await store.organisationsForUser(userId))) {
     // Its only active member: a second one would collect into their own Safe.
-    const alone = store.membersOf(org.id).filter((m) => m.status === "active").length === 1;
+    const alone = (await store.membersOf(org.id)).filter((m) => m.status === "active").length === 1;
     if (org.type === "personal" && member.role === "owner" && alone) backed.add(org.id);
   }
   return backed;
@@ -204,9 +214,9 @@ export function orgsBackedBy(userId: string): Set<string> {
  * it has claimed one and the payee's Safe backs it. Anyone else's link, and a
  * Shopify checkout, keeps the payee's own handle.
  */
-export function companyPageHandle(userId: string, orgId: string | undefined): string | undefined {
-  const org = orgId ? store.findOrganisation(orgId) : undefined;
-  if (org?.type !== "business" || !org.paymentPage || !orgsBackedBy(userId).has(org.id)) return undefined;
+export async function companyPageHandle(userId: string, orgId: string | undefined): Promise<string | undefined> {
+  const org = orgId ? (await store.findOrganisation(orgId)) : undefined;
+  if (org?.type !== "business" || !org.paymentPage || !(await orgsBackedBy(userId)).has(org.id)) return undefined;
   return org.paymentPage.handle;
 }
 
@@ -227,13 +237,13 @@ export async function createPaymentRequest(
 ): Promise<PaymentRequest> {
   // Made by another member: only under the company's page, never the payee's personal one.
   const onBehalf = !!createdBy && createdBy !== user.id;
-  const handle = (source.kind === "app" ? companyPageHandle(user.id, orgId) : undefined) ?? (onBehalf ? undefined : user.paymentPage?.handle);
+  const handle = (source.kind === "app" ? (await companyPageHandle(user.id, orgId)) : undefined) ?? (onBehalf ? undefined : user.paymentPage?.handle);
   if (!handle) throw new PaymentRequestError("set up a payment page before creating a payment link (Get paid → Your page in the app, or Get paid → Set up the page in Zold Business)", 409);
   // Not for Shopify: its checkouts open requests at the shop's volume, signed
   // by Shopify, and each expires with its checkout.
   // Counted against whoever made the link, so one member cannot fill the payee's quota.
   const by = createdBy ?? user.id;
-  const open = source.kind === "shopify" ? 0 : store.paymentRequests.filter((r) => (r.createdBy ?? r.userId) === by && effectiveState(r) === "OPEN").length;
+  const open = source.kind === "shopify" ? 0 : (await store.list("paymentRequests")).filter((r) => (r.createdBy ?? r.userId) === by && effectiveState(r) === "OPEN").length;
   if (open >= CEILINGS.openPaymentRequestsPerUser) {
     throw new PaymentRequestError(ceilingRefusal("open payment links", CEILINGS.openPaymentRequestsPerUser).error, 409);
   }
@@ -249,10 +259,10 @@ export async function createPaymentRequest(
    */
   let amountEur = input.amountEur;
   if (input.invoiceId) {
-    const invoice = assertInvoiceCollectable(input.invoiceId, orgId, user);
+    const invoice = await assertInvoiceCollectable(input.invoiceId, orgId, user);
     // One open link per invoice, whichever route asks: no await lies between
     // this check and the insert below, so two calls cannot both pass it.
-    const alreadyOpen = !input.test && store.paymentRequests.some(
+    const alreadyOpen = !input.test && (await store.list("paymentRequests")).some(
       (p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && effectiveState(p) === "OPEN",
     );
     if (alreadyOpen) throw new PaymentRequestError("that invoice already has an open payment link", 409);
@@ -273,8 +283,8 @@ export async function createPaymentRequest(
   }
   const now = new Date().toISOString();
   let code = newRequestCode();
-  while (store.findPaymentRequestByCode(code)) code = newRequestCode();
-  const r = store.addPaymentRequest({
+  while ((await store.findPaymentRequestByCode(code))) code = newRequestCode();
+  const r = await store.addPaymentRequest({
     id: randomUUID(),
     code,
     userId: user.id,
@@ -310,10 +320,10 @@ function fail(res: express.Response, err: unknown) {
  * else none. A company the Safe does not back would book money the member
  * received into the company's books.
  */
-function defaultOrgId(user: User): string | undefined {
-  const orgs = store.organisationsForUser(user.id);
+async function defaultOrgId(user: User): Promise<string | undefined> {
+  const orgs = await store.organisationsForUser(user.id);
   if (user.accountType === "company") {
-    const backed = orgsBackedBy(user.id);
+    const backed = await orgsBackedBy(user.id);
     const company = orgs.find((o) => o.org.type === "business" && backed.has(o.org.id));
     if (company) return company.org.id;
   }
@@ -323,9 +333,9 @@ function defaultOrgId(user: User): string | undefined {
 /** The name a payer sees for a link booked under a company: the company's,
  *  only when the payee's Safe backs that company's account, so the IBAN it
  *  pays into is the company's. */
-function payeeNameFor(r: PaymentRequest): string | undefined {
-  const org = r.orgId ? store.findOrganisation(r.orgId) : undefined;
-  if (org?.type !== "business" || !orgsBackedBy(r.userId).has(org.id)) return undefined;
+async function payeeNameFor(r: PaymentRequest): Promise<string | undefined> {
+  const org = r.orgId ? (await store.findOrganisation(r.orgId)) : undefined;
+  if (org?.type !== "business" || !(await orgsBackedBy(r.userId)).has(org.id)) return undefined;
   return org.legalName?.trim() || org.name;
 }
 
@@ -335,9 +345,9 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/users/:id/payment-requests/methods",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       res.json({ methods: availableMethods(user), handle: user.paymentPage?.handle });
     }),
   );
@@ -345,12 +355,12 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.post(
     "/users/:id/payment-requests",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       try {
         const input = validateCreate(req.body, user);
-        const r = await createPaymentRequest(user, input, { kind: "app" }, defaultOrgId(user));
+        const r = await createPaymentRequest(user, input, { kind: "app" }, await defaultOrgId(user));
         res.status(201).json(ownerPaymentRequest(r, baseUrlFor(req)));
       } catch (err) {
         fail(res, err);
@@ -361,12 +371,12 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/users/:id/payment-requests",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       const base = baseUrlFor(req);
-      const list = store
-        .paymentRequestsForUser(user.id)
+      const list = (await store
+        .paymentRequestsForUser(user.id))
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
         .map((r) => ownerPaymentRequest(r, base));
       res.json({ requests: list, methods: availableMethods(user) });
@@ -376,10 +386,10 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/users/:id/payment-requests/:reqId",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      const r = store.findPaymentRequest(req.params.reqId);
+      if (!(await requireUserSession(req, res, user.id))) return;
+      const r = await store.findPaymentRequest(req.params.reqId);
       if (!r || r.userId !== user.id) return res.status(404).json({ error: "payment request not found" });
       res.json(ownerPaymentRequest(r, baseUrlFor(req)));
     }),
@@ -390,17 +400,19 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.post(
     "/users/:id/payment-requests/:reqId/cancel",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      const r = store.findPaymentRequest(req.params.reqId);
+      if (!(await requireUserSession(req, res, user.id))) return;
+      const r = await store.findPaymentRequest(req.params.reqId);
       if (!r || r.userId !== user.id) return res.status(404).json({ error: "payment request not found" });
       if (r.state !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(r).toLowerCase()}` });
       if (r.payments.length) {
         return res.status(409).json({ error: "a payment has already been recorded against this request — it cannot be cancelled" });
       }
-      const now = new Date().toISOString();
-      res.json(ownerPaymentRequest(store.updatePaymentRequest(r.id, { state: "CANCELLED", cancelledAt: now }), baseUrlFor(req)));
+      // Checked again on the stored row: a payment recorded since the read keeps it.
+      const cancelled = await store.cancelUnpaidPaymentRequest(r.id, new Date(), true);
+      if (!cancelled) return res.status(409).json({ error: "a payment has already been recorded against this request — it cannot be cancelled" });
+      res.json(ownerPaymentRequest(cancelled, baseUrlFor(req)));
     }),
   );
 
@@ -411,13 +423,13 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
    * company's address opens only that company's links, and only while their
    * payee still backs it; an old handle another user has claimed is theirs.
    */
-  const heldByOther = (handle: string, r: PaymentRequest) => {
-    const holder = store.findUserByHandle(handle);
+  const heldByOther = async (handle: string, r: PaymentRequest) => {
+    const holder = await store.findUserByHandle(handle);
     return (!!holder && holder.id !== r.userId)
-      || (!!store.findOrgByHandle(handle) && companyPageHandle(r.userId, r.orgId) !== handle);
+      || (!!(await store.findOrgByHandle(handle)) && (await companyPageHandle(r.userId, r.orgId)) !== handle);
   };
 
-  const resolvePublic = (req: express.Request, res: express.Response) => {
+  const resolvePublic = async (req: express.Request, res: express.Response) => {
     const code = normaliseCode(String(req.params.code ?? ""));
     res.setHeader("cache-control", "no-store");
     res.setHeader("x-robots-tag", "noindex, nofollow");
@@ -425,21 +437,21 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
-    const r = store.findPaymentRequestByCode(code);
-    const user = r ? store.findUser(r.userId) : undefined;
+    const r = await store.findPaymentRequestByCode(code);
+    const user = r ? (await store.findUser(r.userId)) : undefined;
     // The code resolves; the handle is for the reader. A link minted under an
     // old handle keeps working, and so does the payee's own handle or the
     // company page their Safe backs, but a code under anyone else's handle is
     // a 404, so a page cannot impersonate another payee.
     // A link another member made for the company never opens under the payee's personal page.
-    const handles = r && user ? [r.handle, ...(r.createdBy ? [] : [user.paymentPage?.handle]), companyPageHandle(r.userId, r.orgId)] : [];
-    if (!r || !user || !handles.includes(req.params.handle) || heldByOther(req.params.handle, r)) {
+    const handles = r && user ? [r.handle, ...(r.createdBy ? [] : [user.paymentPage?.handle]), await companyPageHandle(r.userId, r.orgId)] : [];
+    if (!r || !user || !handles.includes(req.params.handle) || (await heldByOther(req.params.handle, r))) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
     }
     // Opened under the payee's current address, a link minted under a handle
     // someone else has since claimed shows the address it was opened under.
-    return { r, user, handle: heldByOther(r.handle, r) ? req.params.handle : undefined };
+    return { r, user, handle: (await heldByOther(r.handle, r)) ? req.params.handle : undefined };
   };
 
   router.get(
@@ -448,13 +460,13 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     // this one; without this it read as an unknown code and every QR 404'd.
     (req, _res, next) => (req.params.code === "qr.svg" ? next("route") : next()),
     wrap(async (req, res) => {
-      const hit = resolvePublic(req, res);
+      const hit = await resolvePublic(req, res);
       if (!hit) return;
       // After a partial payment the page quotes what is still owed, not the
       // whole amount again, or a payer who pays what it shows overpays.
       const { request, quote } = await ensureQuote(hit.r, outstandingEur(hit.r));
       const ctx = await payerContext(req, request, hit.user, quote);
-      const user = store.findUser(hit.user.id) ?? hit.user;
+      const user = (await store.findUser(hit.user.id)) ?? hit.user;
       res.json(publicPaymentRequest(request, user, { ...ctx, handle: hit.handle }));
     }),
   );
@@ -466,7 +478,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/pay/:handle/:code/qr.svg",
     wrap(async (req, res) => {
-      const hit = resolvePublic(req, res);
+      const hit = await resolvePublic(req, res);
       if (!hit) return;
       const address = hit.user.paymentPage?.depositAddress;
       if (!hit.r.methods.includes("crypto") || !address) return res.status(404).json({ error: "this request does not take crypto" });
@@ -486,10 +498,10 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.get(
     "/pay/:handle/:code/sepa-qr.svg",
     wrap(async (req, res) => {
-      const hit = resolvePublic(req, res);
+      const hit = await resolvePublic(req, res);
       if (!hit) return;
-      const bank = publicPaymentRequest(hit.r, store.findUser(hit.user.id) ?? hit.user, {
-        chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
+      const bank = publicPaymentRequest(hit.r, (await store.findUser(hit.user.id)) ?? hit.user, {
+        chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: await payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
       }).methods.bank;
       if (!bank) return res.status(404).json({ error: "this request does not take bank transfer" });
       const due = outstandingEur(hit.r);
@@ -514,7 +526,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
   router.post(
     "/pay/:handle/:code/quote",
     wrap(async (req, res) => {
-      const hit = resolvePublic(req, res);
+      const hit = await resolvePublic(req, res);
       if (!hit) return;
       if (effectiveState(hit.r) !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(hit.r).toLowerCase()}` });
       if (!hit.r.methods.includes("crypto")) return res.status(409).json({ error: "this request does not take crypto" });
@@ -556,30 +568,41 @@ export function onPaymentRequestPaid(hook: PaidHook) {
   paidHooks.push(hook);
 }
 
-function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]): PaymentRequest {
-  // `r` is usually the live store row, which updatePaymentRequest mutates in
-  // place — so remember whether it was already PAID before writing.
-  const wasPaid = r.state === "PAID";
-  const { request, added, merged } = applyPayment(r, payment);
-  if (!added) {
-    // A twin was enriched in place and needs writing; a payment already on the
-    // row writes nothing, or every poll rewrites the db.
-    return merged ? store.updatePaymentRequest(r.id, { payments: r.payments }) : r;
-  }
-  const saved = store.updatePaymentRequest(r.id, {
-    payments: request.payments,
-    ...(request.state !== r.state ? { state: request.state, paidAt: request.paidAt } : {}),
+async function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]): Promise<PaymentRequest> {
+  // applyPayment runs on the request as stored, not on `r`, which was read
+  // before the caller's awaits.
+  let added = false;
+  const { request: saved, from } = await store.recordPaymentRequestPayment(r.id, (row) => {
+    const applied = applyPayment(row, payment);
+    added = applied.added;
+    if (!applied.added) {
+      // A twin was enriched in place and needs writing; a payment already on the
+      // row writes nothing, or every poll rewrites the db.
+      return applied.merged ? { payments: row.payments } : null;
+    }
+    return {
+      payments: applied.request.payments,
+      ...(applied.request.state !== row.state ? { state: applied.request.state, paidAt: applied.request.paidAt } : {}),
+    };
   });
+  if (!added) return saved;
   console.log(
     `pay-request: ${saved.id} received €${payment.amountEur} by ${payment.method} (${payment.kind})` +
       (saved.state === "PAID" ? " — PAID" : ""),
   );
-  if (saved.state === "PAID" && !wasPaid) {
-    for (const hook of paidHooks) {
-      Promise.resolve()
-        .then(() => hook(saved))
-        .catch((e) => console.error(`pay-request: paid hook failed for ${saved.id}: ${describeCause(e)}`));
-    }
+  if (saved.state === "PAID" && from !== "PAID") {
+    // After the commit of the transaction this records in (attribution runs
+    // in one): a hook calls the merchant's shop, which the fetch guard refuses
+    // inside a store.tx, and the payment must be stored before anyone is told.
+    // Never if that transaction is dropped. Outside one, now.
+    const fire = () => {
+      for (const hook of paidHooks) {
+        Promise.resolve()
+          .then(() => hook(saved))
+          .catch((e) => console.error(`pay-request: paid hook failed for ${saved.id}: ${describeCause(e)}`));
+      }
+    };
+    if (!deferToCommit(fire)) fire();
   }
   return saved;
 }
@@ -589,39 +612,45 @@ function record(r: PaymentRequest, payment: Parameters<typeof applyPayment>[1]):
  * open requests? Called by the crypto poller for every fresh deposit. Writes
  * `paymentRequestId` on the deposit so the two records point at each other.
  */
-export function attributeDepositToRequest(deposit: CryptoDeposit): PaymentRequest | undefined {
-  if (deposit.paymentRequestId) return store.findPaymentRequest(deposit.paymentRequestId);
-  const user = store.findUser(deposit.userId);
-  const page = user?.paymentPage;
-  if (!user || !page?.depositAddress) return undefined;
-  if ((deposit.paymentAddress ?? "").toLowerCase() !== page.depositAddress.toLowerCase()) return undefined;
-  const match = matchDepositToRequests(deposit, store.paymentRequestsForUser(user.id));
-  if (!match) return undefined;
-  const settled = !!deposit.settledAt;
-  const saved = record(match.request, {
-    method: "crypto",
-    ref: `deposit:${deposit.id}`,
-    depositId: deposit.id,
-    amountEur: match.kind === "partial" && deposit.amountUsdc
-      ? Math.round((match.quote.amountEur * deposit.amountUsdc / match.quote.amountUsdc) * 100) / 100
-      : match.quote.amountEur,
-    amountUsdc: deposit.amountUsdc,
-    txHash: deposit.txHash,
-    kind: match.kind,
-    ...(settled ? heldAs(deposit) : {}),
-    at: deposit.receipt?.blockTimestamp ?? deposit.detectedAt,
+export async function attributeDepositToRequest(given: CryptoDeposit): Promise<PaymentRequest | undefined> {
+  return store.tx(async () => {
+    // The stored row, not the caller's copy: a link or an attribution made
+    // since it was read decides what this one may write.
+    // The owner's row is the lock every writer of a deposit's money takes.
+    const user = await store.lockUser(given.userId);
+    const deposit = (await store.list("cryptoDeposits")).find((d) => d.id === given.id) ?? given;
+    if (deposit.paymentRequestId) return await store.findPaymentRequest(deposit.paymentRequestId);
+    const page = user?.paymentPage;
+    if (!user || !page?.depositAddress) return undefined;
+    if ((deposit.paymentAddress ?? "").toLowerCase() !== page.depositAddress.toLowerCase()) return undefined;
+    const match = matchDepositToRequests(deposit, await store.paymentRequestsForUser(user.id));
+    if (!match) return undefined;
+    const settled = !!deposit.settledAt;
+    const saved = await record(match.request, {
+      method: "crypto",
+      ref: `deposit:${deposit.id}`,
+      depositId: deposit.id,
+      amountEur: match.kind === "partial" && deposit.amountUsdc
+        ? Math.round((match.quote.amountEur * deposit.amountUsdc / match.quote.amountUsdc) * 100) / 100
+        : match.quote.amountEur,
+      amountUsdc: deposit.amountUsdc,
+      txHash: deposit.txHash,
+      kind: match.kind,
+      ...(settled ? heldAs(deposit) : {}),
+      at: deposit.receipt?.blockTimestamp ?? deposit.detectedAt,
+    });
+    /**
+     * Carry the invoice onto the deposit, so the settlement record is written by
+     * the conversion itself rather than waiting for someone to link it by hand.
+     * Never overwrite one the deposit already carries: a manual link is a
+     * deliberate act and this attribution is a guess by amount.
+     */
+    await store.updateCryptoDeposit(deposit.id, {
+      paymentRequestId: saved.id,
+      ...(saved.invoiceId && !deposit.invoiceId ? { invoiceId: saved.invoiceId } : {}),
+    });
+    return saved;
   });
-  /**
-   * Carry the invoice onto the deposit, so the settlement record is written by
-   * the conversion itself rather than waiting for someone to link it by hand.
-   * Never overwrite one the deposit already carries: a manual link is a
-   * deliberate act and this attribution is a guess by amount.
-   */
-  store.updateCryptoDeposit(deposit.id, {
-    paymentRequestId: saved.id,
-    ...(saved.invoiceId && !deposit.invoiceId ? { invoiceId: saved.invoiceId } : {}),
-  });
-  return saved;
 }
 
 /** What the payee holds from a settled deposit: USDC at its receipt value,
@@ -634,12 +663,14 @@ function heldAs(deposit: CryptoDeposit): { settledEur?: number; settledAsset: "U
 
 /** A matched deposit settled on arrival, or was later converted: write what
  *  the payee holds now onto its payment row, in place. */
-export function noteDepositSettled(deposit: CryptoDeposit): void {
-  if (!deposit.paymentRequestId || !deposit.settledAt) return;
-  const r = store.findPaymentRequest(deposit.paymentRequestId);
-  if (!r) return;
-  const payments = r.payments.map((p) => (p.depositId === deposit.id ? { ...p, ...heldAs(deposit) } : p));
-  store.updatePaymentRequest(r.id, { payments });
+export async function noteDepositSettled(deposit: CryptoDeposit): Promise<void> {
+  return store.tx(async () => {
+    if (!deposit.paymentRequestId || !deposit.settledAt) return;
+    if (!(await store.findPaymentRequest(deposit.paymentRequestId))) return;
+    await store.recordPaymentRequestPayment(deposit.paymentRequestId, (row) => ({
+      payments: row.payments.map((p) => (p.depositId === deposit.id ? { ...p, ...heldAs(deposit) } : p)),
+    }));
+  });
 }
 
 /** A processed Monerium issue order was seen for an account: does its memo
@@ -650,16 +681,16 @@ export function noteDepositSettled(deposit: CryptoDeposit): void {
  * Idempotent on the order id, so re-seeing an order in a later poll records
  * nothing twice — the poller walks the same list repeatedly by design.
  */
-function recordBankSettlement(
+async function recordBankSettlement(
   invoiceId: string,
   order: MoneriumOrderLike,
   matchedOn: "payment-link" | "invoice-number",
-): void {
-  const invoice = store.invoices.find((i) => i.id === invoiceId);
-  if (!invoice) return;
-  // Already booked: the poll re-sees it every pass and must not rewrite the db.
-  if (invoice.settlements?.some((x) => settlementRef(x) === `monerium:${order.id}`)) return;
-  store.updateInvoice(invoice.id, settlementUpdate(invoice, buildBankSettlement(order, matchedOn)));
+): Promise<void> {
+  if (!(await store.findInvoice(invoiceId))) return;
+  const s = buildBankSettlement(order, matchedOn);
+  // Already booked: the poll re-sees it every pass and must not rewrite the
+  // db. Checked on the stored row, in the same write.
+  await store.settleInvoice(invoiceId, settlementRef(s), (row) => settlementUpdate(row, s));
 }
 
 /**
@@ -674,63 +705,67 @@ function recordBankSettlement(
  * ones not already settled, and only when exactly one invoice is named. See `orderNamesInvoice` for why a short number is
  * deliberately not matched at all.
  */
-export function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike): void {
-  if ((order.kind ?? "issue") !== "issue") return;
-  // A GBPe issue, or EURe minted on another chain, is not a euro paid into
-  // this account. Absent fields (pure fixtures) pass; a real order carries both.
-  if (order.chain && order.chain !== MONERIUM.chain) return;
-  if (order.currency && order.currency.toLowerCase() !== "eur") return;
-  if ((order.meta?.state ?? order.state) !== "processed") return;
-  const address = String(order.address ?? "").toLowerCase();
-  if (!address) return;
-  const user = store.users.find((u) => (u.address ?? "").toLowerCase() === address);
-  if (!user) return;
-  // Only organisations whose account IS the credited Safe. A member's personal
-  // Safe receiving a payment that quotes the company's invoice number is the
-  // member's money, and must not close the company's invoice.
-  const orgIds = orgsBackedBy(user.id);
-  const named = store.invoices.filter(
-    (invoice) =>
-      invoice.direction === "outgoing" &&
-      orgIds.has(invoice.orgId) &&
-      invoice.state !== "DELETED" &&
-      invoice.state !== "PAID" &&
-      invoice.state !== "RECONCILED" &&
-      orderNamesInvoice(order, invoice),
-  );
-  if (named.length === 1) {
-    recordBankSettlement(named[0].id, order, "invoice-number");
-  } else if (named.length > 1) {
-    // One credit quoting several numbers cannot be split by guessing; leave it
-    // for a person rather than book all of it against whichever came first.
-    console.warn(
-      `invoice attribution: Monerium order ${order.id} names ${named.length} invoices — left unattributed`,
+export async function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike): Promise<void> {
+  return store.tx(async () => {
+    if ((order.kind ?? "issue") !== "issue") return;
+    // A GBPe issue, or EURe minted on another chain, is not a euro paid into
+    // this account. Absent fields (pure fixtures) pass; a real order carries both.
+    if (order.chain && order.chain !== MONERIUM.chain) return;
+    if (order.currency && order.currency.toLowerCase() !== "eur") return;
+    if ((order.meta?.state ?? order.state) !== "processed") return;
+    const address = String(order.address ?? "").toLowerCase();
+    if (!address) return;
+    const user = (await store.list("users")).find((u) => (u.address ?? "").toLowerCase() === address);
+    if (!user) return;
+    // Only organisations whose account IS the credited Safe. A member's personal
+    // Safe receiving a payment that quotes the company's invoice number is the
+    // member's money, and must not close the company's invoice.
+    const orgIds = await orgsBackedBy(user.id);
+    const named = (await store.list("invoices")).filter(
+      (invoice) =>
+        invoice.direction === "outgoing" &&
+        orgIds.has(invoice.orgId) &&
+        invoice.state !== "DELETED" &&
+        invoice.state !== "PAID" &&
+        invoice.state !== "RECONCILED" &&
+        orderNamesInvoice(order, invoice),
     );
-  }
+    if (named.length === 1) {
+      await recordBankSettlement(named[0].id, order, "invoice-number");
+    } else if (named.length > 1) {
+      // One credit quoting several numbers cannot be split by guessing; leave it
+      // for a person rather than book all of it against whichever came first.
+      console.warn(
+        `invoice attribution: Monerium order ${order.id} names ${named.length} invoices — left unattributed`,
+      );
+    }
+  });
 }
 
-export function attributeMoneriumOrder(order: any): PaymentRequest | undefined {
-  if (order?.kind !== "issue") return undefined;
-  const user = store.findUserByAddress(String(order.address ?? ""));
-  if (!user) return undefined;
-  for (const r of store.paymentRequestsForUser(user.id)) {
-    if (r.state !== "OPEN" && r.state !== "PAID") continue;
-    // The poller re-sees every order: one already on this request writes
-    // nothing, bar an invoice settlement a crash left unwritten.
-    if (order.id && r.payments.some((p) => p.orderId === order.id)) {
-      if (r.invoiceId) recordBankSettlement(r.invoiceId, order, "payment-link");
-      return r;
+export async function attributeMoneriumOrder(order: any): Promise<PaymentRequest | undefined> {
+  return store.tx(async () => {
+    if (order?.kind !== "issue") return undefined;
+    const user = await store.findUserByAddress(String(order.address ?? ""));
+    if (!user) return undefined;
+    for (const r of (await store.paymentRequestsForUser(user.id))) {
+      if (r.state !== "OPEN" && r.state !== "PAID") continue;
+      // The poller re-sees every order: one already on this request writes
+      // nothing, bar an invoice settlement a crash left unwritten.
+      if (order.id && r.payments.some((p) => p.orderId === order.id)) {
+        if (r.invoiceId) await recordBankSettlement(r.invoiceId, order, "payment-link");
+        return r;
+      }
+      const payment = matchMoneriumOrder(order, r, user.address);
+      if (payment) {
+        const saved = await record(r, payment);
+        // A link raised for an invoice puts its bank credit on the invoice too,
+        // the same way an attributed crypto deposit does.
+        if (saved.invoiceId) await recordBankSettlement(saved.invoiceId, order, "payment-link");
+        return saved;
+      }
     }
-    const payment = matchMoneriumOrder(order, r, user.address);
-    if (payment) {
-      const saved = record(r, payment);
-      // A link raised for an invoice puts its bank credit on the invoice too,
-      // the same way an attributed crypto deposit does.
-      if (saved.invoiceId) recordBankSettlement(saved.invoiceId, order, "payment-link");
-      return saved;
-    }
-  }
-  return undefined;
+    return undefined;
+  });
 }
 
 /**
@@ -740,26 +775,26 @@ export function attributeMoneriumOrder(order: any): PaymentRequest | undefined {
 export async function sweepPaymentRequests(now = new Date()): Promise<{ expired: number; matched: number }> {
   let expired = 0;
   let matched = 0;
-  const open = store.paymentRequests.filter((r) => r.state === "OPEN");
+  const open = (await store.list("paymentRequests")).filter((r) => r.state === "OPEN");
   for (const r of open) {
     if (Date.parse(r.expiresAt) <= now.getTime()) {
-      store.updatePaymentRequest(r.id, { state: "EXPIRED" });
-      expired++;
+      // Only from OPEN: a payment recorded while this loop awaited keeps it PAID.
+      if (await store.updatePaymentRequestFrom(r.id, ["OPEN"], { state: "EXPIRED" })) expired++;
       continue;
     }
     if (!r.methods.includes("bank")) continue;
-    const payee = store.findUser(r.userId);
+    const payee = await store.findUser(r.userId);
     if (!payee?.iban) continue;
-    for (const t of store.transfers) {
+    for (const t of (await store.list("transfers"))) {
       if (!t.reference || t.state !== "PAID") continue;
       const payment = matchTransfer(t, r, payee.iban);
       if (payment && !r.payments.some((p) => p.ref === payment.ref)) {
-        record(store.findPaymentRequest(r.id)!, payment);
+        await record((await store.findPaymentRequest(r.id))!, payment);
         matched++;
       }
     }
   }
-  for (const r of store.paymentRequests) {
+  for (const r of (await store.list("paymentRequests"))) {
     // A merchant link's request is the checkout service's to settle.
     if (r.state === "PAID" && r.source.kind !== "app" && r.source.kind !== "api" && !r.source.resolvedAt && !r.source.linkId) {
       if ((r.source.resolveAttempts ?? 0) >= RESOLVE_MAX_ATTEMPTS) continue;

@@ -27,7 +27,7 @@ const { pollCryptoDepositsOnce } = await import("../services/api/src/adapters/cr
 
 const userId = randomUUID();
 const safe = `0x${randomBytes(20).toString("hex")}` as `0x${string}`;
-store.addUser({
+await store.addUser({
   id: userId,
   name: "Getlogs Test",
   country: "DE",
@@ -70,7 +70,7 @@ async function check(name: string, fn: () => Promise<void> | void) {
 // The first tick only places the cursor (a fresh install looks back a bounded
 // window); put it just before the logs so the next tick reads one window.
 await pollCryptoDepositsOnce();
-store.setCryptoDepositCursor("31337:safe-funding-v1", 990n);
+await store.setCryptoDepositCursor("31337:safe-funding-v1", 990n);
 calls.length = 0;
 await pollCryptoDepositsOnce();
 
@@ -82,8 +82,8 @@ await check("one getLogs per window, naming both tokens", () => {
   assert.equal(calls[0].toBlock, 1000n);
 });
 
-await check("each log is recorded under its own token, with its own amount", () => {
-  const mine = store.cryptoDeposits.filter((d: any) => d.userId === userId);
+await check("each log is recorded under its own token, with its own amount", async () => {
+  const mine = (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId);
   const byToken = Object.fromEntries(mine.map((d: any) => [d.token, d.amountUnits]));
   assert.deepEqual(Object.keys(byToken).sort(), ["EURE", "USDC"]);
   assert.equal(byToken.EURE, String(5n * 10n ** 18n));
@@ -92,15 +92,15 @@ await check("each log is recorded under its own token, with its own amount", () 
 
 await check("a conversion's EURe output is not recorded as a deposit", async () => {
   const conv = `0x${"cd".repeat(32)}`;
-  const usdcRow = store.cryptoDeposits.find((d: any) => d.userId === userId && d.token === "USDC")!;
-  store.updateCryptoDeposit(usdcRow.id, { holding: "converted", creditedEur: 0.89, conversion: { txHash: conv } } as any);
-  const before = store.cryptoDeposits.filter((d: any) => d.userId === userId).length;
+  const usdcRow = (await store.list("cryptoDeposits")).find((d: any) => d.userId === userId && d.token === "USDC")!;
+  await store.updateCryptoDeposit(usdcRow.id, { holding: "converted", creditedEur: 0.89, conversion: { txHash: conv } } as any);
+  const before = (await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId).length;
   client.getBlockNumber = async () => HEAD + 10n;
   client.getLogs = async (q: any) => (q.fromBlock <= HEAD + 5n && q.toBlock >= HEAD + 5n
     ? [{ ...transfer(addrs().eure, HEAD + 5n, 89n * 10n ** 16n, 0), transactionHash: conv }]
     : []);
   await pollCryptoDepositsOnce();
-  assert.equal(store.cryptoDeposits.filter((d: any) => d.userId === userId).length, before);
+  assert.equal((await store.list("cryptoDeposits")).filter((d: any) => d.userId === userId).length, before);
 });
 
 const { isLogRangeRefusal } = await import("../services/api/src/log-range.js");
@@ -119,12 +119,12 @@ await check("Alchemy's range cap halves the window; its rate limits and quota do
 });
 
 await check("a rate-limited tick makes one getLogs and holds the cursor", async () => {
-  store.setCryptoDepositCursor("31337:safe-funding-v1", 1_010n);
+  await store.setCryptoDepositCursor("31337:safe-funding-v1", 1_010n);
   client.getBlockNumber = async () => { heads++; return 1_030n; };
   client.getLogs = async (q: any) => { widths.push(width(q)); throw new Error(ALCHEMY_CUPS); };
   await assert.rejects(pollCryptoDepositsOnce(), /compute units/);
   assert.deepEqual(widths, [10n], "no halving on a rate limit");
-  assert.equal(store.cryptoDepositCursor("31337:safe-funding-v1"), 1_010n);
+  assert.equal(await store.cryptoDepositCursor("31337:safe-funding-v1"), 1_010n);
 });
 
 await check("one head per tick, and full windows again once the limit lifts", async () => {
@@ -134,7 +134,7 @@ await check("one head per tick, and full windows again once the limit lifts", as
   await pollCryptoDepositsOnce();
   assert.equal(heads, 1, "getBlockNumber once for two windows");
   assert.deepEqual(widths, [10n, 10n]);
-  assert.equal(store.cryptoDepositCursor("31337:safe-funding-v1"), 1_030n);
+  assert.equal(await store.cryptoDepositCursor("31337:safe-funding-v1"), 1_030n);
 });
 
 await check("the width the RPC answered is reused, not re-learned every window", async () => {
@@ -164,7 +164,7 @@ await check("a shrunk width grows back to maxBlockSpan once the RPC answers wide
 
 await check("caught up, a tick reads one window and the head once", async () => {
   for (let tick = 0; tick < 3; tick++) {
-    const cursor = store.cryptoDepositCursor("31337:safe-funding-v1")!;
+    const cursor = (await store.cryptoDepositCursor("31337:safe-funding-v1"))!;
     heads = 0;
     widths.length = 0;
     client.getBlockNumber = async () => { heads++; return cursor + 7n; };

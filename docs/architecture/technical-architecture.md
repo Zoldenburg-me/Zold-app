@@ -456,7 +456,7 @@ sequenceDiagram
   B->>A: POST /quotes {rail, sendEur}
   A-->>B: quote (10 min TTL; SEPA: 1:1, fee €0)
   B->>A: POST /transfers {quoteId, recipient, IBAN, reference}
-  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m, SEPA +4m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pendingTransferExecutions[id] (memory)
+  Note over A: build.ts: KYC · balance · Safe active · device key bound<br/>holdDailyCap (sync) · consumeQuote (sync)<br/>auth terms {to, amountWei, destination, deadline+15m, SEPA +4m}<br/>prepare UserOp (fee transfer, or fee+approve+swap batch)<br/>pending execution (store: pending_executions on Postgres, memory on db.json)
   A-->>B: transfer + authorization {typedData, safeExecution.challenge, moneriumRedeem.challenge}
   B->>B: device key signs typedData
   B->>B: passkey signs safeExecution.challenge

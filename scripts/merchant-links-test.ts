@@ -30,6 +30,7 @@ import { rmSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import { everySeq } from "../services/api/src/seq.js";
 
 const ORIGIN = "https://checkout.example";
 const HOOK_SECRET = "whsec_" + Buffer.from("merchant-links-webhook-secret-32").toString("base64");
@@ -73,13 +74,14 @@ const { CHECKOUT_SERVICE, MONERIUM } = await import("../services/api/src/config.
 const { consumeLinkCode, LINK_CODE_TTL_MS } = await import("../services/api/src/merchant-links.js");
 const { signQuery } = await import("../services/api/src/shopify/hmac.js");
 const { apiRateLimit } = await import("../services/api/src/http/policy.js");
-initStore();
+await initStore();
 startCheckoutWebhook();
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json({ verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
 app.use("/api", apiRateLimit);
-const session = (req: express.Request, res: express.Response) => {
+const session = async (req: express.Request, res: express.Response) => {
   const u = req.header("x-user");
   if (u) return { userId: u };
   res.status(401).json({ error: "authorization required" });
@@ -89,7 +91,7 @@ app.use("/api", createShopifyRouter(session));
 app.use("/api", createMerchantLinkRouter(session));
 app.use("/api", createServiceMerchantRouter());
 const server = app.listen(0, "127.0.0.1");
-await new Promise<void>((r) => server.once("listening", () => r()));
+await new Promise<void>(async (r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
 let n = 0;
@@ -137,38 +139,38 @@ async function call(method: string, p: string, opts: { body?: unknown; user?: st
 /* ---- fixtures: two orgs, each with a payee that has a payment page ---- */
 const now = new Date().toISOString();
 const addr = (b: string) => `0x${b.repeat(20)}` as `0x${string}`;
-function user(handle: string, name: string, address: `0x${string}`, page = true) {
+async function user(handle: string, name: string, address: `0x${string}`, page = true) {
   const u: any = {
     id: randomUUID(), name, email: `${handle}@example.com`, country: "DE", address, kycStatus: "approved", createdAt: now,
     ...(page ? { paymentPage: { handle, displayName: name, depositAddress: address, recipientAddress: address, supportedTokens: [], settlementAsset: "EURE", autoConvert: false, activatedAt: now, updatedAt: now } } : {}),
   };
-  store.addUser(u);
+  await store.addUser(u);
   return u;
 }
-function orgOf(name: string) {
+async function orgOf(name: string) {
   const o: any = { id: randomUUID(), type: "business", name, plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now };
-  store.addOrganisation(o, false);
+  await store.addOrganisation(o, false);
   return o;
 }
-function member(orgId: string, userId: string, role: string) {
+async function member(orgId: string, userId: string, role: string) {
   const m: any = { id: randomUUID(), orgId, userId, email: `${userId}@example.com`, role, status: "active", invitedAt: now, acceptedAt: now };
-  store.addMember(m);
+  await store.addMember(m);
   return m;
 }
-const owner = user("keycard", "Ada Owner", addr("ab"));
-const admin = user("keycard-admin", "Ben Admin", addr("ac"));
-const viewer = user("keycard-viewer", "Cy Viewer", addr("ad"), false);
-const noPage = user("nopage", "No Page", addr("ae"), false);
-const org = orgOf("Keycard Demo GmbH");
-member(org.id, owner.id, "owner");
-const adminMember = member(org.id, admin.id, "admin");
-member(org.id, viewer.id, "viewer");
-const owner2 = user("other", "Other Owner", addr("af"));
-const org2 = orgOf("Other Shop GmbH");
-const owner2Member = member(org2.id, owner2.id, "owner");
-const treasurer = user("other-treasury", "Tess Treasurer", addr("b1"));
-const org3 = orgOf("No Page GmbH");
-member(org3.id, noPage.id, "owner");
+const owner = await user("keycard", "Ada Owner", addr("ab"));
+const admin = await user("keycard-admin", "Ben Admin", addr("ac"));
+const viewer = await user("keycard-viewer", "Cy Viewer", addr("ad"), false);
+const noPage = await user("nopage", "No Page", addr("ae"), false);
+const org = await orgOf("Keycard Demo GmbH");
+await member(org.id, owner.id, "owner");
+const adminMember = await member(org.id, admin.id, "admin");
+await member(org.id, viewer.id, "viewer");
+const owner2 = await user("other", "Other Owner", addr("af"));
+const org2 = await orgOf("Other Shop GmbH");
+const owner2Member = await member(org2.id, owner2.id, "owner");
+const treasurer = await user("other-treasury", "Tess Treasurer", addr("b1"));
+const org3 = await orgOf("No Page GmbH");
+await member(org3.id, noPage.id, "owner");
 
 const SHOP = "keycard-demo.myshopify.com";
 const ORDER = (id: number) => `gid://shopify/Order/${id}`;
@@ -186,7 +188,7 @@ const create = (linkId: string, body: unknown, bearer = token) => call("POST", `
 
 console.log("availability");
 await check("no checkout credential: the capability is off and route 1 answers 503 MERCHANT_LINKS_UNAVAILABLE", async () => {
-  assert.deepEqual(capabilities().merchantLinks, { available: false });
+  assert.deepEqual((await capabilities()).merchantLinks, { available: false });
   const r = await issue(org, owner);
   assert.equal(r.status, 503);
   assert.equal(r.body.code, "MERCHANT_LINKS_UNAVAILABLE");
@@ -195,9 +197,9 @@ await check("no checkout credential: the service routes answer 503, not 401", as
   assert.equal((await exchange("zlc_x", SHOP, "anything")).status, 503);
   assert.equal((await call("GET", "/api/service/merchant/links/x", { bearer: "anything" })).status, 503);
 });
-token = rotateCheckoutCredential("operator:test").token;
-await check("with origin, credential and data key the capability is on and names the origin", () => {
-  assert.deepEqual(capabilities().merchantLinks, { available: true, checkoutOrigin: ORIGIN });
+token = (await rotateCheckoutCredential("operator:test")).token;
+await check("with origin, credential and data key the capability is on and names the origin", async () => {
+  assert.deepEqual((await capabilities()).merchantLinks, { available: true, checkoutOrigin: ORIGIN });
 });
 const tsx = new URL("../node_modules/.bin/tsx", import.meta.url).pathname;
 const linksModule = new URL("../services/api/src/merchant-links.ts", import.meta.url).pathname;
@@ -207,7 +209,7 @@ const linksModule = new URL("../services/api/src/merchant-links.ts", import.meta
  *  closing ("fetch failed" on slow CI runners). */
 const availabilityWith = (origin: string) => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
   const child = spawn(tsx, ["-e",
-    `import(${JSON.stringify(linksModule)}).then((m) => console.log(JSON.stringify(m.merchantLinksAvailable()))).catch((e) => { console.error(e.message); process.exit(1); })`], {
+    `import(${JSON.stringify(linksModule)}).then((m) => m.merchantLinksAvailable()).then((v) => console.log(JSON.stringify(v))).catch((e) => { console.error(e.message); process.exit(1); })`], {
     env: { ...process.env, CHECKOUT_SERVICE_ORIGIN: origin },
   });
   let stdout = "";
@@ -332,9 +334,10 @@ await check("a fresh code exchanges once: {linkId, shop, orgName, payeeHandle, l
 });
 await check("the link secret is sealed at rest, never in the db file in the clear", async () => {
   const { readFileSync } = await import("node:fs");
-  const raw = readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
+  // The file on db.json; on Postgres (npm run check:pg) the rows as stored.
+  const raw = process.env.STORE_BACKEND === "postgres" ? JSON.stringify(await store.list("merchantLinks")) : readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
   assert.ok(!raw.includes(link.linkSecret));
-  assert.ok(store.findMerchantLink(link.linkId)!.linkSecretEnc);
+  assert.ok((await store.findMerchantLink(link.linkId))!.linkSecretEnc);
 });
 await check("a code older than 15 minutes is refused, and the refusal spends it", async () => {
   const code = codeOf((await issue(org, owner)).body.installUrl);
@@ -350,7 +353,7 @@ await check("a second consent for the same org and shop reuses the link and keep
 await check("an installer demoted after the code was issued is refused at exchange (409 INSTALLER_NOT_ALLOWED)", async () => {
   const code = codeOf((await issue(org, admin)).body.installUrl);
   assert.equal((await preview(code)).status, 200);
-  store.updateMember(adminMember.id, { role: "viewer" } as any);
+  await store.updateMember(adminMember.id, { role: "viewer" } as any);
   try {
     const p = await preview(code);
     assert.equal(p.status, 409, "preview asks the same re-checks");
@@ -359,7 +362,7 @@ await check("an installer demoted after the code was issued is refused at exchan
     assert.equal(r.status, 409);
     assert.equal(r.body.code, "INSTALLER_NOT_ALLOWED");
   } finally {
-    store.updateMember(adminMember.id, { role: "admin" } as any);
+    await store.updateMember(adminMember.id, { role: "admin" } as any);
   }
 });
 await check("another org may not link a shop that is actively linked (409 SHOP_LINKED_ELSEWHERE), at issue and at exchange", async () => {
@@ -381,7 +384,7 @@ const SHOP3 = "core-store.myshopify.com";
 await check("a shop connected in core is refused at issue and at exchange (409 SHOP_CONNECTED_IN_CORE)", async () => {
   const code = codeOf((await issue(org, owner, SHOP3)).body.installUrl);
   assert.equal((await preview(code, SHOP3)).status, 200);
-  store.addShopifyConnection({ id: randomUUID(), orgId: org.id, shop: SHOP3, payeeUserId: owner.id, accessTokenEnc: "x", scope: "read_orders", mode: "custom-app", installedByUserId: owner.id, installedAt: now, updatedAt: now });
+  await store.addShopifyConnection({ id: randomUUID(), orgId: org.id, shop: SHOP3, payeeUserId: owner.id, accessTokenEnc: "x", scope: "read_orders", mode: "custom-app", installedByUserId: owner.id, installedAt: now, updatedAt: now });
   const atExchange = await rawExchange(code, SHOP3);
   assert.equal(atExchange.status, 409);
   assert.equal(atExchange.body.code, "SHOP_CONNECTED_IN_CORE");
@@ -405,7 +408,7 @@ await check("core's install callback refuses a shop linked after the install sta
   assert.equal(r.status, 302);
   const back = new URL(r.location);
   assert.equal(back.searchParams.get("code"), "SHOP_LINKED_THROUGH_CHECKOUT");
-  assert.equal(store.findShopifyConnectionByShop(SHOP4), undefined);
+  assert.equal(await store.findShopifyConnectionByShop(SHOP4), undefined);
 });
 
 console.log("routes 5-6: link read and payment requests");
@@ -434,14 +437,14 @@ await check("create opens a crypto request for the LINK's shop, whatever shop th
   assert.deepEqual(r.body.order, { gid: ORDER(5001), name: "#5001" });
   assert.equal(r.body.pageUrl, `${API}/pay/keycard/${r.body.code}`);
   assert.equal(r.body.publicPath, `/api/pay/keycard/${r.body.code}`);
-  const stored = store.findPaymentRequest(r.body.id)!;
+  const stored = (await store.findPaymentRequest(r.body.id))!;
   assert.deepEqual(stored.methods, ["crypto"]);
   assert.equal(stored.orgId, org.id);
   assert.equal(stored.source.linkId, link.linkId);
   assert.equal(stored.source.shop, SHOP);
   assert.equal(stored.source.orderStatusUrl, `https://${SHOP}/1/orders/abc/authenticate?key=k`);
-  assert.equal(store.findPaymentRequestBySource("shopify", ORDER(5001), "attacker.myshopify.com"), undefined);
-  assert.ok(store.findMerchantLink(link.linkId)!.lastRequestAt);
+  assert.equal(await store.findPaymentRequestBySource("shopify", ORDER(5001), "attacker.myshopify.com"), undefined);
+  assert.ok((await store.findMerchantLink(link.linkId))!.lastRequestAt);
 });
 await check("the same order again answers 200 with the same request", async () => {
   const r = await create(link.linkId, { amountEur: 129, order: { gid: ORDER(5001) } });
@@ -455,16 +458,16 @@ await check("concurrent creates for one order share one request", async () => {
   ]);
   assert.equal(a.body.id, b.body.id);
   assert.deepEqual([a.status, b.status].sort(), [200, 201]);
-  assert.equal(store.paymentRequests.filter((r) => r.source.orderGid === ORDER(5002)).length, 1);
+  assert.equal((await store.list("paymentRequests")).filter((r) => r.source.orderGid === ORDER(5002)).length, 1);
 });
-const link2 = (await call("GET", `/api/service/merchant/links/${store.activeMerchantLinkForShop(SHOP2)!.id}`, { bearer: token })).body;
+const link2 = (await call("GET", `/api/service/merchant/links/${(await store.activeMerchantLinkForShop(SHOP2))!.id}`, { bearer: token })).body;
 await check("an order id taken under another link (another org) is 409 ORDER_TAKEN; the same id at another shop is a different order", async () => {
   // Same numeric order id at another store: its own request, no conflict.
   const other = await create(link2.linkId, { amountEur: 10, order: { gid: ORDER(5001) } });
   assert.equal(other.status, 201, JSON.stringify(other.body));
   assert.notEqual(other.body.id, req1.id);
   // A core-sourced request (no link) for the link's shop and order is not the link's.
-  const core = store.addPaymentRequest({ ...store.findPaymentRequest(req1.id)!, id: randomUUID(), code: "AAAAAAAAAAAAAAA", source: { kind: "shopify", externalId: ORDER(5003), shop: SHOP, orderGid: ORDER(5003) } });
+  const core = await store.addPaymentRequest({ ...(await store.findPaymentRequest(req1.id))!, id: randomUUID(), code: "AAAAAAAAAAAAAAA", source: { kind: "shopify", externalId: ORDER(5003), shop: SHOP, orderGid: ORDER(5003) } });
   const r = await create(link.linkId, { amountEur: 10, order: { gid: ORDER(5003) } });
   assert.equal(r.status, 409);
   assert.equal(r.body.code, "ORDER_TAKEN");
@@ -499,27 +502,27 @@ await check("create on an unknown link is 404, with a wrong bearer 401", async (
 
 console.log("stale payee (fail closed)");
 await check("the installer whose own page the store pays into has left: create is 409 NO_PAYMENT_PAGE, nothing opened", async () => {
-  store.updateMember(owner2Member.id, { status: "deactivated" });
+  await store.updateMember(owner2Member.id, { status: "deactivated" });
   try {
     const r = await create(link2.linkId, { amountEur: 10, order: { gid: ORDER(9001) } });
     assert.equal(r.status, 409);
     assert.equal(r.body.code, "NO_PAYMENT_PAGE");
     assert.match(r.body.error, /link the store again/);
-    assert.equal(store.findPaymentRequestBySource("shopify", ORDER(9001), SHOP2), undefined);
+    assert.equal(await store.findPaymentRequestBySource("shopify", ORDER(9001), SHOP2), undefined);
   } finally {
-    store.updateMember(owner2Member.id, { status: "active" } as any);
+    await store.updateMember(owner2Member.id, { status: "active" } as any);
   }
 });
 await check("the org gained a EUR account backed by someone else after linking: create is 409 NO_PAYMENT_PAGE", async () => {
-  const account = store.addAccount({ id: randomUUID(), orgId: org2.id, currency: "EUR", label: "EUR account", status: "active", provider: null, identifier: {} as any, backingUserId: treasurer.id } as any);
+  const account = (await store.addAccount({ id: randomUUID(), orgId: org2.id, currency: "EUR", label: "EUR account", status: "active", provider: null, identifier: {} as any, backingUserId: treasurer.id } as any))!;
   try {
     const r = await create(link2.linkId, { amountEur: 10, order: { gid: ORDER(9002) } });
     assert.equal(r.status, 409);
     assert.equal(r.body.code, "NO_PAYMENT_PAGE");
     assert.match(r.body.error, /link the store again/);
-    assert.equal(store.findPaymentRequestBySource("shopify", ORDER(9002), SHOP2), undefined);
+    assert.equal(await store.findPaymentRequestBySource("shopify", ORDER(9002), SHOP2), undefined);
   } finally {
-    store.updateAccount(account.id, { backingUserId: undefined });
+    await store.updateAccount(account.id, { backingUserId: undefined });
   }
   assert.equal((await create(link2.linkId, { amountEur: 10, order: { gid: ORDER(9003) } })).status, 201, "restored payee opens again");
 });
@@ -529,7 +532,7 @@ await check("GET request answers the service view; another link's request id is 
   const r = await call("GET", `/api/service/merchant/links/${link.linkId}/payment-requests/${req1.id}`, { bearer: token });
   assert.equal(r.status, 200);
   assert.deepEqual(Object.keys(r.body).sort(), SERVICE_VIEW_KEYS);
-  const other = store.findPaymentRequestBySource("shopify", ORDER(5001), SHOP2)!;
+  const other = (await store.findPaymentRequestBySource("shopify", ORDER(5001), SHOP2))!;
   const foreign = await call("GET", `/api/service/merchant/links/${link.linkId}/payment-requests/${other.id}`, { bearer: token });
   assert.equal(foreign.status, 404);
   assert.equal(foreign.body.code, "NOT_FOUND");
@@ -538,7 +541,7 @@ await check("GET request answers the service view; another link's request id is 
   assert.equal(unknown.body.code, "NOT_FOUND");
 });
 await check("the service view carries nothing outside the allowlist, even with a payer name and a payment", async () => {
-  const r = store.findPaymentRequest(req1.id)!;
+  const r = (await store.findPaymentRequest(req1.id))!;
   const view = (await import("../services/api/src/merchant-links.js")).serviceRequestView(
     { ...r, test: true, paidAt: now, description: "secret note", invoiceId: "inv-1", externalInvoiceNumber: "X-1",
       payments: [{ id: "p1", method: "crypto", ref: "deposit:1", amountEur: 129, amountUsdc: 146.79, txHash: "0xabc", depositId: "d1", payerName: "Bea Buyer", kind: "full", settledEur: 129, settledAsset: "USDC", at: now }],
@@ -568,22 +571,48 @@ await check("cancelling it again is 409 NOT_CANCELLABLE with the view unchanged"
   assert.equal(r.body.code, "NOT_CANCELLABLE");
   assert.equal(r.body.request.state, "CANCELLED");
 });
+await check("a payment recorded between the cancel's read and its write keeps the request: 409, not a CANCELLED request holding money", async () => {
+  const r0 = (await create(link.linkId, { amountEur: 16, order: { gid: ORDER(7002) } })).body;
+  // The payment lands just before whichever write the cancel makes.
+  const s = store as any;
+  const originals = { updatePaymentRequest: s.updatePaymentRequest, cancelUnpaidPaymentRequest: s.cancelUnpaidPaymentRequest };
+  let landed = false;
+  const landFirst = (name: keyof typeof originals) => async (...args: unknown[]) => {
+    if (!landed) {
+      landed = true;
+      await originals.updatePaymentRequest(r0.id, { payments: [{ id: "p_mid", method: "crypto", ref: "deposit:mid", amountEur: 16, kind: "full", at: now }] });
+    }
+    return originals[name](...args);
+  };
+  s.updatePaymentRequest = landFirst("updatePaymentRequest");
+  s.cancelUnpaidPaymentRequest = landFirst("cancelUnpaidPaymentRequest");
+  try {
+    const r = await call("POST", `/api/service/merchant/links/${link.linkId}/payment-requests/${r0.id}/cancel`, { bearer: token });
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, "NOT_CANCELLABLE");
+  } finally {
+    Object.assign(s, originals);
+  }
+  const stored = (await store.findPaymentRequest(r0.id))!;
+  assert.notEqual(stored.state, "CANCELLED");
+  assert.equal(stored.payments.length, 1);
+});
 
 console.log("payment, settlement and the core Shopify path");
-const pay = (id: string) => {
-  const r = store.findPaymentRequest(id)!;
+const pay = async (id: string) => {
+  const r = (await store.findPaymentRequest(id))!;
   const q = r.cryptoQuotes[r.cryptoQuotes.length - 1];
   assert.ok(q, "no quote on the request");
-  const d = store.addCryptoDeposit({
+  const d = await store.addCryptoDeposit({
     id: randomUUID(), userId: owner.id, chainId: 31337, token: "USDC", txHash: `0x${randomUUID().replace(/-/g, "").padEnd(64, "0")}`, logIndex: 0,
     amountUnits: String(Math.round(q.amountUsdc * 1e6)), amountUsdc: q.amountUsdc, settlementAsset: "USDC", paymentAddress: owner.paymentPage.depositAddress,
     holding: "awaiting_approval", txs: [], detectedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   } as any);
-  return attributeDepositToRequest(d);
+  return await attributeDepositToRequest(d);
 };
 await check("a paid link request announces {paymentRequestId, linkId} exactly once, sweep or not", async () => {
   deliveries.length = 0;
-  const paid = pay(req1.id)!;
+  const paid = (await pay(req1.id))!;
   assert.equal(paid.state, "PAID");
   assert.ok(await until(() => deliveries.length >= 1));
   assert.deepEqual(deliveries[0], { paymentRequestId: req1.id, linkId: link.linkId });
@@ -592,8 +621,8 @@ await check("a paid link request announces {paymentRequestId, linkId} exactly on
   assert.equal(deliveries.length, 1);
 });
 await check("resolveShopifyRequest leaves a link request alone: no attempt, no error recorded", async () => {
-  await resolveShopifyRequest(store.findPaymentRequest(req1.id)!);
-  const s = store.findPaymentRequest(req1.id)!.source;
+  await resolveShopifyRequest((await store.findPaymentRequest(req1.id))!);
+  const s = (await store.findPaymentRequest(req1.id))!.source;
   assert.equal(s.resolveAttempts, undefined);
   assert.equal(s.resolveError, undefined);
   assert.equal(s.resolvedAt, undefined);
@@ -602,7 +631,7 @@ await check("/shopify/return for a PAID link request goes to the order's status 
   const paid = await call("GET", `/api/shopify/return/${req1.code}`);
   assert.equal(paid.status, 302);
   assert.equal(paid.location, `https://${SHOP}/1/orders/abc/authenticate?key=k`);
-  const open = store.findPaymentRequestBySource("shopify", ORDER(5002), SHOP)!;
+  const open = (await store.findPaymentRequestBySource("shopify", ORDER(5002), SHOP))!;
   const r = await call("GET", `/api/shopify/return/${open.code}`);
   assert.equal(r.status, 302);
   assert.match(r.location, /\/pay\/keycard\//);
@@ -616,29 +645,29 @@ await check("core's Shopify listing leaves link requests out; the merchant-links
   assert.equal(mine.cache, "no-store");
   const ids = mine.body.requests.map((r: any) => r.id);
   assert.ok(ids.includes(req1.id));
-  assert.ok(mine.body.requests.every((r: any) => r.linkId && store.findMerchantLink(r.linkId)!.orgId === org.id));
+  assert.ok(await everySeq(mine.body.requests, async (r: any) => r.linkId && (await store.findMerchantLink(r.linkId))!.orgId === org.id));
   const times = mine.body.requests.map((r: any) => Date.parse(r.createdAt));
   assert.deepEqual(times, [...times].sort((a, b) => b - a));
 });
 
 await check("MERCHANT_LINK_BANK=1 and a payee with an IBAN: the order also takes a bank transfer, and a Monerium credit carrying its reference pays it (an agent paying from EURe)", async () => {
   CHECKOUT_SERVICE.bankPayments = true;
-  store.updateUser(owner.id, { iban: "DE89370400440532013000" });
+  await store.updateUser(owner.id, { iban: "DE89370400440532013000" });
   try {
     const r = await create(link.linkId, { amountEur: 42, order: { gid: ORDER(5901), name: "#5901" } });
     assert.equal(r.status, 201, JSON.stringify(r.body));
-    const stored = store.findPaymentRequest(r.body.id)!;
+    const stored = (await store.findPaymentRequest(r.body.id))!;
     assert.deepEqual(stored.methods, ["crypto", "bank"]);
     deliveries.length = 0;
     const order = { id: randomUUID(), kind: "issue", amount: "42", currency: "eur", chain: MONERIUM.chain, address: owner.address, memo: `Order #5901 ${r.body.code}`, meta: { state: "processed" } };
-    assert.equal(attributeMoneriumOrder(order)?.state, "PAID");
+    assert.equal((await attributeMoneriumOrder(order))?.state, "PAID");
     assert.ok(await until(() => deliveries.some((d: any) => d.paymentRequestId === r.body.id)), "no PAID hint for the checkout");
     CHECKOUT_SERVICE.bankPayments = false;
     const off = await create(link.linkId, { amountEur: 42, order: { gid: ORDER(5902) } });
-    assert.deepEqual(store.findPaymentRequest(off.body.id)!.methods, ["crypto"], "flag off, IBAN set: crypto only");
+    assert.deepEqual((await store.findPaymentRequest(off.body.id))!.methods, ["crypto"], "flag off, IBAN set: crypto only");
   } finally {
     CHECKOUT_SERVICE.bankPayments = false;
-    store.updateUser(owner.id, { iban: undefined });
+    await store.updateUser(owner.id, { iban: undefined });
   }
 });
 
@@ -671,7 +700,7 @@ await check("a non-member gets 404; another org's links are not listed", async (
 });
 
 console.log("route 3: revoke");
-const open = store.findPaymentRequestBySource("shopify", ORDER(5002), SHOP)!;
+const open = (await store.findPaymentRequestBySource("shopify", ORDER(5002), SHOP))!;
 await check("a viewer may not revoke (403); another org's link id is 404", async () => {
   assert.equal((await call("DELETE", `/api/orgs/${org.id}/merchant-links/${link.linkId}`, { user: viewer.id })).status, 403);
   assert.equal((await call("DELETE", `/api/orgs/${org2.id}/merchant-links/${link.linkId}`, { user: owner2.id })).status, 404);
@@ -685,7 +714,7 @@ await check("an owner revokes: revokedAt and revokedBy set, {linkId} announced, 
   assert.deepEqual(Object.keys(r.body), ["link"]);
   assert.equal(r.body.link.id, link.linkId);
   assert.ok(r.body.link.revokedAt);
-  const l = store.findMerchantLink(link.linkId)!;
+  const l = (await store.findMerchantLink(link.linkId))!;
   assert.ok(l.revokedAt);
   assert.equal(l.revokedBy, owner.id);
   assert.ok(await until(() => deliveries.length >= 1));
@@ -695,13 +724,13 @@ await check("an owner revokes: revokedAt and revokedBy set, {linkId} announced, 
   assert.deepEqual(again.body, r.body, "a repeat answers the same");
   await sleep(100);
   assert.equal(deliveries.length, 1);
-  assert.ok(store.findMerchantLink(link.linkId), "a revoked link is kept");
+  assert.ok(await store.findMerchantLink(link.linkId), "a revoked link is kept");
 });
 await check("a link code issued before the revoke cannot be exchanged after it", async () => {
   const r = await rawExchange(preRevokeCode);
   assert.equal(r.status, 404);
   assert.equal(r.body.code, "LINK_CODE_INVALID");
-  assert.equal(store.activeMerchantLinkForShop(SHOP), undefined);
+  assert.equal(await store.activeMerchantLinkForShop(SHOP), undefined);
 });
 await check("a revoked link opens nothing (403 LINK_REVOKED), not even a repeat of a known order", async () => {
   const r = await create(link.linkId, { amountEur: 10, order: { gid: ORDER(8001) } });
@@ -730,8 +759,8 @@ await check("a revoked link's template is no longer shown, and the shop may be l
 });
 
 console.log("audit");
-await check("every service call is audited with its credential and outcome, never a code, secret or token", () => {
-  const rows = store.auditFor(undefined, 5000).filter((a) => a.kind.startsWith("service.merchant_"));
+await check("every service call is audited with its credential and outcome, never a code, secret or token", async () => {
+  const rows = (await store.auditFor(undefined, 5000)).filter((a) => a.kind.startsWith("service.merchant_"));
   const kinds = new Set(rows.map((a) => a.kind));
   for (const k of ["service.merchant_link_preview", "service.merchant_link_exchange", "service.merchant_link_read", "service.merchant_request_create", "service.merchant_request_read", "service.merchant_request_cancel"]) {
     assert.ok(kinds.has(k as any), `no ${k}`);

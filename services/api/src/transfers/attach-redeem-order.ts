@@ -38,8 +38,8 @@ export function mayAttachRedeemOrder(t: Transfer): boolean {
 }
 
 /** Which transfer, other than `t`, already records order `orderId`. */
-function orderOwner(orderId: string, t: Transfer): Transfer | undefined {
-  return store.transfers.find(
+async function orderOwner(orderId: string, t: Transfer): Promise<Transfer | undefined> {
+  return (await store.list("transfers")).find(
     (x) =>
       x.id !== t.id &&
       (x.sepa?.orderId === orderId ||
@@ -62,13 +62,13 @@ export function redeemOrderMismatch(t: Transfer, user: User, orderId: string, or
 }
 
 export async function attachRedeemOrder(transferId: string, orderId: string): Promise<AttachOutcome> {
-  const before = store.findTransfer(transferId);
-  const user = before && store.findUser(before.userId);
+  const before = await store.findTransfer(transferId);
+  const user = before && (await store.findUser(before.userId));
   if (!before || !user || !mayAttachRedeemOrder(before)) {
     return { ok: false, code: "NOT_THIS_ORDER", reason: "the transfer has no unrecorded redeem order" };
   }
   if (!isMoneriumOrderId(orderId)) return { ok: false, code: "NOT_THIS_ORDER", reason: "not a Monerium order id" };
-  if (orderOwner(orderId, before)) return { ok: false, code: "NOT_THIS_ORDER", reason: "the order is on another transfer" };
+  if ((await orderOwner(orderId, before))) return { ok: false, code: "NOT_THIS_ORDER", reason: "the order is on another transfer" };
   let order: MoneriumOrder;
   try {
     order = await readOrder(orderId, user);
@@ -84,14 +84,14 @@ export async function attachRedeemOrder(transferId: string, orderId: string): Pr
   }
   // Re-checked after the read: the transfer or the order may have moved
   // while Monerium answered.
-  const t = store.findTransfer(transferId);
+  const t = await store.findTransfer(transferId);
   if (!t || !mayAttachRedeemOrder(t)) {
     return { ok: false, code: "NOT_THIS_ORDER", reason: "the transfer has no unrecorded redeem order" };
   }
-  if (orderOwner(orderId, t)) return { ok: false, code: "NOT_THIS_ORDER", reason: "the order is on another transfer" };
+  if ((await orderOwner(orderId, t))) return { ok: false, code: "NOT_THIS_ORDER", reason: "the order is on another transfer" };
   const mismatch = redeemOrderMismatch(t, user, orderId, order);
   if (mismatch) return { ok: false, code: "NOT_THIS_ORDER", reason: `the order does not match this transfer: ${mismatch}` };
-  store.updateTransfer(t.id, {
+  await store.updateTransfer(t.id, {
     sepa: { mode: "sandbox", orderId, state: order.meta?.state ?? order.state, detail: "attached at review" },
   });
   return { ok: true };

@@ -52,7 +52,7 @@ const { accountIsSpendable } = await import("../services/api/src/domain/accounts
 const { walletConnectable } = await import("../services/api/src/domain/wallet-tier.js");
 const { BundlerRefusedError, SafeOperationUncertainError, orgSafeAccountFor, ownerAddressOfStored, passkeyAccountAddress, smartAccountForPasskey, webauthnOwnerFromJwk } =
   await import("../services/api/src/wallet/candide.js");
-initStore();
+await initStore();
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -65,19 +65,19 @@ const now = new Date().toISOString();
 const keys: Record<string, Awaited<ReturnType<typeof makeSoftwarePasskey>>> = {};
 const addUser = async (id: string, extra: object = {}, passkey = true) => {
   if (passkey) keys[id] = await makeSoftwarePasskey(id, ORIGIN);
-  store.addUser({
+  await store.addUser({
     id, name: id, country: "DE", kycStatus: "pending", accountType: "company", address: `0x${id.padEnd(40, "0").replace(/[^0-9a-f]/g, "0").slice(0, 40)}`,
     ...(passkey ? { passkey: { credentialId: keys[id].credentialId, publicKey: { alg: "ES256", jwk: keys[id].jwk }, signCount: 0, rpId: "localhost", createdAt: now } } : {}),
     createdAt: now, ...extra,
   } as any);
 };
 const ownerKey = (id: string) => webauthnOwnerFromJwk(keys[id].jwk)!;
-const addMember = (orgId: string, userId: string, role: string) =>
-  store.addMember({ id: `m_${orgId}_${userId}`, orgId, userId, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
-const addOrg = (id: string, extra: object) =>
-  store.addOrganisation({ id, type: "business", name: id, plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now, ...extra } as any, false);
-const addEur = (id: string, orgId: string, extra: object = {}) =>
-  store.addAccount({ id, orgId, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, createdAt: now, updatedAt: now, ...extra } as any);
+const addMember = async (orgId: string, userId: string, role: string) =>
+  await store.addMember({ id: `m_${orgId}_${userId}`, orgId, userId, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
+const addOrg = async (id: string, extra: object) =>
+  await store.addOrganisation({ id, type: "business", name: id, plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now, ...extra } as any, false);
+const addEur = async (id: string, orgId: string, extra: object = {}) =>
+  await store.addAccount({ id, orgId, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, createdAt: now, updatedAt: now, ...extra } as any);
 
 // ── the fake chain ──────────────────────────────────────────────────────────
 type Outcome = "ok" | "refused" | "uncertain" | "reverted";
@@ -130,15 +130,15 @@ await check("a company signup's first org gets a gated EUR account with no addre
   const r = await call("POST", "/api/orgs", "anna", { type: "business", entity: "company", name: "Acme GmbH", country: "DE" });
   assert.equal(r.status, 201, JSON.stringify(r.data));
   orgId = r.data.organisation.id;
-  addMember(orgId, "adam", "admin");
-  addMember(orgId, "pia", "payer");
-  addMember(orgId, "olaf", "owner");
-  const [a] = store.accountsOf(orgId);
+  await addMember(orgId, "adam", "admin");
+  await addMember(orgId, "pia", "payer");
+  await addMember(orgId, "olaf", "owner");
+  const [a] = await store.accountsOf(orgId);
   assert.equal(a.status, "gated");
   assert.equal(a.address, undefined);
   assert.equal(a.backingUserId, undefined);
   assert.match(a.gate!.reason, /Safe is not set up/);
-  assert.match(accountIsSpendable(a, store.findOrganisation(orgId)!).reason!, /Safe is not set up yet/);
+  assert.match(accountIsSpendable(a, (await store.findOrganisation(orgId))!).reason!, /Safe is not set up yet/);
   assert.match(accountIsSpendable(a).reason!, /No IBAN/, "without the org, the old reason stands");
   const list = await call("GET", `/api/orgs/${orgId}/accounts`, "anna");
   assert.equal(list.data.adoption.allowed, false);
@@ -163,11 +163,11 @@ await check("only an owner whose passkey can sign deploys: admin, payer, passkey
 });
 
 await check("a sole_trader and a personal org have no Safe of their own", async () => {
-  addOrg("org_sole", { entity: "sole_trader" });
-  addMember("org_sole", "anna", "owner");
-  addEur("acc_sole", "org_sole");
-  store.addOrganisation({ id: "org_me", type: "personal", name: "Me", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any, false);
-  addMember("org_me", "anna", "owner");
+  await addOrg("org_sole", { entity: "sole_trader" });
+  await addMember("org_sole", "anna", "owner");
+  await addEur("acc_sole", "org_sole");
+  await store.addOrganisation({ id: "org_me", type: "personal", name: "Me", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any, false);
+  await addMember("org_me", "anna", "owner");
   for (const id of ["org_sole", "org_me"]) {
     const r = await prepare(id, "anna");
     assert.equal(r.status, 409, id);
@@ -190,14 +190,14 @@ await check("prepare writes nothing; a bundler refusal writes nothing", async ()
   assert.equal(start.status, 201, JSON.stringify(start.data));
   assert.equal(start.data.safeAddress.toLowerCase(), orgSafeAccountFor(ownerKey("anna"), orgId).accountAddress.toLowerCase());
   assert.equal(start.data.credentialId, keys.anna.credentialId);
-  assert.equal(store.findOrganisation(orgId)!.safe, undefined);
-  assert.equal(store.accountsOf(orgId)[0].address, undefined);
+  assert.equal((await store.findOrganisation(orgId))!.safe, undefined);
+  assert.equal((await store.accountsOf(orgId))[0].address, undefined);
   chain.outcome = "refused";
   const r = await submit(start.data, "anna");
   assert.equal(r.status, 502, JSON.stringify(r.data));
   assert.equal(r.data.code, "BUNDLER_REFUSED");
-  assert.equal(store.findOrganisation(orgId)!.safe, undefined);
-  assert.equal(store.accountsOf(orgId)[0].address, undefined);
+  assert.equal((await store.findOrganisation(orgId))!.safe, undefined);
+  assert.equal((await store.accountsOf(orgId))[0].address, undefined);
   assert.equal((await submit(start.data, "anna")).status, 404, "a request is used once");
 });
 
@@ -207,27 +207,27 @@ await check("an unconfirmed submit keeps the plan planned; the retry finds the S
   const r = await submit(start.data, "anna");
   assert.equal(r.status, 502, JSON.stringify(r.data));
   assert.equal(r.data.code, "SAFE_OP_UNCONFIRMED");
-  const org = store.findOrganisation(orgId)!;
+  const org = (await store.findOrganisation(orgId))!;
   assert.equal(org.safe!.status, "planned");
   assert.equal(org.safe!.address, start.data.safeAddress);
-  assert.equal(store.accountsOf(orgId)[0].address, undefined);
+  assert.equal((await store.accountsOf(orgId))[0].address, undefined);
   const entity = await call("PATCH", `/api/orgs/${orgId}`, "anna", { entity: "sole_trader" });
   assert.equal(entity.data.code, "ENTITY_LOCKED", "a Safe that may have landed locks the entity");
   // Another owner cannot start a second Safe beside the planned one.
   await addUser("bert");
-  addMember(orgId, "bert", "owner");
+  await addMember(orgId, "bert", "owner");
   const other = await prepare(orgId, "bert");
   assert.equal(other.data.code, "NOT_ON_CHAIN_OWNER", JSON.stringify(other.data));
   const retry = await prepare(orgId, "anna");
   assert.equal(retry.status, 200, JSON.stringify(retry.data));
   assert.equal(retry.data.status, "active");
-  const a = store.accountsOf(orgId)[0];
+  const a = (await store.accountsOf(orgId))[0];
   assert.equal(a.address, start.data.safeAddress);
   assert.equal(a.status, "gated", "no IBAN yet");
-  assert.equal(store.findOrganisation(orgId)!.safe!.status, "active");
-  const annaRow = store.memberFor(orgId, "anna")!;
+  assert.equal((await store.findOrganisation(orgId))!.safe!.status, "active");
+  const annaRow = (await store.memberFor(orgId, "anna"))!;
   assert.equal(annaRow.signerAddress!.toLowerCase(), passkeyAccountAddress(ownerKey("anna")).toLowerCase(), "the retry labels the deploying owner too");
-  assert.doesNotMatch(accountIsSpendable(a, store.findOrganisation(orgId)!).reason!, /Safe is not set up/);
+  assert.doesNotMatch(accountIsSpendable(a, (await store.findOrganisation(orgId))!).reason!, /Safe is not set up/);
   const before = chain.prepares;
   const replay = await prepare(orgId, "anna");
   assert.equal(replay.status, 200);
@@ -237,15 +237,15 @@ await check("an unconfirmed submit keeps the plan planned; the retry finds the S
   assert.equal(list.data.orgSafeDeploy.allowed, false);
   assert.match(list.data.accounts[0].gate.reason, /IBAN is not issued onto it yet/, "the IBAN is not shown as there");
   assert.doesNotMatch(list.data.accounts[0].gate.needs, /connect/i);
-  assert.match(accountIsSpendable(a, store.findOrganisation(orgId)!).reason!, /not issued onto its Safe yet/);
+  assert.match(accountIsSpendable(a, (await store.findOrganisation(orgId))!).reason!, /not issued onto its Safe yet/);
 });
 
 await check("the happy path: sign, submit, plan active, address set, still gated", async () => {
   chain.outcome = "ok";
-  addOrg("org_two", { entity: "company" });
-  addMember("org_two", "anna", "owner");
-  addMember("org_two", "bert", "owner");
-  addEur("acc_two", "org_two");
+  await addOrg("org_two", { entity: "company" });
+  await addMember("org_two", "anna", "owner");
+  await addMember("org_two", "bert", "owner");
+  await addEur("acc_two", "org_two");
   const start = await prepare("org_two", "anna");
   assert.equal(start.status, 201);
   // Bound to the member who prepared it, and to the org.
@@ -253,58 +253,58 @@ await check("the happy path: sign, submit, plan active, address set, still gated
   assert.equal((await call("POST", `/api/orgs/${orgId}/safe/deployment/${start.data.requestId}`, "anna", await keys.anna.assert(start.data.challenge))).status, 404);
   const done = await submit(start.data, "anna");
   assert.equal(done.status, 201, JSON.stringify(done.data));
-  const org = store.findOrganisation("org_two")!;
+  const org = (await store.findOrganisation("org_two"))!;
   assert.equal(org.safe!.status, "active");
   assert.equal(org.safe!.owners.length, 1);
-  const signer = store.findMember("m_org_two_anna")!.signerAddress!;
+  const signer = (await store.findMember("m_org_two_anna"))!.signerAddress!;
   assert.equal(signer.toLowerCase(), passkeyAccountAddress(ownerKey("anna")).toLowerCase(), "the label is the address the Safe was deployed with");
   assert.equal(signer.toLowerCase(), ownerAddressOfStored(org.safe!.owners[0]).toLowerCase());
-  assert.equal(store.findMember("m_org_two_bert")!.signerAddress, undefined, "only the deploying owner is labelled");
-  const a = store.findAccount("acc_two")!;
+  assert.equal((await store.findMember("m_org_two_bert"))!.signerAddress, undefined, "only the deploying owner is labelled");
+  const a = (await store.findAccount("acc_two"))!;
   assert.equal(a.address, start.data.safeAddress);
   assert.equal(a.status, "gated");
-  assert.notEqual(a.address!.toLowerCase(), store.accountsOf(orgId)[0].address!.toLowerCase());
+  assert.notEqual(a.address!.toLowerCase(), (await store.accountsOf(orgId))[0].address!.toLowerCase());
 });
 
 await check("a passkey changed since the prepare is refused, and nothing is written", async () => {
-  addOrg("org_three", { entity: "company" });
-  addMember("org_three", "pia", "owner");
-  addEur("acc_three", "org_three");
+  await addOrg("org_three", { entity: "company" });
+  await addMember("org_three", "pia", "owner");
+  await addEur("acc_three", "org_three");
   const start = await prepare("org_three", "pia");
   assert.equal(start.status, 201);
   const fresh = await makeSoftwarePasskey("pia2", ORIGIN);
-  store.updateUser("pia", { passkey: { credentialId: fresh.credentialId, publicKey: { alg: "ES256", jwk: fresh.jwk }, signCount: 0, rpId: "localhost", createdAt: now } } as any);
+  await store.updateUser("pia", { passkey: { credentialId: fresh.credentialId, publicKey: { alg: "ES256", jwk: fresh.jwk }, signCount: 0, rpId: "localhost", createdAt: now } } as any);
   const r = await call("POST", start.data.submitTo, "pia", await fresh.assert(start.data.challenge));
   assert.equal(r.status, 409, JSON.stringify(r.data));
   assert.equal(r.data.code, "ORG_SAFE_CHANGED");
-  assert.equal(store.findOrganisation("org_three")!.safe, undefined);
+  assert.equal((await store.findOrganisation("org_three"))!.safe, undefined);
 });
 
 await check("a planned plan whose owner left is re-planned by another owner, only where the chain has nothing there", async () => {
-  addOrg("org_orphan", { entity: "company" });
+  await addOrg("org_orphan", { entity: "company" });
   await addUser("ilse");
   await addUser("jan");
-  addMember("org_orphan", "ilse", "owner");
-  addMember("org_orphan", "jan", "owner");
-  addEur("acc_orphan", "org_orphan");
+  await addMember("org_orphan", "ilse", "owner");
+  await addMember("org_orphan", "jan", "owner");
+  await addEur("acc_orphan", "org_orphan");
   chain.outcome = "uncertain";
   const first = await prepare("org_orphan", "ilse");
   assert.equal((await submit(first.data, "ilse")).data.code, "SAFE_OP_UNCONFIRMED");
-  const old = store.findOrganisation("org_orphan")!.safe!.address;
+  const old = (await store.findOrganisation("org_orphan"))!.safe!.address;
   assert.equal((await prepare("org_orphan", "jan")).data.code, "NOT_ON_CHAIN_OWNER", "while ilse is an owner, her plan stands");
-  store.updateMember("m_org_orphan_ilse", { status: "deactivated" });
+  await store.updateMember("m_org_orphan_ilse", { status: "deactivated" });
   // The unconfirmed op did land: the Safe is there, with a passkey that left.
   const offer = await call("GET", "/api/orgs/org_orphan/accounts", "jan");
   assert.equal(offer.data.orgSafeDeploy.allowed, true);
   chain.readFails = true;
   const unread = await prepare("org_orphan", "jan");
   assert.equal(unread.status, 502, JSON.stringify(unread.data));
-  assert.equal(store.findOrganisation("org_orphan")!.safe!.address, old, "a failed read changes nothing");
+  assert.equal((await store.findOrganisation("org_orphan"))!.safe!.address, old, "a failed read changes nothing");
   chain.readFails = false;
   const landed = await prepare("org_orphan", "jan");
   assert.equal(landed.status, 409, JSON.stringify(landed.data));
   assert.equal(landed.data.code, "ORG_SAFE_OWNER_GONE");
-  assert.equal(store.findOrganisation("org_orphan")!.safe!.address, old);
+  assert.equal((await store.findOrganisation("org_orphan"))!.safe!.address, old);
   // It did not land: jan re-plans at his own address and deploys.
   chain.deployed.delete(old.toLowerCase());
   chain.outcome = "ok";
@@ -313,44 +313,44 @@ await check("a planned plan whose owner left is re-planned by another owner, onl
   const mine = orgSafeAccountFor(ownerKey("jan"), "org_orphan").accountAddress.toLowerCase();
   assert.equal(start.data.safeAddress.toLowerCase(), mine);
   assert.notEqual(mine, old.toLowerCase());
-  const replanned = store.auditFor("jan").filter((e) => e.kind === "org_safe.replanned");
+  const replanned = (await store.auditFor("jan")).filter((e) => e.kind === "org_safe.replanned");
   assert.deepEqual(replanned.map((e) => e.data), [{ orgId: "org_orphan", replaced: old, address: start.data.safeAddress }], "the re-plan is audited once, with both addresses");
   const done = await submit(start.data, "jan");
   assert.equal(done.status, 201, JSON.stringify(done.data));
-  assert.equal(store.findOrganisation("org_orphan")!.safe!.status, "active");
-  assert.equal(store.findAccount("acc_orphan")!.address!.toLowerCase(), mine);
-  assert.throws(() => store.replaceUndeployedOrgSafePlan("org_orphan", mine, { ...store.findOrganisation("org_orphan")!.safe!, status: "planned" }), /no planned Safe/, "a deployed Safe is never re-planned");
+  assert.equal((await store.findOrganisation("org_orphan"))!.safe!.status, "active");
+  assert.equal((await store.findAccount("acc_orphan"))!.address!.toLowerCase(), mine);
+  await assert.rejects(async () => await store.replaceUndeployedOrgSafePlan("org_orphan", mine, { ...(await store.findOrganisation("org_orphan"))!.safe!, status: "planned" }), /no planned Safe/, "a deployed Safe is never re-planned");
 });
 
 await check("a bad assertion is refused before the chain", async () => {
-  addOrg("org_four", { entity: "company" });
-  addMember("org_four", "adam", "owner");
-  addEur("acc_four", "org_four");
+  await addOrg("org_four", { entity: "company" });
+  await addMember("org_four", "adam", "owner");
+  await addEur("acc_four", "org_four");
   const start = await prepare("org_four", "adam");
   const submits = chain.submits;
   const r = await call("POST", start.data.submitTo, "adam", await keys.adam.assert(Buffer.from("another challenge").toString("base64url")));
   assert.equal(r.status, 401, JSON.stringify(r.data));
   assert.equal(r.data.code, "BAD_ASSERTION");
   assert.equal(chain.submits, submits);
-  assert.equal(store.findOrganisation("org_four")!.safe, undefined);
+  assert.equal((await store.findOrganisation("org_four"))!.safe, undefined);
 });
 
 await check("no Safe already another org's or a person's becomes this company's", async () => {
-  addOrg("org_five", { entity: "company" });
-  addMember("org_five", "zed", "owner");
-  addEur("acc_five", "org_five");
+  await addOrg("org_five", { entity: "company" });
+  await addMember("org_five", "zed", "owner");
+  await addEur("acc_five", "org_five");
   const at = orgSafeAccountFor(ownerKey("zed"), "org_five").accountAddress;
-  addEur("acc_squat", "org_sole", { address: at, currency: "EUR" });
+  await addEur("acc_squat", "org_sole", { address: at, currency: "EUR" });
   const r = await prepare("org_five", "zed");
   assert.equal(r.status, 409, JSON.stringify(r.data));
   assert.equal(r.data.code, "SAFE_IN_OTHER_ORG");
-  assert.equal(store.findAccount("acc_five")!.address, undefined);
+  assert.equal((await store.findAccount("acc_five"))!.address, undefined);
 });
 
-await check("a person whose address is an org Safe cannot back another org with it", () => {
-  const safe = store.accountsOf(orgId)[0].address!;
-  assert.deepEqual(safeTakenBy({ id: "u_nobody", address: safe }, "org_sole"), { id: orgId, name: "Acme GmbH" });
-  assert.equal(safeTakenBy({ id: "u_nobody", address: safe }, orgId), undefined);
+await check("a person whose address is an org Safe cannot back another org with it", async () => {
+  const safe = (await store.accountsOf(orgId))[0].address!;
+  assert.deepEqual(await safeTakenBy({ id: "u_nobody", address: safe }, "org_sole"), { id: orgId, name: "Acme GmbH" });
+  assert.equal(await safeTakenBy({ id: "u_nobody", address: safe }, orgId), undefined);
 });
 
 await check("a company is never funded from a member: fund, useMyAccount, a second EUR account, the wallet tier", async () => {
@@ -360,12 +360,12 @@ await check("a company is never funded from a member: fund, useMyAccount, a seco
   const second = await call("POST", `/api/orgs/org_two/accounts`, "anna", { currency: "EUR" });
   assert.equal(second.status, 409);
   assert.equal(second.data.code, "COMPANY_ONE_EUR_ACCOUNT");
-  addOrg("org_six", { entity: "company" });
-  addMember("org_six", "anna", "owner");
+  await addOrg("org_six", { entity: "company" });
+  await addMember("org_six", "anna", "owner");
   const adopt = await call("POST", `/api/orgs/org_six/accounts`, "anna", { currency: "EUR", useMyAccount: true });
   assert.equal(adopt.status, 409);
   assert.equal(adopt.data.code, "COMPANY_OWN_SAFE");
-  assert.equal(store.accountsOf("org_six").length, 0);
+  assert.equal((await store.accountsOf("org_six")).length, 0);
   const opened = await call("POST", `/api/orgs/org_six/accounts`, "anna", { currency: "EUR" });
   assert.equal(opened.status, 201, JSON.stringify(opened.data));
   assert.equal(opened.data.account.address, undefined);

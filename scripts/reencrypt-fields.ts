@@ -35,11 +35,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { fieldKeyId } from "../services/api/src/crypto-at-rest.js";
 import { dataKeyring } from "../services/api/src/config/data-keys.js";
 import { STORED_SECRETS } from "../services/api/src/stored-secrets.js";
-import { batched, DB_PATH, loadStoreReadOnly } from "../services/api/src/store/db.js";
+import { DB_PATH, loadStoreReadOnly } from "../services/api/src/store/db.js";
+import { store } from "../services/api/src/store.js";
 
 const apply = process.argv.includes("--apply");
 
-function main(): number {
+async function main(): Promise<number> {
   const keyring = dataKeyring();
   if (apply && !keyring) {
     console.error("--apply needs DATA_ENCRYPTION_KEYS: there is no key to move rows to");
@@ -61,7 +62,7 @@ function main(): number {
   for (const entry of STORED_SECRETS) {
     const { site } = entry;
     const counts = new Map<string, number>([["v1", 0], ...ringIds.map((id) => [id, 0] as [string, number])]);
-    for (const { rowId, stored } of entry.rows()) {
+    for (const { rowId, stored } of await entry.rows()) {
       let keyId: string;
       try { keyId = fieldKeyId(stored); } catch { failures.push(`${site.table}.${site.field} ${rowId}: not ciphertext`); continue; }
       counts.set(keyId, (counts.get(keyId) ?? 0) + 1);
@@ -119,8 +120,9 @@ function main(): number {
         if (code) console.error(`the store write did not complete: the file holds all ${sealed.length} re-encrypted row(s) or none of them; run the dry run (npm run reencrypt) to see which`);
       };
       process.on("exit", onExit);
-      batched(() => {
-        for (const { entry, rowId, stored } of sealed) entry.write(rowId, stored);
+      // One transaction: the JSON backend writes the file once, at its end.
+      await store.tx(async () => {
+        for (const { entry, rowId, stored } of sealed) await entry.write(rowId, stored);
       });
       process.off("exit", onExit);
     }
@@ -135,4 +137,4 @@ function main(): number {
   return failures.length ? 1 : 0;
 }
 
-process.exitCode = main();
+process.exitCode = await main();

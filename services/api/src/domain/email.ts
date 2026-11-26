@@ -18,6 +18,10 @@ export function emailLooksValid(email: string): boolean {
  * must not lock the owner out. `others` are the accounts on this email,
  * excluding the one asking.
  */
+/** The store.lockKey for "one claimable account per address": the address
+ *  as usersByEmail matches it. */
+export const emailLockKey = (email: string) => `email:${email.trim().toLowerCase()}`;
+
 export function emailHeldBy(
   others: { passkey?: unknown; emailVerifiedAt?: string }[],
   verificationOn: boolean,

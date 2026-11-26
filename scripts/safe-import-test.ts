@@ -286,7 +286,7 @@ const planAddress = smartAccountForPasskey(PK).accountAddress as Hex;
 const makeUser = async (id: string, over: any = {}) => {
   const key = await makePasskey(id);
   keys.set(id, key);
-  store.addUser({
+  await store.addUser({
     id,
     name: id,
     email: `${id}@example.test`,
@@ -299,7 +299,7 @@ const makeUser = async (id: string, over: any = {}) => {
     createdAt: new Date().toISOString(),
     ...over,
   } as any);
-  return store.findUser(id)!;
+  return (await store.findUser(id))!;
 };
 
 const CREATED_AT = 1_790_000_000_000;
@@ -308,7 +308,7 @@ let deployed: unknown[] = [];
 const app = express();
 app.use(express.json());
 app.use("/api", createSafeImportRouter({
-  requireUserSession: () => true,
+  requireUserSession: async () => true,
   reader: () => readerFor(chain),
   tokens: () => [EURE, USDC],
   now: () => CREATED_AT,
@@ -335,7 +335,7 @@ const approveImport = async (id: string, address: Hex = SAFE) => {
 await check("prepare returns the verifier and both owner changes, and stores nothing", async () => {
   await makeUser("u1");
   chain = { ...goodChain(), owners: [EOA] };
-  const before = JSON.stringify(store.findUser("u1"));
+  const before = JSON.stringify(await store.findUser("u1"));
   const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.verifier, VERIFIER);
@@ -345,7 +345,7 @@ await check("prepare returns the verifier and both owner changes, and stores not
   const add = decodeFunctionData({ abi: safeAbi, data: r.body.ownerChange.add.data });
   assert.deepEqual(add.args, [VERIFIER, 1n]);
   assert.equal(decodeFunctionData({ abi: safeAbi, data: r.body.ownerChange.swap.data }).functionName, "swapOwner");
-  assert.equal(JSON.stringify(store.findUser("u1")), before, "prepare must not touch the account");
+  assert.equal(JSON.stringify(await store.findUser("u1")), before, "prepare must not touch the account");
 });
 // The script reads the chain over JSON-RPC: serve it the same canned chain.
 const rpc = express();
@@ -407,10 +407,10 @@ rpcServer.close();
 await check("safeImport capability: on with a real chain, off under the harness, where the routes say NO_CHAIN", async () => {
   const { capabilities } = await import("../services/api/src/capabilities.js");
   const { HARNESS } = await import("../services/api/src/config.js");
-  assert.equal(capabilities().safeImport, true);
+  assert.equal((await capabilities()).safeImport, true);
   HARNESS.enabled = true;
   try {
-    assert.equal(capabilities().safeImport, false);
+    assert.equal((await capabilities()).safeImport, false);
     chain = { ...goodChain(), owners: [EOA] };
     assert.equal((await post("/users/u1/safe/import/prepare", { address: SAFE })).body.code, "NO_CHAIN");
   } finally {
@@ -426,13 +426,13 @@ await check("confirm before the owner change binds nothing", async () => {
   chain = { ...goodChain(), owners: [EOA] };
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE });
   assert.deepEqual([r.status, r.body.code], [409, "VERIFIER_NOT_OWNER"]);
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
 });
 await check("confirm on an RPC failure binds nothing", async () => {
   chain = { ...goodChain(), failOn: "eth_call" };
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE });
   assert.deepEqual([r.status, r.body.code], [502, "RPC_FAILED"]);
-  assert.equal(store.findUser("u1")!.address, planAddress);
+  assert.equal((await store.findUser("u1"))!.address, planAddress);
 });
 await check("confirm tries the verifier deployment, and refuses when it cannot send it", async () => {
   chain = { ...goodChain(), code: { [SAFE.toLowerCase()]: "0x6080" } };
@@ -444,12 +444,12 @@ await check("confirm tries the verifier deployment, and refuses when it cannot s
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
   assert.deepEqual([r.status, r.body.code], [409, "VERIFIER_NO_CODE"]);
   assert.equal(deployed.length, 1);
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
   // The approval was spent on that attempt: sending it again is refused.
   chain = goodChain();
   const replay = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
   assert.deepEqual([replay.status, replay.body.code], [401, "STEP_UP_INVALID"]);
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
 });
 await check("funds at the planned address refuse the import", async () => {
   chain = { ...goodChain(), eth: { [planAddress.toLowerCase()]: 1n } };
@@ -460,11 +460,11 @@ await check("funds at the planned address refuse the import", async () => {
   }
 });
 await check("a new account's zero address is not read as its funds", async () => {
-  store.updateUser("u1", { address: ZERO as Hex });
+  await store.updateUser("u1", { address: ZERO as Hex });
   chain = { ...goodChain(), eth: { [ZERO]: 10n ** 21n } };
   const r = await post("/users/u1/safe/import/prepare", { address: SAFE });
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  store.updateUser("u1", { address: planAddress });
+  await store.updateUser("u1", { address: planAddress });
 });
 await check("a deployed own Safe is never replaced", async () => {
   chain = goodChain();
@@ -491,8 +491,8 @@ await check("confirm with no passkey approval binds nothing", async () => {
   chain = goodChain();
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE });
   assert.deepEqual([r.status, r.body.code], [401, "STEP_UP_REQUIRED"]);
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
-  assert.equal(store.findUser("u1")!.address, planAddress);
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.address, planAddress);
 });
 await check("an approval for another action is refused", async () => {
   chain = goodChain();
@@ -500,7 +500,7 @@ await check("an approval for another action is refused", async () => {
     const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: await keys.get("u1")!.stepUp(action) });
     assert.deepEqual([r.status, r.body.code], [401, "STEP_UP_INVALID"], action);
   }
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
 });
 await check("another account's approval, another credential, or no user verification is refused", async () => {
   await makeUser("u3");
@@ -514,7 +514,7 @@ await check("another account's approval, another credential, or no user verifica
   const p = await post("/users/u1/safe/import/prepare", { address: SAFE });
   const noUv = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: await keys.get("u1")!.sign(p.body.approval.challenge, 0x01) });
   assert.deepEqual([noUv.status, noUv.body.code], [401, "STEP_UP_INVALID"], "a touch without user verification");
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
 });
 await check("an approval for Safe A cannot bind Safe B", async () => {
   chain = goodChain();
@@ -522,7 +522,7 @@ await check("an approval for Safe A cannot bind Safe B", async () => {
   const stepUp = await approveImport("u1", SAFE);
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE_B, stepUp });
   assert.deepEqual([r.status, r.body.code], [401, "STEP_UP_INVALID"]);
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
 });
 await check("owners changed between prepare and confirm: refused", async () => {
   chain = goodChain();
@@ -534,7 +534,7 @@ await check("owners changed between prepare and confirm: refused", async () => {
   const t = await approveImport("u1");
   chain = { ...goodChain(), threshold: 1n, owners: [VERIFIER] };
   assert.equal((await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp: t })).body.code, "STEP_UP_INVALID", "a removed owner is a change too");
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
 });
 await check("owners changed after the approval is checked: refused", async () => {
   chain = goodChain();
@@ -542,7 +542,7 @@ await check("owners changed after the approval is checked: refused", async () =>
   chain = { ...goodChain(), ownersLater: [VERIFIER, OTHER] };
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
   assert.deepEqual([r.status, r.body.code], [409, "SAFE_CHANGED"]);
-  assert.equal(store.findUser("u1")!.passkeySafe!.status, "planned");
+  assert.equal((await store.findUser("u1"))!.passkeySafe!.status, "planned");
 });
 await check("confirm binds a good Safe as imported, never as recovered", async () => {
   chain = goodChain();
@@ -555,7 +555,7 @@ await check("confirm binds a good Safe as imported, never as recovered", async (
   chain = goodChain();
   const r = await post("/users/u1/safe/import/confirm", { address: SAFE, stepUp });
   assert.equal(r.status, 201, JSON.stringify(r.body));
-  const u = store.findUser("u1")!;
+  const u = (await store.findUser("u1"))!;
   assert.equal(u.address, SAFE);
   assert.equal(u.passkeySafe!.address, SAFE);
   assert.equal(u.passkeySafe!.status, "active");

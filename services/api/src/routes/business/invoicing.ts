@@ -44,15 +44,15 @@ import { redactedMessage } from "../../http/log-cause.js";
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
 export interface OrgRoutes {
-  ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+  ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
 
 export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
 
-  r.get("/:orgId/invoicing/profile", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/invoicing/profile", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.read")) return;
@@ -71,11 +71,11 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       // Prefill: who the issuer is, straight off the organisation, and what
       // else Zold knows that the form can offer.
       issuer: issuerParty(ctx.org),
-      suggested: issuerSuggestions(ctx.org, ctx.userId),
+      suggested: await issuerSuggestions(ctx.org, ctx.userId),
       // What invoices print (`profile.bank` when it names an IBAN, else the
       // account's), and the account's own, which is the one payments match on.
-      invoiceBank: invoiceBankOf(ctx.org),
-      accountBank: accountBankOf(ctx.org),
+      invoiceBank: await invoiceBankOf(ctx.org),
+      accountBank: await accountBankOf(ctx.org),
       jurisdiction: jur,
       reference: {
         // Only the reasons this jurisdiction actually offers. A Swedish entity
@@ -108,7 +108,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
    * footer or custom fields. The rest needs only invoices.manage.
    */
   r.patch("/:orgId/invoicing/profile", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
@@ -186,7 +186,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       const was = ctx.org.invoicing?.bank?.iban;
       if ((iban || undefined) !== was) {
         if (!requirePermission(ctx, res, "org.update")) return;
-        const user = store.findUser(ctx.userId);
+        const user = await store.findUser(ctx.userId);
         if (!user) return res.status(401).json({ error: "no such user" });
         if (!(await verifyPasskeyStepUp(user, b, res, "org.invoice-iban.change"))) return;
         ibanChange = { oldLast4: was ? was.slice(-4) : null, newLast4: iban ? iban.slice(-4) : null };
@@ -221,12 +221,11 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       }
     }
 
-    const org = store.updateOrganisation(ctx.org.id, {
-      invoicing: { ...(store.findOrganisation(ctx.org.id)?.invoicing ?? {}), ...next },
+    const org = await store.patchOrgSub(ctx.org.id, "invoicing", (cur) => ({ ...(cur ?? {}), ...next }), {
       ...(clearsSignupTaxId(identity.patch) ? { taxId: undefined } : {}),
     });
     if (ibanChange) {
-      store.audit(auditEntry("org.invoice_iban_changed", { orgId: org.id, memberId: ctx.member.id, ...ibanChange }, ctx.userId));
+      await store.audit(auditEntry("org.invoice_iban_changed", { orgId: org.id, memberId: ctx.member.id, ...ibanChange }, ctx.userId));
     }
     res.json({ profile: org.invoicing, issuer: issuerParty(org) });
   }));
@@ -238,14 +237,14 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
    * while it can still be fixed rather than at the moment of issuing.
    */
   r.post("/:orgId/invoicing/check", async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.read")) return;
     try {
       // Converted here too, or the live panel would show a missing-euro-amount
       // error against every foreign-currency draft while it is being typed.
-      const draft = await withConversion(draftFrom(ctx.org, req.body ?? {}));
+      const draft = await withConversion(await draftFrom(ctx.org, req.body ?? {}));
       // What VIES already said about this number; this route runs on every
       // keystroke and never asks VIES itself (POST …/vat-check does).
       const known = draft.recipient.vatId ? cachedVatCheck(draft.recipient.vatId) : undefined;
@@ -279,7 +278,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
    * requester, which makes VIES return a consultation number.
    */
   r.post("/:orgId/invoicing/vat-check", async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.read")) return;
@@ -298,14 +297,14 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
    * there or shows bank details only, and why.
    */
   r.post("/:orgId/invoicing/issue", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
 
     const answer = await issueOutgoing(ctx, req.body ?? {});
     const issuedId = answer.status === 201 ? (answer.body.invoice as { id?: string } | undefined)?.id : undefined;
-    const issued = issuedId ? store.findInvoice(issuedId) : undefined;
+    const issued = issuedId ? (await store.findInvoice(issuedId)) : undefined;
     if (!issued) return res.status(answer.status).json(answer.body);
     const payment = await payLinkForInvoice(ctx, issued, baseUrlFor(req));
     res.status(201).json({ ...answer.body, payment });

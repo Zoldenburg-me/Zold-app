@@ -235,7 +235,7 @@ console.log("4. unknown challenge rejected");
   const { createUserRouter } = await import("../services/api/src/routes/users.js");
   const { createAuthRouter } = await import("../services/api/src/routes/auth.js");
   const { makeSoftwarePasskey } = await import("./_software-passkey.js");
-  initStore();
+  await initStore();
   const app = express().use(express.json());
   app.use("/api", createUserRouter({ requireUserSession }));
   app.use("/api", createAuthRouter({ requireUserSession }));
@@ -273,7 +273,7 @@ console.log("4. unknown challenge rejected");
   const chA = await challenge("register", a.token);
   r = await register(b, keyB.register(chA));
   assert.equal(r.status, 400, "B registered with a challenge minted for A");
-  assert.equal(store.findUser(b.id)!.passkey, undefined);
+  assert.equal((await store.findUser(b.id))!.passkey, undefined);
   r = await register(a, keyA.register(chA));
   assert.equal(r.status, 400, "a challenge tried once on another account is spent, not handed back");
   console.log("11. a register challenge is not usable by another account, and a misused one is burned");
@@ -290,7 +290,7 @@ console.log("4. unknown challenge rejected");
     Date.now = () => realNow() + 5 * 60_000 + 1_000;
     try { r = await register(a, keyA.register(ch)); } finally { Date.now = realNow; }
     assert.equal(r.status, 400, JSON.stringify(r.body));
-    assert.equal(store.findUser(a.id)!.passkey, undefined);
+    assert.equal((await store.findUser(a.id))!.passkey, undefined);
     console.log("13. a register challenge past its five minutes is refused");
   }
 
@@ -299,7 +299,7 @@ console.log("4. unknown challenge rejected");
   assert.equal(r.status, 400);
   r = await register(a, keyA.register(await challenge("register", a.token), { rpId: "evil.example" }));
   assert.equal(r.status, 400);
-  assert.equal(store.findUser(a.id)!.passkey, undefined);
+  assert.equal((await store.findUser(a.id))!.passkey, undefined);
   console.log("14. registration from another origin or for another RP id is refused");
 
   // 15. success spends the challenge
@@ -312,7 +312,7 @@ console.log("4. unknown challenge rejected");
   r = await register(a, { ...keyA2.register(chOk), stepUp: await keyA.assert(await challenge("step_up", a.token, { action: "passkey.replace" })) });
   assert.equal(r.status, 400, `the challenge of a completed registration registered again: ${JSON.stringify(r.body)}`);
   assert.match(r.body.error, /unknown or expired challenge/, "refused for a reason other than the spent challenge");
-  assert.equal(store.findUser(a.id)!.passkey!.credentialId, keyA.credentialId);
+  assert.equal((await store.findUser(a.id))!.passkey!.credentialId, keyA.credentialId);
   console.log("15. the challenge of a completed registration cannot be replayed");
 
   r = await register(b, keyB.register(await challenge("register", b.token)));
@@ -337,11 +337,11 @@ console.log("4. unknown challenge rejected");
     assert.equal(r.status, 401, "a login challenge stood in for a step-up");
     r = await replace(await keyA.assert(await challenge("step_up", a.token, { action: "passkey.replace" }), { origin: "https://evil.example" }));
     assert.equal(r.status, 401, "a step-up from another origin");
-    assert.equal(store.findUser(a.id)!.passkey!.credentialId, keyA.credentialId, "nothing replaced so far");
+    assert.equal((await store.findUser(a.id))!.passkey!.credentialId, keyA.credentialId, "nothing replaced so far");
     const other = (await call("/passkey/login", await keyA.assert(await challenge("login")))).body.sessionToken as string;
     r = await replace(await stepUp(a.token, keyA));
     assert.equal(r.status, 201, JSON.stringify(r.body));
-    assert.equal(store.findUser(a.id)!.passkey!.credentialId, keyA2.credentialId);
+    assert.equal((await store.findUser(a.id))!.passkey!.credentialId, keyA2.credentialId);
     const stale = await fetch(`${base}/session`, { headers: { authorization: `Bearer ${other}` } });
     assert.equal(stale.status, 401, "a session minted before the swap outlived it");
     console.log("16. passkey replacement: only this account's current passkey, for this action, revokes other sessions");
@@ -384,7 +384,7 @@ console.log("4. unknown challenge rejected");
     const rs = await Promise.all([register(c1, k1.register(ch1)), register(c2, k2.register(ch2))]);
     assert.deepEqual(rs.map((x) => x.status).sort(), [201, 409], JSON.stringify(rs.map((x) => x.body)));
     assert.equal(rs.find((x) => x.status === 409)!.body.code, "EMAIL_IN_USE");
-    assert.equal(store.usersByEmail("twin@example.test").filter((u) => u.passkey?.publicKey).length, 1);
+    assert.equal((await store.usersByEmail("twin@example.test")).filter((u) => u.passkey?.publicKey).length, 1);
     r = await call("/users", { name: "Third", email: "TWIN@example.test", country: "DE" });
     assert.equal(r.status, 409, "a third signup on the held address");
     console.log("18. parallel passkey completions on one email give one claimable account");

@@ -30,29 +30,31 @@ const keysOf = (id: string) => [
   `deposit:${id}:converted`,
 ];
 
-export function createBooksLineRouter({ requireUserSession }: { requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown }) {
+export function createBooksLineRouter({ requireUserSession }: { requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown> }) {
   const r = express.Router();
-  r.get("/users/:id/books-line/:paymentId", (req, res) => {
-    const userId = String(req.params.id);
-    if (!requireUserSession(req, res, userId)) return;
-    const books = booksFor(userId);
-    const org = books && store.findOrganisation(books.orgId);
-    const member = org && store.memberFor(org.id, userId);
-    if (!org || member?.status !== "active" || !roleCan(member.role, "ledger.categorise") || !can(org, "ledger.transactions").allowed) {
-      return res.json({ line: null });
-    }
-    // The sweep writes lines once a minute, and a send reads SENT before then:
-    // write this person's lines first, so a payment just confirmed has its own
-    // (as one file write, like the sweep).
-    const user = store.findUser(userId);
-    try { if (user) store.batched(() => writeStatementLinesFor(user)); } catch (e) { console.error(`books-line ${userId}: ${describeCause(e)}`); }
-    const ids = new Set(keysOf(String(req.params.paymentId)).map((k) => lineId(org.id, k)));
-    const paid = invoicePayments(store.invoices);
-    const entry = store.ledgerOf(org.id).find((e) => ids.has(e.id) && (ownTransferAllowed(e, paid) || isOwnTransfer(e)));
-    // A Beleg that stopped verifying (say after Undo): the sheet offers to replace it.
-    const b = entry && belegOfLine(entry);
-    const stale = b && "stale" in b && roleCan(member.role, "reports.run") && can(org, "export.ledger").allowed;
-    res.json({ line: entry ? { orgId: org.id, lineId: entry.id, ownTransfer: isOwnTransfer(entry), ...(stale ? { belegStale: true } : {}) } : null });
+  r.get("/users/:id/books-line/:paymentId", async (req, res) => {
+    return store.tx(async () => {
+      const userId = String(req.params.id);
+      if (!(await requireUserSession(req, res, userId))) return;
+      const books = await booksFor(userId);
+      const org = books && (await store.findOrganisation(books.orgId));
+      const member = org && (await store.memberFor(org.id, userId));
+      if (!org || member?.status !== "active" || !roleCan(member.role, "ledger.categorise") || !can(org, "ledger.transactions").allowed) {
+        return res.json({ line: null });
+      }
+      // The sweep writes lines once a minute, and a send reads SENT before then:
+      // write this person's lines first, so a payment just confirmed has its own
+      // (as one file write, like the sweep).
+      const user = await store.findUser(userId);
+      try { if (user) await store.tx(async () => await writeStatementLinesFor(user)); } catch (e) { console.error(`books-line ${userId}: ${describeCause(e)}`); }
+      const ids = new Set(keysOf(String(req.params.paymentId)).map((k) => lineId(org.id, k)));
+      const paid = invoicePayments(await store.list("invoices"));
+      const entry = (await store.ledgerOf(org.id)).find((e) => ids.has(e.id) && (ownTransferAllowed(e, paid) || isOwnTransfer(e)));
+      // A Beleg that stopped verifying (say after Undo): the sheet offers to replace it.
+      const b = entry && (await belegOfLine(entry));
+      const stale = b && "stale" in b && roleCan(member.role, "reports.run") && can(org, "export.ledger").allowed;
+      res.json({ line: entry ? { orgId: org.id, lineId: entry.id, ownTransfer: isOwnTransfer(entry), ...(stale ? { belegStale: true } : {}) } : null });
+    });
   });
   return r;
 }

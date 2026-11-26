@@ -78,7 +78,7 @@ const {
   webauthnOwnerToStore,
 } = await import("../services/api/src/wallet/candide.js");
 const { SafeMultiChainSigAccountV1: SafeAccount } = await import("abstractionkit");
-initStore();
+await initStore();
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -97,23 +97,23 @@ const TOKEN = "0x1111111111111111111111111111111111111111" as const;
 const PAYEE = "0x2222222222222222222222222222222222222222" as const;
 const txs = transferExecutionTransactions(TOKEN, PAYEE, 1n);
 
-const addOrg = (id: string, extra: object) =>
-  store.addOrganisation({
+const addOrg = async (id: string, extra: object) =>
+  await store.addOrganisation({
     id, type: "business", name: id, reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" },
     verifications: {}, createdAt: now, updatedAt: now, ...extra,
   } as any, false);
-addOrg("org_co", { entity: "company" });
-addOrg("org_bare", { entity: "company" });
-addOrg("org_sole", { entity: "sole_trader" });
-addOrg("org_legacy", {});
-store.addOrganisation({ id: "org_me", type: "personal", name: "Me", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any, false);
+await addOrg("org_co", { entity: "company" });
+await addOrg("org_bare", { entity: "company" });
+await addOrg("org_sole", { entity: "sole_trader" });
+await addOrg("org_legacy", {});
+await store.addOrganisation({ id: "org_me", type: "personal", name: "Me", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now } as any, false);
 
 const plan = { kind: "org" as const, status: "planned" as const, address: ORG_SAFE, owners: [webauthnOwnerToStore(anna), webauthnOwnerToStore(bert)], createdAt: now };
 
-await check("a company org's plan round-trips through the store and a reload from disk", () => {
-  store.setOrgSafePlan("org_co", plan);
-  initStore();
-  const org = store.findOrganisation("org_co")!;
+await check("a company org's plan round-trips through the store and a reload from disk", async () => {
+  await store.setOrgSafePlan("org_co", plan);
+  await initStore();
+  const org = (await store.findOrganisation("org_co"))!;
   assert.deepEqual(org.safe, plan);
   const read = orgSafePlan(org);
   assert.equal(read.address, ORG_SAFE);
@@ -124,44 +124,44 @@ await check("a company org's plan round-trips through the store and a reload fro
   }
 });
 
-await check("the owner list may change; the address never does", () => {
+await check("the owner list may change; the address never does", async () => {
   const next = { ...plan, owners: [...plan.owners, webauthnOwnerToStore(cara)], createdAt: new Date(0).toISOString() };
-  store.setOrgSafePlan("org_co", next);
-  const org = store.findOrganisation("org_co")!;
+  await store.setOrgSafePlan("org_co", next);
+  const org = (await store.findOrganisation("org_co"))!;
   assert.equal(org.safe!.owners.length, 3);
   assert.equal(org.safe!.createdAt, now, "the first createdAt stays");
-  assert.throws(() => store.setOrgSafePlan("org_co", { ...plan, address: "0x9999999999999999999999999999999999999999" }), /already has its Safe/);
-  assert.equal(store.findOrganisation("org_co")!.safe!.address, ORG_SAFE);
+  await assert.rejects(async () => await store.setOrgSafePlan("org_co", { ...plan, address: "0x9999999999999999999999999999999999999999" }), /already has its Safe/);
+  assert.equal((await store.findOrganisation("org_co"))!.safe!.address, ORG_SAFE);
 });
 
-await check("a deployed plan never goes back to planned", () => {
-  store.setOrgSafePlan("org_co", { ...plan, owners: store.findOrganisation("org_co")!.safe!.owners, status: "active" });
-  assert.throws(() => store.setOrgSafePlan("org_co", { ...plan, status: "planned" }), /cannot go back to planned/);
-  assert.equal(store.findOrganisation("org_co")!.safe!.status, "active");
+await check("a deployed plan never goes back to planned", async () => {
+  await store.setOrgSafePlan("org_co", { ...plan, owners: (await store.findOrganisation("org_co"))!.safe!.owners, status: "active" });
+  await assert.rejects(async () => await store.setOrgSafePlan("org_co", { ...plan, status: "planned" }), /cannot go back to planned/);
+  assert.equal((await store.findOrganisation("org_co"))!.safe!.status, "active");
 });
 
-await check("the plan read and the plan written are copies, never the stored row", () => {
-  const read = orgSafePlan(store.findOrganisation("org_co")!);
+await check("the plan read and the plan written are copies, never the stored row", async () => {
+  const read = orgSafePlan((await store.findOrganisation("org_co"))!);
   read.owners.push({ x: "0x00", y: "0x00" });
   read.owners[0].x = "0x00";
-  const stored = store.findOrganisation("org_co")!.safe!;
+  const stored = (await store.findOrganisation("org_co"))!.safe!;
   assert.notEqual(stored.owners[0].x, "0x00");
   assert.ok(stored.owners.every((o) => o.x !== "0x00"));
   const given = { ...plan, owners: plan.owners.map((o) => ({ ...o })), status: "active" as const };
-  store.setOrgSafePlan("org_co", given);
+  await store.setOrgSafePlan("org_co", given);
   given.owners[0].x = "0x00";
-  assert.notEqual(store.findOrganisation("org_co")!.safe!.owners[0].x, "0x00");
+  assert.notEqual((await store.findOrganisation("org_co"))!.safe!.owners[0].x, "0x00");
 });
 
-await check("only setOrgSafePlan writes a plan, and only for a company", () => {
-  assert.throws(() => store.updateOrganisation("org_bare", { safe: plan }), /setOrgSafePlan only/);
+await check("only setOrgSafePlan writes a plan, and only for a company", async () => {
+  await assert.rejects(async () => await store.updateOrganisation("org_bare", { safe: plan }), /setOrgSafePlan only/);
   for (const id of ["org_sole", "org_legacy", "org_me"]) {
-    assert.throws(() => store.setOrgSafePlan(id, plan), /not a company/, id);
-    assert.equal(store.findOrganisation(id)!.safe, undefined, id);
+    await assert.rejects(async () => await store.setOrgSafePlan(id, plan), /not a company/, id);
+    assert.equal((await store.findOrganisation(id))!.safe, undefined, id);
   }
 });
 
-await check("a malformed plan is refused, not repaired", () => {
+await check("a malformed plan is refused, not repaired", async () => {
   const bad = [
     { ...plan, kind: "personal" },
     { ...plan, address: "0x5afe" },
@@ -173,26 +173,26 @@ await check("a malformed plan is refused, not repaired", () => {
     { ...plan, owners: [{ x: "0x01", y: plan.owners[0].y }] },
     { ...plan, createdAt: "yesterday" },
   ];
-  for (const b of bad) assert.throws(() => store.setOrgSafePlan("org_bare", b as any), /not a valid org Safe plan/, JSON.stringify(b).slice(0, 80));
-  assert.equal(store.findOrganisation("org_bare")!.safe, undefined);
+  for (const b of bad) await assert.rejects(async () => await store.setOrgSafePlan("org_bare", b as any), /not a valid org Safe plan/, JSON.stringify(b).slice(0, 80));
+  assert.equal((await store.findOrganisation("org_bare"))!.safe, undefined);
 });
 
-await check("a company org with no plan is refused by name; no caller's Safe to fall back to", () => {
+await check("a company org with no plan is refused by name; no caller's Safe to fall back to", async () => {
   assert.equal(orgSafePlan.length, 1, "the resolver takes the org alone, never a user");
   const refusal = (org: any) => { try { orgSafePlan(org); } catch (e) { return e; } assert.fail("expected a refusal"); };
-  const missing = refusal(store.findOrganisation("org_bare")) as InstanceType<typeof OrgSafePlanRefusal>;
+  const missing = refusal(await store.findOrganisation("org_bare")) as InstanceType<typeof OrgSafePlanRefusal>;
   assert.ok(missing instanceof OrgSafePlanRefusal);
   assert.equal(missing.code, "ORG_SAFE_MISSING");
   assert.equal(missing.status, 409);
   for (const id of ["org_sole", "org_legacy", "org_me"]) {
-    assert.equal((refusal(store.findOrganisation(id)) as any).code, "NOT_A_COMPANY", id);
+    assert.equal((refusal(await store.findOrganisation(id)) as any).code, "NOT_A_COMPANY", id);
   }
   const unreadable = refusal({ type: "business", entity: "company", safe: { ...plan, owners: [] } });
   assert.equal((unreadable as any).code, "ORG_SAFE_UNREADABLE");
 });
 
-await check("the public org projection carries no plan", () => {
-  const view = publicOrg(store.findOrganisation("org_co")!);
+await check("the public org projection carries no plan", async () => {
+  const view = await publicOrg((await store.findOrganisation("org_co"))!);
   assert.ok(!("safe" in view));
   assert.ok(!JSON.stringify(view).toLowerCase().includes(ORG_SAFE.toLowerCase().slice(2)));
 });
@@ -214,7 +214,7 @@ await check("personal still refuses at threshold 2", async () => {
 });
 
 await check("the org path reads the chain's owners and threshold and refuses too few or stale signers", async () => {
-  const stored = orgSafePlan(store.findOrganisation("org_co")!);
+  const stored = orgSafePlan((await store.findOrganisation("org_co"))!);
   threshold = 2;
   reads.length = 0;
   await assert.rejects(prepareSafeOperation(stored, txs, []), /must be an owner/);

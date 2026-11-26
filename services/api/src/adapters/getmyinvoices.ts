@@ -294,7 +294,7 @@ export class GetMyInvoicesClient {
    * called before the add goes out, and with the uid once it is known, so
    * the caller can record the line before anything after it can fail.
    */
-  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, markers: string[], documentUid?: number, superseded: number[] = [], held: (transactionUid?: number) => void = () => {}): Promise<GmiBankLineResult> {
+  async pushBankLine(bankAccountUid: number, tx: GmiBankTransaction, markers: string[], documentUid?: number, superseded: number[] = [], held: (transactionUid?: number) => void | Promise<void> = () => {}): Promise<GmiBankLineResult> {
     const find = async (): Promise<number | undefined> => {
       for (const m of markers) {
         const uid = (await this.findBankTransactions(bankAccountUid, m, tx.bookingDate))[0]?.transactionUid;
@@ -305,7 +305,7 @@ export class GetMyInvoicesClient {
     let transactionUid: number | undefined = await find();
     let outcome: GmiBankLineResult["outcome"] = transactionUid ? "exists" : "added";
     if (!transactionUid) {
-      held();
+      await held();
       try {
         transactionUid = await this.addBankTransaction(bankAccountUid, tx);
       } catch (err) {
@@ -324,7 +324,7 @@ export class GetMyInvoicesClient {
         if (!transactionUid) return { outcome: "unknown", error: redactedMessage(err) };
       }
     }
-    held(transactionUid);
+    await held(transactionUid);
     const already = await this.assignedDocumentUids(bankAccountUid, transactionUid).catch(() => undefined);
     const stale = superseded.filter((uid) => !already || already.includes(uid)).length;
     const flag = stale ? { revokedStillAttached: stale } : {};

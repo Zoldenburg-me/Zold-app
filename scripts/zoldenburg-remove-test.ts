@@ -30,7 +30,7 @@ const { createZoldenburgRecoveryRouter } = await import("../services/api/src/rou
 const { smartAccountForPasskey, webauthnOwnerFromStore } = await import("../services/api/src/wallet/candide.js");
 type RecoveryModuleState = import("../services/api/src/wallet/candide.js").RecoveryModuleState;
 
-initStore();
+await initStore();
 let failed = 0;
 async function check(name: string, fn: () => Promise<void>) {
   try { await fn(); console.log(`  ok  ${name}`); }
@@ -105,7 +105,7 @@ async function guardedAccount() {
   const key = await makePasskey(id);
   // The Safe address the passkey deterministically deploys to, as the route checks.
   const address = smartAccountForPasskey(webauthnOwnerFromStore(key.point)).accountAddress as `0x${string}`;
-  store.addUser({
+  await store.addUser({
     id, name: `Person ${n}`, email: `r${n}@example.com`, country: "DE", kycStatus: "approved", createdAt: now,
     address, iban: "",
     passkey: key.stored,
@@ -114,7 +114,7 @@ async function guardedAccount() {
       recovery: { moduleAddress: MODULE, guardianAddress: GUARDIAN, threshold: 1, status: "active", enabledAt: now },
     },
   } as any);
-  return { id, token: issueSession(id), key };
+  return { id, token: await issueSession(id), key };
 }
 const removeUrl = (id: string) => `/api/users/${id}/recovery/zoldenburg/remove`;
 
@@ -141,7 +141,7 @@ await check("a recovery that starts after preparing refuses the submit, and the 
   assert.equal(r.status, 409, r.text);
   assert.equal(r.data.code, "RECOVERY_PENDING");
   assert.equal(chain.reads, readsBefore + 1, "the chain is read again at submit");
-  assert.equal(store.findUser(a.id)!.passkeySafe!.recovery?.status, "active", "Zoldenburg is still recorded as guardian");
+  assert.equal((await store.findUser(a.id))!.passkeySafe!.recovery?.status, "active", "Zoldenburg is still recorded as guardian");
   const again = await call(prep.data.submitTo, a.token, await a.key.assert(prep.data.challenge));
   assert.equal(again.status, 404, "the refused op cannot be submitted later");
 });
@@ -154,7 +154,7 @@ await check("with no recovery pending, the passkey-approved removal goes through
   const r = await call(prep.data.submitTo, a.token, await a.key.assert(prep.data.challenge));
   assert.equal(r.status, 200, r.text);
   assert.ok(chain.reads > readsBefore, "the chain is read again at submit");
-  const user = store.findUser(a.id)!;
+  const user = (await store.findUser(a.id))!;
   assert.equal(user.passkeySafe!.recovery, undefined);
   assert.equal(user.passkeySafe!.recoveryChoice?.choice, "declined");
 });

@@ -144,27 +144,33 @@ export class SyncRefusal extends Error {}
 
 /** At the ceiling a wallet's sync pauses with its cursor kept. Written once,
  *  not on every tick: each write rewrites the whole database file. */
-function pauseAtCeiling(walletId: string, ceiling: number): void {
-  const error = `The books hold the most rows one organisation may keep (${ceiling.toLocaleString("en")}), so syncing this wallet is paused. Ask support@zoldhq.com to raise the limit.`;
-  if (store.findImportedWallet(walletId)?.sync.error !== error) patchSync(walletId, { status: "error", error });
+async function pauseAtCeiling(walletId: string, ceiling: number): Promise<void> {
+  return store.tx(async () => {
+    const error = `The books hold the most rows one organisation may keep (${ceiling.toLocaleString("en")}), so syncing this wallet is paused. Ask support@zoldhq.com to raise the limit.`;
+    if ((await store.findImportedWallet(walletId))?.sync.error !== error) await patchSync(walletId, { status: "error", error });
+  });
 }
 
-function patchSync(walletId: string, sync: Partial<ImportedWallet["sync"]>): boolean {
-  const current = store.findImportedWallet(walletId);
-  if (!current) return false;
-  store.updateImportedWallet(walletId, { sync: { ...current.sync, ...sync } });
-  return true;
+async function patchSync(walletId: string, sync: Partial<ImportedWallet["sync"]>): Promise<boolean> {
+  return store.tx(async () => {
+    // Held: two writers of one wallet's sync state never merge into a stale copy.
+    await store.lockKey(`imported-wallet:${walletId}`);
+    const current = await store.findImportedWallet(walletId);
+    if (!current) return false;
+    await store.updateImportedWallet(walletId, { sync: { ...current.sync, ...sync } });
+    return true;
+  });
 }
 
 /** Addresses the org holds, other than this wallet: its other imported
  *  wallets and its Zold accounts (on the app chain). */
-function ownAddressesOf(wallet: ImportedWallet) {
+async function ownAddressesOf(wallet: ImportedWallet) {
   return [
-    ...store
-      .importedWalletsOf(wallet.orgId)
+    ...(await store
+      .importedWalletsOf(wallet.orgId))
       .filter((w) => w.id !== wallet.id)
       .map((w) => ({ chainId: w.chainId, address: w.address })),
-    ...store.accounts
+    ...(await store.list("accounts"))
       .filter((a) => a.orgId === wallet.orgId && a.address)
       .map((a) => ({ chainId: CHAIN_ID, address: a.address! })),
   ];
@@ -234,10 +240,14 @@ async function blockHashOf(reader: ChainReader, blockNumber: bigint): Promise<`0
 }
 
 export async function syncWallet(
-  wallet: ImportedWallet,
+  given: ImportedWallet,
   reader: ChainReader,
   opts: SyncOptions = {},
 ): Promise<{ added: number; skipped: number }> {
+  // From the row as stored, not the copy the caller listed: its cursor may
+  // have moved since, and a wallet removed meanwhile is not synced.
+  const wallet = await store.findImportedWallet(given.id);
+  if (!wallet) return { added: 0, skipped: 0 };
   const now = opts.now ?? (() => new Date().toISOString());
   const value = opts.value ?? valueTransfer;
   const loadLists = opts.lists ?? (() => loadTokenLists());
@@ -248,13 +258,13 @@ export async function syncWallet(
   let skipped = 0;
   try {
     // Already full: pause before asking the chain anything.
-    if (store.ledgerOf(wallet.orgId).length >= ledgerCeiling) {
-      pauseAtCeiling(wallet.id, ledgerCeiling);
+    if ((await store.ledgerOf(wallet.orgId)).length >= ledgerCeiling) {
+      await pauseAtCeiling(wallet.id, ledgerCeiling);
       return { added, skipped };
     }
-    const own = ownAddressesOf(wallet);
-    if (wallet.chainId === CHAIN_ID && store.accounts.some((a) => a.orgId === wallet.orgId && a.address?.toLowerCase() === wallet.address.toLowerCase())) {
-      patchSync(wallet.id, { status: "error", error: "This is the organisation's own Zold account, which is already in the books." });
+    const own = await ownAddressesOf(wallet);
+    if (wallet.chainId === CHAIN_ID && (await store.list("accounts")).some((a) => a.orgId === wallet.orgId && a.address?.toLowerCase() === wallet.address.toLowerCase())) {
+      await patchSync(wallet.id, { status: "error", error: "This is the organisation's own Zold account, which is already in the books." });
       return { added, skipped };
     }
     const reported = await reader.getChainId();
@@ -268,7 +278,14 @@ export async function syncWallet(
     // The cursor this run reads from. A window is written only while the
     // stored cursor still equals it.
     let readFrom = wallet.sync.cursor;
-    const cursorMoved = () => store.findImportedWallet(wallet.id)?.sync.cursor !== readFrom;
+    const cursorMoved = async () => (await store.findImportedWallet(wallet.id))?.sync.cursor !== readFrom;
+    // Writes `sync` only while the stored cursor is still readFrom, checked
+    // under the wallet's lock: false when another run moved it first.
+    const patchAtCursor = async (sync: Partial<ImportedWallet["sync"]>) => await store.tx(async () => {
+      await store.lockKey(`imported-wallet:${wallet.id}`);
+      if (await cursorMoved()) return false;
+      return await patchSync(wallet.id, sync);
+    });
     let cursor: bigint;
     if (readFrom !== undefined) {
       cursor = BigInt(readFrom);
@@ -279,26 +296,24 @@ export async function syncWallet(
         // A start whose hash read failed: read it now, so an idle chain (no
         // window to book) does not leave the import in error.
         const cursorHash = await blockHashOf(reader, cursor);
-        if (cursorMoved()) return { added, skipped };
-        patchSync(wallet.id, { cursorHash, ...(cursor >= safeHead ? { status: "synced", lastSyncedAt: now(), error: undefined } : {}) });
+        if (!(await patchAtCursor({ cursorHash, ...(cursor >= safeHead ? { status: "synced", lastSyncedAt: now(), error: undefined } : {}) }))) return { added, skipped };
       }
     } else if (wallet.sync.from) {
       cursor = (await firstBlockAtOrAfter(reader, `${wallet.sync.from}T00:00:00.000Z`, safeHead)) - 1n;
     } else {
       // The start is fixed before its hash is read: a failed read must not
       // let the next poll start from a later head and skip the blocks between.
-      if (cursorMoved()) return { added, skipped };
-      patchSync(wallet.id, { cursor: safeHead.toString() });
+      if (!(await patchAtCursor({ cursor: safeHead.toString() }))) return { added, skipped };
       readFrom = safeHead.toString();
       const cursorHash = await blockHashOf(reader, safeHead);
-      if (!cursorMoved()) patchSync(wallet.id, { cursorHash, status: "synced", lastSyncedAt: now(), error: undefined });
+      await patchAtCursor({ cursorHash, status: "synced", lastSyncedAt: now(), error: undefined });
       return { added, skipped };
     }
 
     // The checkpoint each window builds on: a window booked earlier in this
     // run is re-checked before the next one replaces its hash.
     let committedHash: string | undefined;
-    const known = new Set(store.ledgerOf(wallet.orgId).map((e) => e.id));
+    const known = new Set((await store.ledgerOf(wallet.orgId)).map((e) => e.id));
     const blockTimes = new Map<bigint, string>();
     const tokens = new Map<string, TokenInfo>();
     for (let w = 0; w < WALLET_SYNC.windowsPerTick && cursor < safeHead; w++) {
@@ -306,7 +321,7 @@ export async function syncWallet(
       const fromBlock = cursor + 1n;
       const { toBlock, transfers, gap } = await readWindow(reader, wallet, fromBlock, safeHead);
 
-      const contacts = store.contactsOf(wallet.orgId);
+      const contacts = await store.contactsOf(wallet.orgId);
       const fresh: LedgerEntry[] = [];
       let windowSkipped = gap ? 1 : 0;
       let lastSkipReason: string | undefined = gap;
@@ -368,18 +383,30 @@ export async function syncWallet(
       const cursorHash = await blockHashOf(reader, toBlock);
       // Removed while we read the chain: book nothing for it. Another run
       // wrote this window first: it is booked, and that run carries on.
-      if (!store.findImportedWallet(wallet.id) || cursorMoved()) return { added, skipped };
+      // Checked again under the lock below, before anything is written.
+      if (!(await store.findImportedWallet(wallet.id)) || (await cursorMoved())) return { added, skipped };
       // At the ceiling the wallet pauses here: nothing in this window is
       // booked or skipped and the cursor stays, so a raised ceiling picks up
       // where it stopped.
       if (known.size > ledgerCeiling) {
-        pauseAtCeiling(wallet.id, ledgerCeiling);
+        await pauseAtCeiling(wallet.id, ledgerCeiling);
         return { added, skipped };
       }
-      store.batched(() => {
-        if (fresh.length) store.addLedgerEntries(applyRules(store.rulesOf(wallet.orgId), fresh).entries);
-        const prior = store.findImportedWallet(wallet.id)?.sync.skipped ?? 0;
-        patchSync(wallet.id, {
+      const wrote = await store.tx(async () => {
+        // The wallet first: the JSON backend has no rollback, so the cursor
+        // is checked before the first ledger write, not after it.
+        await store.lockKey(`imported-wallet:${wallet.id}`);
+        if (!(await store.findImportedWallet(wallet.id)) || (await cursorMoved())) return false;
+        // Every ledger writer of the org takes this lock before it reads the
+        // rows it changes; a row booked since `known` was read is not added twice.
+        if (fresh.length) {
+          await store.lockKey(`ledger:${wallet.orgId}`);
+          const booked = new Set((await store.ledgerOf(wallet.orgId)).map((e) => e.id));
+          const toBook = fresh.filter((e) => !booked.has(e.id));
+          if (toBook.length) await store.addLedgerEntries(applyRules(await store.rulesOf(wallet.orgId), toBook).entries);
+        }
+        const prior = (await store.findImportedWallet(wallet.id))?.sync.skipped ?? 0;
+        await patchSync(wallet.id, {
           cursor: toBlock.toString(),
           cursorHash,
           status: toBlock >= safeHead ? "synced" : "syncing",
@@ -387,7 +414,9 @@ export async function syncWallet(
           error: undefined,
           ...(windowSkipped ? { skipped: prior + windowSkipped, lastSkipReason } : {}),
         });
+        return true;
       });
+      if (!wrote) return { added, skipped };
       added += fresh.length;
       skipped += windowSkipped;
       cursor = toBlock;
@@ -398,7 +427,7 @@ export async function syncWallet(
   } catch (e) {
     const shown = e instanceof HoldWindow ? e.message : publicSyncError(e);
     if (!(e instanceof HoldWindow)) console.error(`wallet sync: ${wallet.id} on chain ${wallet.chainId}: ${shown}`);
-    patchSync(wallet.id, { status: "error", error: shown });
+    await patchSync(wallet.id, { status: "error", error: shown });
     return { added, skipped };
   }
 }
@@ -519,13 +548,13 @@ export async function pollWalletSyncOnce(): Promise<number> {
   polling = true;
   try {
     let added = 0;
-    for (const wallet of [...store.importedWallets]) {
+    for (const wallet of [...await store.list("importedWallets")]) {
       const rpc = WALLET_SYNC.rpcs[wallet.chainId];
       if (!rpc) {
         const error = `Zold does not read network ${wallet.chainId} yet, so nothing from this wallet is booked.`;
         if (wallet.sync.error !== error) {
           console.log(`wallet sync: ${wallet.id} is on chain ${wallet.chainId}, which has no WALLET_SYNC_RPC_${wallet.chainId}`);
-          patchSync(wallet.id, { status: "error", error });
+          await patchSync(wallet.id, { status: "error", error });
         }
         continue;
       }

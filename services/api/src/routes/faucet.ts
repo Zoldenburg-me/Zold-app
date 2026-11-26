@@ -19,7 +19,7 @@ import { wrap } from "./util.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface FaucetDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 const STATUS = { FAUCET_OFF: 404, NO_SAFE: 409, ALREADY_GRANTED: 409, FAUCET_DRY: 503, FAUCET_FAILED: 502 } as const;
@@ -32,12 +32,12 @@ export function createFaucetRouter({ requireUserSession }: FaucetDeps) {
   router.post(
     "/users/:id/faucet",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       const result = await faucetFundSafe(user.id);
       if (!result.ok) return res.status(STATUS[result.code]).json({ error: result.error, code: result.code });
-      res.status(201).json({ ...result, user: publicUser(store.findUser(user.id)!) });
+      res.status(201).json({ ...result, user: await publicUser((await store.findUser(user.id))!) });
     }),
   );
   router.get("/faucet", (_req, res) => {

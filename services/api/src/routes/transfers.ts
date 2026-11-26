@@ -22,7 +22,6 @@ import {
 import { store } from "../store.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../adapters/monerium-connection.js";
 import { requireCapability, requireKycApproved } from "../http/guards.js";
-import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { buildTransferFromQuote } from "../transfers/build.js";
 import { userTransfer } from "../transfers/user-transfer.js";
 import { buildActivity } from "../transfers/activity.js";
@@ -38,7 +37,7 @@ import { auditEntry } from "../audit.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface TransferDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 
@@ -71,13 +70,13 @@ export function createTransferRouter(deps: TransferDeps) {
           code: "RAIL_CLOSED",
         });
       }
-      const user = store.findUser(userId);
+      const user = await store.findUser(userId);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      if (!requireCapability(user, "onchain_balance", res)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
+      if (!(await requireCapability(user, "onchain_balance", res))) return;
       // SEPA is Monerium's rail. A wallet-tier segment has an on-chain balance
       // but no fiat partner, so the partner capability is checked by name.
-      if (rail === "sepa" && !requireCapability(user, "monerium", res)) return;
+      if (rail === "sepa" && !(await requireCapability(user, "monerium", res))) return;
       if (!requireKycApproved(user, res)) return;
       if (!["cash", "sepa"].includes(rail)) {
         return res.status(400).json({ error: "rail must be cash or sepa" });
@@ -105,14 +104,15 @@ export function createTransferRouter(deps: TransferDeps) {
     "/transfers",
     wrap(async (req, res) => {
       const { quoteId, recipientName, recipientPhone, recipientIban, reference } = req.body ?? {};
-      const quote = store.findQuote(quoteId);
+      const quote = await store.findQuote(quoteId);
       if (!quote) return res.status(404).json({ error: "quote not found" });
-      if (!requireUserSession(req, res, quote.userId)) return;
+      if (!(await requireUserSession(req, res, quote.userId))) return;
       if ((quote.status ?? "OPEN") !== "OPEN") {
         return res.status(409).json({ error: `quote already ${quote.status.toLowerCase()}` });
       }
       if (isExpired(quote)) {
-        store.updateQuote(quote.id, { status: "EXPIRED" });
+        // Only from OPEN: a parallel request may have consumed it meanwhile.
+        await store.expireQuote(quote.id);
         return res.status(410).json({ error: "quote expired, request a new one" });
       }
       if (typeof recipientName !== "string" || !recipientName.trim() || recipientName.length > 140) {
@@ -162,10 +162,10 @@ export function createTransferRouter(deps: TransferDeps) {
   router.get(
     "/users/:id/transfers",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
-      const transfers = store.transfers
+      if (!(await requireUserSession(req, res, user.id))) return;
+      const transfers = (await store.list("transfers"))
         .filter((t) => t.userId === user.id)
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
         .map(userTransfer);
@@ -176,17 +176,17 @@ export function createTransferRouter(deps: TransferDeps) {
   router.get(
     "/users/:id/activity",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       const mine = <T extends { userId?: string }>(rows: T[]) => rows.filter((r) => r.userId === user.id);
       res.json({
         activity: buildActivity({
-          transfers: mine(store.transfers),
-          deposits: mine(store.cryptoDeposits),
-          issues: mine(store.moneriumIssueOrders),
+          transfers: mine(await store.list("transfers")),
+          deposits: mine(await store.list("cryptoDeposits")),
+          issues: mine(await store.list("moneriumIssueOrders")),
           // A company send the user queued is the company's money, not theirs.
-          cryptoSends: mine(store.cryptoSends.filter((c) => !c.safeOpId)),
+          cryptoSends: mine((await store.list("cryptoSends")).filter((c) => !c.safeOpId)),
         }),
       });
     }),
@@ -195,9 +195,9 @@ export function createTransferRouter(deps: TransferDeps) {
   router.get(
     "/transfers/:id",
     wrap(async (req, res) => {
-      const t = store.findTransfer(req.params.id);
+      const t = await store.findTransfer(req.params.id);
       if (!t) return res.status(404).json({ error: "transfer not found" });
-      if (!requireUserSession(req, res, t.userId)) return;
+      if (!(await requireUserSession(req, res, t.userId))) return;
       res.json(userTransfer(t));
     }),
   );
@@ -205,9 +205,9 @@ export function createTransferRouter(deps: TransferDeps) {
   router.post(
     "/transfers/:id/refresh-payout",
     wrap(async (req, res) => {
-      const t = store.findTransfer(req.params.id);
+      const t = await store.findTransfer(req.params.id);
       if (!t) return res.status(404).json({ error: "transfer not found" });
-      if (!requireUserSession(req, res, t.userId)) return;
+      if (!(await requireUserSession(req, res, t.userId))) return;
       res.json(userTransfer(await refreshPayout(t, { timeoutMs: 0 })));
     }),
   );
@@ -218,9 +218,9 @@ export function createTransferRouter(deps: TransferDeps) {
   router.post(
     "/users/:id/authorizer/challenge",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (!requireKycApproved(user, res)) return;
       const address = req.body?.address;
       if (!isAddress(address)) return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
@@ -237,9 +237,9 @@ export function createTransferRouter(deps: TransferDeps) {
   router.post(
     "/users/:id/authorizer",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (!requireKycApproved(user, res)) return;
       const address = req.body?.address;
       if (!isAddress(address)) return res.status(400).json({ error: "address required (0x-prefixed, 20 bytes)" });
@@ -255,11 +255,11 @@ export function createTransferRouter(deps: TransferDeps) {
       }
       // Read fresh each time: the verifications await, and a binding that
       // landed meanwhile must not be overwritten.
-      const answeredBound = () => {
-        const current = store.findUser(user.id)!;
+      const answeredBound = async () => {
+        const current = (await store.findUser(user.id))!;
         const now = current.authorizerAddress?.toLowerCase();
         if (now === address.toLowerCase()) {
-          res.json(publicUser(current));
+          res.json(await publicUser(current));
           return true;
         }
         if (now !== before) {
@@ -268,7 +268,7 @@ export function createTransferRouter(deps: TransferDeps) {
         }
         return false;
       };
-      if (answeredBound()) return;
+      if ((await answeredBound())) return;
       const { nonce, signature } = req.body?.proof ?? {};
       const proven =
         typeof nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(nonce) &&
@@ -282,19 +282,23 @@ export function createTransferRouter(deps: TransferDeps) {
       if (!proven) {
         return res.status(401).json({ error: "sign a fresh binding challenge with the device key being bound", code: "AUTHORIZER_PROOF" });
       }
-      if (answeredBound()) return; // no await from here to the write
-      const updated = store.updateUser(user.id, { authorizerAddress: address });
-      store.audit(auditEntry("user.authorizer_bound", { from: before ?? null, to: address.toLowerCase() }, user.id));
-      res.status(201).json(publicUser(updated));
+      // The re-check and the write are one transaction.
+      const updated = await store.tx(async () => {
+        await store.lockUser(user.id);
+        return (await answeredBound()) ? undefined : await store.updateUser(user.id, { authorizerAddress: address });
+      });
+      if (!updated) return;
+      await store.audit(auditEntry("user.authorizer_bound", { from: before ?? null, to: address.toLowerCase() }, user.id));
+      res.status(201).json(await publicUser(updated));
     }),
   );
 
   router.post(
     "/transfers/:id/authorize",
     wrap(async (req, res) => {
-      const transfer = store.findTransfer(req.params.id);
+      const transfer = await store.findTransfer(req.params.id);
       if (!transfer) return res.status(404).json({ error: "transfer not found" });
-      if (!requireUserSession(req, res, transfer.userId)) return;
+      if (!(await requireUserSession(req, res, transfer.userId))) return;
       if (transfer.state !== "CREATED") {
         return res.status(409).json({ error: `transfer is ${transfer.state}, expected CREATED` });
       }
@@ -317,10 +321,10 @@ export function createTransferRouter(deps: TransferDeps) {
           return res.status(400).json({ error: "moneriumRedeemSignature must be a 0x signature" });
         }
       }
-      let user = store.findUser(transfer.userId)!;
+      let user = (await store.findUser(transfer.userId))!;
       // A company's Safe is signed by its owners in the org's queue, never by
       // one account's passkey here: refused before any assertion is read.
-      if (isCompanySafe(user.address)) {
+      if ((await isCompanySafe(user.address))) {
         return res.status(403).json({
           code: "COMPANY_SAFE",
           error: "This Safe belongs to a company. Its owners sign its payments in the company's queue, not here.",
@@ -335,8 +339,7 @@ export function createTransferRouter(deps: TransferDeps) {
       // signature counter the redeem assertion has the higher count; checking
       // it first would make the execution assertion look like a cloned
       // authenticator and fail every Safe-funded SEPA send.
-      prunePendingTransferExecutions();
-      const pendingExecution = pendingTransferExecutions.get(transfer.id);
+      const pendingExecution = await store.findPendingExecution("transfer", transfer.id);
       if (pendingExecution && pendingExecution.userId !== user.id) {
         return res.status(403).json({ error: "Safe execution belongs to a different account" });
       }
@@ -374,7 +377,7 @@ export function createTransferRouter(deps: TransferDeps) {
             pendingExecution.challenge,
             true,
           );
-          const updated = store.recordPasskeyUse(user.id, credentialId, signCount);
+          const updated = await store.recordPasskeyUse(user.id, credentialId, signCount);
           if (!updated) throw new Error("this passkey is no longer the account's passkey");
           user = updated;
         } catch (err: any) {
@@ -411,7 +414,7 @@ export function createTransferRouter(deps: TransferDeps) {
             expectedChallenge,
             true,
           );
-          const updated = store.recordPasskeyUse(user.id, credentialId, signCount);
+          const updated = await store.recordPasskeyUse(user.id, credentialId, signCount);
           if (!updated) throw new Error("this passkey is no longer the account's passkey");
           user = updated;
           effectiveRedeemSignature = await signMessageAsPasskeySafe(
@@ -441,7 +444,14 @@ export function createTransferRouter(deps: TransferDeps) {
       // same signature both clear the CREATED check above, and both could submit
       // the same spend. claimAuthorization is the atomic boundary: after it
       // succeeds once, every other caller sees the authorizedAt marker and stops.
-      if (!store.claimAuthorization(transfer.id)) {
+      // The prepared operation goes with the claim, in one transaction: a
+      // replayed approval finds neither.
+      const claimed = await store.tx(async () => {
+        if (!(await store.claimAuthorization(transfer.id))) return false;
+        await store.dropPendingExecution("transfer", transfer.id);
+        return true;
+      });
+      if (!claimed) {
         return res.status(409).json({ error: "authorization already submitted for this transfer" });
       }
       // Hand the user-approved execution to the orchestrator. The claim above
@@ -460,9 +470,8 @@ export function createTransferRouter(deps: TransferDeps) {
             ...(pendingExecution.batch ? { batch: pendingExecution.batch } : {}),
           }
         : undefined;
-      if (pendingExecution) pendingTransferExecutions.delete(transfer.id);
       if (effectiveRedeemSignature && transfer.moneriumRedeem) {
-        executableTransfer = store.updateTransfer(transfer.id, {
+        executableTransfer = await store.updateTransfer(transfer.id, {
           moneriumRedeem: {
             ...transfer.moneriumRedeem,
             signature: effectiveRedeemSignature,
@@ -470,7 +479,7 @@ export function createTransferRouter(deps: TransferDeps) {
           },
         });
       } else {
-        executableTransfer = store.findTransfer(transfer.id)!;
+        executableTransfer = (await store.findTransfer(transfer.id))!;
       }
       const auth = { deadline: transfer.auth.deadline, signature: signature as `0x${string}` };
       const result =

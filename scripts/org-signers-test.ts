@@ -46,7 +46,7 @@ const { createOrgSafeRoutes } = await import("../services/api/src/routes/busines
 const { orgSigners, opSigners } = await import("../services/api/src/domain/org-signers.js");
 const { memberForOwner, ownerAddressOfMember } = await import("../services/api/src/wallet/org-signers.js");
 const { passkeyOwnerAddressOfJwk } = await import("../services/api/src/wallet/safe-signers.js");
-initStore();
+await initStore();
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -151,38 +151,38 @@ const SAFE = "0x5afe5afe5afe5afe5afe5afe5afe5afe5afe5afe" as const;
 const COORD = () => `0x${randomBytes(32).toString("hex")}`;
 const keys: Record<string, Awaited<ReturnType<typeof makeSoftwarePasskey>>> = {};
 const addr: Record<string, `0x${string}`> = {};
-const org = (id: string, extra: Record<string, unknown>) =>
-  store.addOrganisation({ id, name: id, plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now, ...extra } as any);
-org("org_co", { type: "business", entity: "company" });
-org("org_st", { type: "business", entity: "sole_trader" });
-org("org_pers", { type: "personal" });
-org("org_other", { type: "business", entity: "company" });
+const org = async (id: string, extra: Record<string, unknown>) =>
+  await store.addOrganisation({ id, name: id, plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now, ...extra } as any);
+await org("org_co", { type: "business", entity: "company" });
+await org("org_st", { type: "business", entity: "sole_trader" });
+await org("org_pers", { type: "personal" });
+await org("org_other", { type: "business", entity: "company" });
 for (const p of ["anna", "bert", "vera", "nina", "olga"]) {
   if (p !== "bert") {
     keys[p] = await makeSoftwarePasskey(p, ORIGIN);
     addr[p] = passkeyOwnerAddressOfJwk(keys[p].jwk)!;
   }
-  store.addUser({
+  await store.addUser({
     id: `u_${p}`, ...(p === "bert" ? {} : { name: p[0].toUpperCase() + p.slice(1) }), country: "DE", kycStatus: "approved",
     ...(keys[p] ? { passkey: { credentialId: keys[p].credentialId, publicKey: { alg: "ES256", jwk: keys[p].jwk }, signCount: 0, rpId: "localhost", createdAt: now } } : {}),
     createdAt: now,
   } as any);
 }
-const member = (id: string, orgId: string, userId: string, role: string, email = "") =>
-  store.addMember({ id, orgId, userId, email, role, status: "active", invitedAt: now, acceptedAt: now } as any);
-member("m_anna", "org_co", "u_anna", "owner");
-member("m_bert", "org_co", "u_bert", "owner", "bert@co.example"); // no passkey yet, no name
-member("m_vera", "org_co", "u_vera", "viewer");
-member("m_st", "org_st", "u_anna", "owner");
-member("m_pers", "org_pers", "u_anna", "owner");
-member("m_olga", "org_other", "u_olga", "owner");
+const member = async (id: string, orgId: string, userId: string, role: string, email = "") =>
+  await store.addMember({ id, orgId, userId, email, role, status: "active", invitedAt: now, acceptedAt: now } as any);
+await member("m_anna", "org_co", "u_anna", "owner");
+await member("m_bert", "org_co", "u_bert", "owner", "bert@co.example"); // no passkey yet, no name
+await member("m_vera", "org_co", "u_vera", "viewer");
+await member("m_st", "org_st", "u_anna", "owner");
+await member("m_pers", "org_pers", "u_anna", "owner");
+await member("m_olga", "org_other", "u_olga", "owner");
 
-await check("ownerAddressOfMember is the login passkey's address; memberForOwner searches one org", () => {
-  assert.equal(ownerAddressOfMember(store.findMember("m_anna")!), addr.anna);
-  assert.equal(ownerAddressOfMember(store.findMember("m_bert")!), null, "no passkey: no address");
-  assert.equal(memberForOwner("org_co", addr.anna.toLowerCase())?.id, "m_anna");
-  assert.equal(memberForOwner("org_co", addr.olga), undefined, "another org's owner is not this org's");
-  assert.equal(memberForOwner("org_co", addr.vera), undefined, "a viewer is no owner");
+await check("ownerAddressOfMember is the login passkey's address; memberForOwner searches one org", async () => {
+  assert.equal(await ownerAddressOfMember((await store.findMember("m_anna"))!), addr.anna);
+  assert.equal(await ownerAddressOfMember((await store.findMember("m_bert"))!), null, "no passkey: no address");
+  assert.equal((await memberForOwner("org_co", addr.anna.toLowerCase()))?.id, "m_anna");
+  assert.equal(await memberForOwner("org_co", addr.olga), undefined, "another org's owner is not this org's");
+  assert.equal(await memberForOwner("org_co", addr.vera), undefined, "a viewer is no owner");
 });
 
 const stub = { owners: [] as `0x${string}`[], threshold: 1, fail: false, reads: 0 };
@@ -197,7 +197,7 @@ const app = express();
 app.use(express.json());
 const who = (req: any) => req.header("x-user");
 const requireSession = (req: any, res: any) => (who(req) ? { userId: who(req) } : (res.status(401).json({ error: "no session" }), undefined));
-app.use("/api/orgs", createOrgSafeRoutes({ ctxOf: (req, res) => resolveOrg(req, res, requireSession as any) }, reader));
+app.use("/api/orgs", createOrgSafeRoutes({ ctxOf: async (req, res) => await resolveOrg(req, res, requireSession as any) }, reader));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}/api`;
@@ -211,13 +211,13 @@ await check("before the deployment: 200 not_set_up, no chain read", async () => 
   const r = await get("org_co", "u_vera");
   assert.equal(r.status, 200);
   assert.deepEqual(r.data, { state: "not_set_up" });
-  store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: COORD(), y: COORD() }], createdAt: now });
+  await store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: COORD(), y: COORD() }], createdAt: now });
   const planned = await get("org_co", "u_vera");
   assert.deepEqual(planned.data, { state: "not_set_up" }, "a plan with no account at its address is not deployed");
   assert.equal(stub.reads, 0);
 });
 
-store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, address: SAFE, createdAt: now, updatedAt: now } as any);
+await store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, address: SAFE, createdAt: now, updatedAt: now } as any);
 
 await check("a viewer reads owners, threshold and each owner member's status", async () => {
   stub.fail = false;

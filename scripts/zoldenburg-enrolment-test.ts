@@ -140,14 +140,14 @@ const BANK = "DE89370400440532013000";
 const NEW_BANK = "FR0030006000011234567890189";
 const T0 = new Date("2026-10-10T08:00:00Z");
 const at = (min: number) => new Date(T0.getTime() + min * 60_000);
-store.addUser({
+await store.addUser({
   id: "u1", name: "Anna Müller", email: "anna@example.com", country: "DE", kycStatus: "approved", iban: ZOLD_IBAN,
   address: SAFE, createdAt: T0.toISOString(), monerium: { profileId: "p1" },
   passkeySafe: { address: SAFE, status: "active", threshold: 1, passkeyPublicKey: { x: "1", y: "2" }, createdAt: T0.toISOString(),
     recovery: { moduleAddress: `0x${"4".repeat(40)}`, guardianAddress: process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS as `0x${string}`, threshold: 1, status: "active" } },
   passkey: { credentialId: "cred-u1", publicKey: { kty: "EC" } },
 } as any);
-const user = () => store.findUser("u1")!;
+const user = async () => (await store.findUser("u1"))!;
 
 let open = { code: "", memo: "" };
 let n = 0;
@@ -163,9 +163,9 @@ const reads = (orders: any[] | Error, name: string | Error | null = "Anna Mülle
   profileName: async () => { if (name instanceof Error) throw name; return name ?? undefined; },
 });
 
-open = E.issueEnrolmentCode(user(), T0);
+open = await E.issueEnrolmentCode(await user(), T0);
 
-await t("only processed EURe issues to this Safe, after the code, carrying it, are candidates", () => {
+await t("only processed EURe issues to this Safe, after the code, carrying it, are candidates", async () => {
   const good = order();
   const cands = E.candidateOrders([
     good,
@@ -175,35 +175,35 @@ await t("only processed EURe issues to this Safe, after the code, carrying it, a
     order({ meta: { state: "pending", processedAt: at(10).toISOString() } }),
     order(paidAt(-10)),
     order({ memo: "ZOLD AAAA-BBBB" }),
-  ] as any, user());
+  ] as any, await user());
   assert.deepEqual(cands.map((o) => o.id), [good.id]);
 });
 
-await t("refusals: under 1 €, from the Zold IBAN, no payer IBAN, no payer name, another person", () => {
-  const j = (o: any) => E.judgeEnrolmentOrder(o, user(), "Anna Müller") as any;
-  assert.match(j(order({ amount: "0.99" })).reason, /under 1 €/);
-  assert.match(j(order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: ZOLD_IBAN.replace(/ /g, "") } } })).reason, /Zold IBAN/);
-  assert.match(j(order({ counterpart: { details: { name: "Anna Müller" } } })).reason, /which account/);
-  assert.match(j(order({ counterpart: { identifier: { iban: BANK } } })).reason, /payer's name/);
-  assert.match(j(order({ counterpart: { details: { firstName: "Peter", lastName: "Müller" }, identifier: { iban: BANK } } })).reason, /does not match/);
-  assert.deepEqual(j(order({ amount: "5.00" })), { ok: true, iban: BANK });
+await t("refusals: under 1 €, from the Zold IBAN, no payer IBAN, no payer name, another person", async () => {
+  const j = async (o: any) => E.judgeEnrolmentOrder(o, await user(), "Anna Müller") as any;
+  assert.match((await j(order({ amount: "0.99" }))).reason, /under 1 €/);
+  assert.match((await j(order({ counterpart: { details: { name: "Anna Müller" }, identifier: { iban: ZOLD_IBAN.replace(/ /g, "") } } }))).reason, /Zold IBAN/);
+  assert.match((await j(order({ counterpart: { details: { name: "Anna Müller" } } }))).reason, /which account/);
+  assert.match((await j(order({ counterpart: { identifier: { iban: BANK } } }))).reason, /payer's name/);
+  assert.match((await j(order({ counterpart: { details: { firstName: "Peter", lastName: "Müller" }, identifier: { iban: BANK } } }))).reason, /does not match/);
+  assert.deepEqual(await j(order({ amount: "5.00" })), { ok: true, iban: BANK });
 });
 
 await t("fail closed: unreadable orders or profile name leave the code open and store nothing", async () => {
   assert.equal(await E.checkEnrolment("u1", reads(new Error("401")), at(20)), "unreadable");
   assert.equal(await E.checkEnrolment("u1", reads([order()], new Error("down")), at(20)), "unreadable");
   assert.equal(await E.checkEnrolment("u1", reads([order()], null), at(20)), "unreadable");
-  assert.equal(user().zoldenburgEnrolment?.bankAccountHmac, undefined);
-  assert.equal(E.zoldenburgArmed(user()), false);
-  assert.equal(user().zoldenburgEnrolment?.lastCheck?.outcome, "unreadable");
+  assert.equal((await user()).zoldenburgEnrolment?.bankAccountHmac, undefined);
+  assert.equal(E.zoldenburgArmed(await user()), false);
+  assert.equal((await user()).zoldenburgEnrolment?.lastCheck?.outcome, "unreadable");
 });
 
 await t("no payment yet: waiting; a mismatch: the reason, and still not armed", async () => {
   assert.equal(await E.checkEnrolment("u1", reads([]), at(20)), "waiting");
   assert.equal(await E.checkEnrolment("u1", reads([order({ counterpart: { details: { name: "Peter Schmidt" }, identifier: { iban: BANK } } })]), at(21)), "mismatch");
-  assert.match(user().zoldenburgEnrolment!.lastCheck!.reason, /does not match/);
-  assert.ok(!JSON.stringify(user().zoldenburgEnrolment).includes("Peter"), "no payer name stored");
-  assert.equal(E.zoldenburgArmed(user()), false);
+  assert.match((await user()).zoldenburgEnrolment!.lastCheck!.reason, /does not match/);
+  assert.ok(!JSON.stringify((await user()).zoldenburgEnrolment).includes("Peter"), "no payer name stored");
+  assert.equal(E.zoldenburgArmed(await user()), false);
 });
 
 let firstOrder = "";
@@ -212,7 +212,7 @@ await t("the right payment arms: HMAC, last 4, order id; no IBAN, no name; the c
   firstOrder = o.id;
   // A wrong payment beside the right one does not block it.
   assert.equal(await E.checkEnrolment("u1", reads([order({ amount: "0.5" }), o]), at(22)), "enrolled");
-  const e = user().zoldenburgEnrolment!;
+  const e = (await user()).zoldenburgEnrolment!;
   assert.equal(e.bankAccountHmac, E.bankAccountHmac(BANK));
   assert.equal(e.bankAccountLast4, "3000");
   assert.equal(e.orderId, o.id);
@@ -220,29 +220,29 @@ await t("the right payment arms: HMAC, last 4, order id; no IBAN, no name; the c
   assert.equal(e.lastCheck, undefined);
   const row = JSON.stringify(e);
   for (const s of [BANK, "MUELLER", "Müller", "Anna"]) assert.ok(!row.includes(s), `no ${s}`);
-  assert.ok(E.zoldenburgArmed(user()));
+  assert.ok(E.zoldenburgArmed(await user()));
   assert.equal(await E.checkEnrolment("u1", reads([o]), at(23)), "no_code");
 });
 
 await t("a failed re-enrolment keeps the account armed on the old account", async () => {
-  open = E.issueEnrolmentCode(user(), at(30));
+  open = await E.issueEnrolmentCode(await user(), at(30));
   assert.equal(await E.checkEnrolment("u1", reads([order({ ...paidAt(40), counterpart: { details: { name: "Someone Else" }, identifier: { iban: NEW_BANK } } })]), at(41)), "mismatch");
-  assert.ok(E.zoldenburgArmed(user()));
-  assert.equal(user().zoldenburgEnrolment!.orderId, firstOrder);
+  assert.ok(E.zoldenburgArmed(await user()));
+  assert.equal((await user()).zoldenburgEnrolment!.orderId, firstOrder);
   assert.equal(await E.checkEnrolment("u1", reads([order({ ...paidAt(42), counterpart: { details: { name: "Anna Müller" }, identifier: { iban: NEW_BANK } } })]), at(43)), "enrolled");
-  assert.equal(user().zoldenburgEnrolment!.bankAccountHmac, E.bankAccountHmac(NEW_BANK));
-  assert.equal(user().zoldenburgEnrolment!.bankAccountLast4, "0189");
+  assert.equal((await user()).zoldenburgEnrolment!.bankAccountHmac, E.bankAccountHmac(NEW_BANK));
+  assert.equal((await user()).zoldenburgEnrolment!.bankAccountLast4, "0189");
 });
 
 await t("an expired code is not checked; a new HMAC key disarms until the user enrols again", async () => {
-  open = E.issueEnrolmentCode(user(), at(50));
+  open = await E.issueEnrolmentCode(await user(), at(50));
   assert.equal(await E.checkEnrolment("u1", reads([order(paidAt(51))]), new Date(at(50).getTime() + E.ENROLMENT.codeTtlMs)), "no_code");
-  await withKey("n".repeat(40), () => assert.equal(E.zoldenburgArmed(user()), false));
-  assert.ok(E.zoldenburgArmed(user()));
+  await withKey("n".repeat(40), async () => assert.equal(E.zoldenburgArmed(await user()), false));
+  assert.ok(E.zoldenburgArmed(await user()));
 });
 
 await t("the sweep checks open codes only, and does nothing with no key", async () => {
-  open = E.issueEnrolmentCode(user(), at(60));
+  open = await E.issueEnrolmentCode(await user(), at(60));
   let asked = 0;
   const counting: Reads = { orders: async () => { asked++; return []; }, profileName: async () => "Anna Müller" };
   await E.sweepEnrolments(counting, at(61));
@@ -251,26 +251,26 @@ await t("the sweep checks open codes only, and does nothing with no key", async 
   assert.equal(asked, 1);
 });
 
-await t("armed only while the guardian is active on the Safe", () => {
-  const safe = structuredClone(user().passkeySafe!);
-  store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, status: "planned" } } });
-  assert.equal(E.zoldenburgArmed(user()), false);
-  store.updateUser("u1", { passkeySafe: safe });
-  assert.ok(E.zoldenburgArmed(user()));
+await t("armed only while the guardian is active on the Safe", async () => {
+  const safe = structuredClone((await user()).passkeySafe!);
+  await store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, status: "planned" } } });
+  assert.equal(E.zoldenburgArmed(await user()), false);
+  await store.updateUser("u1", { passkeySafe: safe });
+  assert.ok(E.zoldenburgArmed(await user()));
 });
 
-await t("armed only for Zoldenburg's current guardian, not another address on the Safe", () => {
-  const safe = structuredClone(user().passkeySafe!);
-  store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, guardianAddress: `0x${"8".repeat(40)}` } } });
-  assert.equal(E.zoldenburgArmed(user()), false);
-  store.updateUser("u1", { passkeySafe: safe });
-  assert.ok(E.zoldenburgArmed(user()));
+await t("armed only for Zoldenburg's current guardian, not another address on the Safe", async () => {
+  const safe = structuredClone((await user()).passkeySafe!);
+  await store.updateUser("u1", { passkeySafe: { ...safe, recovery: { ...safe.recovery!, guardianAddress: `0x${"8".repeat(40)}` } } });
+  assert.equal(E.zoldenburgArmed(await user()), false);
+  await store.updateUser("u1", { passkeySafe: safe });
+  assert.ok(E.zoldenburgArmed(await user()));
 });
 
 await t("one account that throws does not stop the sweep for the next", async () => {
-  store.addUser({ ...structuredClone(user()), id: "u2", email: "b@example.com", zoldenburgEnrolment: undefined } as any);
-  open = E.issueEnrolmentCode(user(), at(70));
-  const second = E.issueEnrolmentCode(store.findUser("u2")!, at(70));
+  await store.addUser({ ...structuredClone(await user()), id: "u2", email: "b@example.com", zoldenburgEnrolment: undefined } as any);
+  open = await E.issueEnrolmentCode(await user(), at(70));
+  const second = await E.issueEnrolmentCode((await store.findUser("u2"))!, at(70));
   const seen: string[] = [];
   const reads: Reads = {
     orders: async (u) => {
@@ -283,11 +283,11 @@ await t("one account that throws does not stop the sweep for the next", async ()
   };
   assert.equal(await E.sweepEnrolments(reads, at(72)), 1);
   assert.deepEqual(seen, ["u1", "u2"]);
-  assert.ok(E.zoldenburgArmed(store.findUser("u2")!));
+  assert.ok(E.zoldenburgArmed((await store.findUser("u2"))!));
 });
 
 await t("a Monerium read that never answers counts as unreadable, and frees the account", async () => {
-  open = E.issueEnrolmentCode(user(), at(80));
+  open = await E.issueEnrolmentCode(await user(), at(80));
   const before = E.ENROLMENT.readTimeoutMs;
   E.ENROLMENT.readTimeoutMs = 50;
   try {
@@ -301,7 +301,7 @@ await t("the Monerium reads: both list shapes, the profile id fallback, and an u
   const asked: (string | undefined)[] = [];
   const client = (res: unknown) => () => ({ orders: async (p?: string) => { asked.push(p); return res; } });
   const profile = async (_u: any, id: string) => ({ name: `name of ${id}` });
-  const u = { ...structuredClone(user()), monerium: undefined, funding: { moneriumProfileId: "pf" } } as any;
+  const u = { ...structuredClone(await user()), monerium: undefined, funding: { moneriumProfileId: "pf" } } as any;
   assert.deepEqual(await E.moneriumReadsWith(client([{ id: "a" }]), profile).orders(u), [{ id: "a" }]);
   assert.deepEqual(await E.moneriumReadsWith(client({ orders: [{ id: "b" }] }), profile).orders(u), [{ id: "b" }]);
   await assert.rejects(E.moneriumReadsWith(client({ data: [] }), profile).orders(u), /unknown shape/);
@@ -313,13 +313,13 @@ await t("the Monerium reads: both list shapes, the profile id fallback, and an u
   assert.equal(asked.length, 3, "and it never asks");
 });
 
-await t("the owner's view names the account by its last 4 only; the public user carries none of it", () => {
-  const v: any = E.enrolmentView(user(), at(63));
+await t("the owner's view names the account by its last 4 only; the public user carries none of it", async () => {
+  const v: any = E.enrolmentView(await user(), at(63));
   assert.equal(v.armed, true);
   assert.equal(v.bankAccountLast4, "0189");
   assert.ok(v.codeIssuedAt);
   assert.ok(!/hash|hmac/i.test(JSON.stringify(v)));
-  assert.ok(!("zoldenburgEnrolment" in publicUser(user())));
+  assert.ok(!("zoldenburgEnrolment" in (await publicUser(await user()))));
 });
 
 // ---- routes ----------------------------------------------------------------
@@ -327,7 +327,7 @@ await t("the owner's view names the account by its last 4 only; the public user 
 const app = express();
 app.use(express.json());
 app.use("/api", createZoldenburgEnrolmentRouter({
-  requireUserSession: (req: any, res: any, userId: string) => {
+  requireUserSession: async (req: any, res: any, userId: string) => {
     if (req.headers["x-test-user"] !== userId) { res.status(401).json({ error: "no session" }); return undefined; }
     return { userId };
   },
@@ -352,12 +352,12 @@ await t("routes: a new code needs a fresh passkey approval, every time", async (
 });
 
 await t("routes: no guardian, no active IBAN, or no key on the server: refused before the passkey", async () => {
-  const u = structuredClone(user());
-  store.updateUser("u1", { iban: undefined });
+  const u = structuredClone(await user());
+  await store.updateUser("u1", { iban: undefined });
   assert.equal((await call("/u1/recovery/zoldenburg/enrolment", {})).data.code, "IBAN_NOT_ACTIVE");
-  store.updateUser("u1", { iban: u.iban, passkeySafe: { ...u.passkeySafe!, recovery: undefined } });
+  await store.updateUser("u1", { iban: u.iban, passkeySafe: { ...u.passkeySafe!, recovery: undefined } });
   assert.equal((await call("/u1/recovery/zoldenburg/enrolment", {})).data.code, "NO_GUARDIAN");
-  store.updateUser("u1", { passkeySafe: u.passkeySafe });
+  await store.updateUser("u1", { passkeySafe: u.passkeySafe });
   await withKey("", async () => {
     const off = await call("/u1/recovery/zoldenburg/enrolment", {});
     assert.equal(off.status, 503);
@@ -370,13 +370,13 @@ await t("routes: with the passkey approved, a code once, that the payment can ca
   ok.use(express.json());
   let approved = 0;
   ok.use("/api", createZoldenburgEnrolmentRouter({
-    requireUserSession: (_req: any, _res: any, userId: string) => ({ userId }),
+    requireUserSession: async (_req: any, _res: any, userId: string) => ({ userId }),
     verifyStepUp: async () => { approved++; return true; },
   }));
   const srv = ok.listen(0, "127.0.0.1");
   await new Promise((r) => srv.once("listening", r));
   try {
-    const hmac = user().zoldenburgEnrolment!.bankAccountHmac;
+    const hmac = (await user()).zoldenburgEnrolment!.bankAccountHmac;
     const res = await fetch(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/users/u1/recovery/zoldenburg/enrolment`, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stepUp: {} }),
     });
@@ -384,11 +384,11 @@ await t("routes: with the passkey approved, a code once, that the payment can ca
     assert.equal(res.status, 201);
     assert.equal(approved, 1);
     assert.match(body.memo, /^ZOLD [0-9A-Z]{4}-[0-9A-Z]{4}$/);
-    assert.ok(E.memoCarriesCode(body.memo, user().zoldenburgEnrolment!.code!.hash));
-    assert.equal(body.payTo.iban, user().iban);
-    assert.equal(body.codeIssuedAt, user().zoldenburgEnrolment!.code!.issuedAt);
+    assert.ok(E.memoCarriesCode(body.memo, (await user()).zoldenburgEnrolment!.code!.hash));
+    assert.equal(body.payTo.iban, (await user()).iban);
+    assert.equal(body.codeIssuedAt, (await user()).zoldenburgEnrolment!.code!.issuedAt);
     assert.equal(body.armed, true);
-    assert.equal(user().zoldenburgEnrolment!.bankAccountHmac, hmac, "a new code leaves the enrolled account in place");
+    assert.equal((await user()).zoldenburgEnrolment!.bankAccountHmac, hmac, "a new code leaves the enrolled account in place");
   } finally { srv.close(); }
 });
 
@@ -399,7 +399,7 @@ await t("routes: GET and check return the view, and never the code or the HMAC",
   const c = await call("/u1/recovery/zoldenburg/enrolment/check", {});
   assert.equal(c.status, 200);
   const text = JSON.stringify([g.data, c.data]);
-  assert.ok(!text.includes(user().zoldenburgEnrolment!.bankAccountHmac!));
+  assert.ok(!text.includes((await user()).zoldenburgEnrolment!.bankAccountHmac!));
   assert.ok(!/hash|hmac/i.test(text));
 });
 server.close();
@@ -422,7 +422,7 @@ await t("the operator cannot sign for an account that is not armed", () => {
   }
   const gate = between("const refusalFor = ", "const adminRequest = ");
   assert.ok(gate.indexOf("zoldenburgArmed(user)") > 0 && gate.indexOf('code: "NOT_ARMED"') > 0, "an unarmed account is refused first");
-  assert.match(r, /safeCoverLink:\s*\n\s*!refusalFor\(r\)/, "no Safe Cover link before arming");
+  assert.match(r, /safeCoverLink:\s*\n\s*!\(await refusalFor\(r\)\)/, "no Safe Cover link before arming");
   const sync = between('"/admin/recoveries/:id/sync"', '"/admin/recoveries/:id/finalize"');
   assert.ok(sync.indexOf("refusalFor(r)") > 0 && sync.indexOf("refusalFor(r)") < sync.indexOf("syncZoldenburgFromChain"), "sync records no review for an unarmed account");
   assert.equal(r.match(/zoldenburgEnrolment: undefined/g)?.length, 3, "adding or removing the guardian drops the enrolled account");

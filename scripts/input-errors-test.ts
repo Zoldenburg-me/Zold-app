@@ -28,7 +28,7 @@ const { draftFrom, jurisdictionOf } = await import("../services/api/src/routes/b
 const { PaymentRequestError, quoteCrypto } = await import("../services/api/src/payment-requests.js");
 const { checkOpAssertion } = await import("../services/api/src/http/passkey-assertion.js");
 
-initStore();
+await initStore();
 let failed = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
   try { await fn(); console.log(`  ok  ${name}`); }
@@ -72,6 +72,10 @@ const refuses = (fn: () => unknown, kind: new (...a: any[]) => Error) => {
   try { fn(); } catch (err) { assert.ok(err instanceof kind, `threw ${(err as Error).constructor.name}: ${(err as Error).message}`); return; }
   assert.fail("did not refuse");
 };
+const refusesAsync = async (fn: () => Promise<unknown>, kind: new (...a: any[]) => Error) => {
+  try { await fn(); } catch (err) { assert.ok(err instanceof kind, `threw ${(err as Error).constructor.name}: ${(err as Error).message}`); return; }
+  assert.fail("did not refuse");
+};
 await check("a bank account with a numeric holder, country or label is refused as input", () => {
   const iban = "DE89370400440532013000";
   refuses(() => validateBankAccount({ currency: "EUR", country: "DE", holderName: 42, iban }), ContactError);
@@ -100,12 +104,12 @@ const body = (lines: unknown) => ({
   recipient: { name: "Kunde", addressLine: "Weg 1", postalCode: "1", city: "Wien", country: "AT" },
   lines, vat: { kind: "standard", rate: 19 },
 });
-await check("lines: [null] and lines: {} are refused as input", () => {
-  refuses(() => draftFrom(org, body([null])), InvoiceComplianceError);
-  refuses(() => draftFrom(org, body({})), InvoiceComplianceError);
+await check("lines: [null] and lines: {} are refused as input", async () => {
+  await refusesAsync(async () => await draftFrom(org, body([null])), InvoiceComplianceError);
+  await refusesAsync(async () => await draftFrom(org, body({})), InvoiceComplianceError);
 });
-await check("a numeric description is read as text, not a crash in the compliance check", () => {
-  const draft = draftFrom(org, body([{ description: 5, quantity: 1, unitPriceNet: "10.00" }]));
+await check("a numeric description is read as text, not a crash in the compliance check", async () => {
+  const draft = await draftFrom(org, body([{ description: 5, quantity: 1, unitPriceNet: "10.00" }]));
   const report = checkCompliance(draft, jurisdictionOf(org), []);
   assert.equal(report.totals.lines[0].description, "5");
 });

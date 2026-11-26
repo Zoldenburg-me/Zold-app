@@ -50,6 +50,8 @@ process.env.ORG_SAFE_QUEUE_ENABLED = "1";
 process.env.CANDIDE_RECOVERY_GUARDIAN_ADDRESS = GUARDIAN;
 
 const { initStore, store } = await import("../services/api/src/store.js");
+// The live rows, for arranging state no store method writes (store/db.ts).
+const dbm = await import("../services/api/src/store/db.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { createSafeOpRoutes, opSignRefusal } = await import("../services/api/src/routes/business/safe-ops.js");
 const { createOrgRecoveryRoutes } = await import("../services/api/src/routes/business/org-recovery.js");
@@ -57,7 +59,7 @@ const { createZoldenburgRecoveryRouter } = await import("../services/api/src/rou
 const { setOperator } = await import("../services/api/src/operators/principal.js");
 const { passkeyOwnerAddressOfJwk } = await import("../services/api/src/wallet/safe-signers.js");
 const { CANDIDE, safeOperationDigest } = await import("../services/api/src/wallet/candide.js");
-initStore();
+await initStore();
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -78,7 +80,7 @@ const addr: Record<string, `0x${string}`> = {};
 for (const p of people) {
   keys[p] = await makeSoftwarePasskey(p, ORIGIN);
   addr[p] = passkeyOwnerAddressOfJwk(keys[p].jwk)!;
-  store.addUser({
+  await store.addUser({
     id: `u_${p}`, name: p, country: "DE", kycStatus: "approved", address: `0x${randomBytes(20).toString("hex")}`,
     passkey: { credentialId: keys[p].credentialId, publicKey: { alg: "ES256", jwk: keys[p].jwk }, signCount: 0, rpId: "localhost", createdAt: now },
     createdAt: now,
@@ -89,16 +91,16 @@ const planOwners = [keys.anna, keys.bert].map((k) => ({ x: hex(k.jwk.x!), y: hex
 // org_1: deployed, no IBAN yet (gated). org_2: deployed, a foreign guardian
 // on its module. org_3: planned only. org_4: a sole trader.
 for (const [id, safe] of [["org_1", SAFE], ["org_2", SAFE2]] as const) {
-  store.addOrganisation(companyOrg(id, `${id} GmbH`));
-  for (const p of people) store.addMember({ ...member(`m_${id}_${p}`, id, `u_${p}`, roleOf(p) as any), ...(p === "anna" ? { signerAddress: addr.anna } : {}) });
-  store.setOrgSafePlan(id, { kind: "org", status: "active", address: safe, owners: planOwners, createdAt: now } as any);
-  store.addAccount({ id: `acc_${id}`, orgId: id, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, address: safe, createdAt: now, updatedAt: now } as any);
+  await store.addOrganisation(companyOrg(id, `${id} GmbH`));
+  for (const p of people) await store.addMember({ ...member(`m_${id}_${p}`, id, `u_${p}`, roleOf(p) as any), ...(p === "anna" ? { signerAddress: addr.anna } : {}) });
+  await store.setOrgSafePlan(id, { kind: "org", status: "active", address: safe, owners: planOwners, createdAt: now } as any);
+  await store.addAccount({ id: `acc_${id}`, orgId: id, currency: "EUR", label: "EUR", status: "gated", provider: "monerium", identifier: {}, address: safe, createdAt: now, updatedAt: now } as any);
 }
-store.addOrganisation(companyOrg("org_3", "Later GmbH"));
-store.addMember(member("m_org_3_anna", "org_3", "u_anna", "owner"));
-store.setOrgSafePlan("org_3", { kind: "org", status: "planned", address: "0x5afe0000000000000000000000000000000000c3", owners: planOwners.slice(0, 1), createdAt: now } as any);
-store.addOrganisation(businessOrg("org_4", "Solo", { entity: "sole_trader" }));
-store.addMember(member("m_org_4_anna", "org_4", "u_anna", "owner"));
+await store.addOrganisation(companyOrg("org_3", "Later GmbH"));
+await store.addMember(member("m_org_3_anna", "org_3", "u_anna", "owner"));
+await store.setOrgSafePlan("org_3", { kind: "org", status: "planned", address: "0x5afe0000000000000000000000000000000000c3", owners: planOwners.slice(0, 1), createdAt: now } as any);
+await store.addOrganisation(businessOrg("org_4", "Solo", { entity: "sole_trader" }));
+await store.addMember(member("m_org_4_anna", "org_4", "u_anna", "owner"));
 
 // ── the fake chain ──────────────────────────────────────────────────────────
 type ModuleState = { moduleEnabled: boolean; guardians: `0x${string}`[]; pending: any };
@@ -142,11 +144,11 @@ const app = express();
 app.use(express.json());
 const who = (req: any) => req.header("x-user");
 const requireSession = (req: any, res: any) => (who(req) ? { userId: who(req) } : (res.status(401).json({ error: "no session" }), undefined));
-const deps = { ctxOf: (req: any, res: any) => resolveOrg(req, res, requireSession as any) };
+const deps = { ctxOf: async (req: any, res: any) => await resolveOrg(req, res, requireSession as any) };
 app.use((req: any, _res, next) => { if (req.header("x-operator")) setOperator(req, { id: "op1", name: "Operator", sessionId: "s1" }); next(); });
 app.use("/api/orgs", createOrgRecoveryRoutes(deps, { chain: recoveryChain, orgSafeReader: opChain, prepare }));
 app.use("/api/orgs", createSafeOpRoutes(deps, opChain as any, opSignRefusal(recoveryChain)));
-app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession: (req, res, userId) => (who(req) === userId ? { id: "s" } : (res.status(403).json({ error: "not yours" }), undefined)) }));
+app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession: async (req, res, userId) => (who(req) === userId ? { id: "s" } : (res.status(403).json({ error: "not yours" }), undefined)) }));
 app.use((err: unknown, _req: any, res: any, _next: any) => res.status(500).json({ error: String((err as Error)?.stack ?? err) }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
@@ -156,7 +158,7 @@ const call = async (method: string, p: string, user: string, body?: unknown, ext
   return { status: res.status, data: (await res.json().catch(() => ({}))) as any };
 };
 const challengeOf = (op: { digest: string }) => Buffer.from(op.digest.slice(2), "hex").toString("base64url");
-const sign = async (p: string, opId: string, org = "org_1") => call("POST", `/orgs/${org}/safe-ops/${opId}/signatures`, `u_${p}`, await keys[p].assert(challengeOf(store.findSafeOp(opId)!)));
+const sign = async (p: string, opId: string, org = "org_1") => call("POST", `/orgs/${org}/safe-ops/${opId}/signatures`, `u_${p}`, await keys[p].assert(challengeOf((await store.findSafeOp(opId))!)));
 const setup = (p: string, org = "org_1") => call("POST", `/orgs/${org}/recovery/guardian`, `u_${p}`);
 const read = (p: string, org = "org_1") => call("GET", `/orgs/${org}/recovery`, `u_${p}`);
 const strip = (a: string) => a.toLowerCase().replace(/^0x/, "");
@@ -196,7 +198,7 @@ try {
       assert.equal(r.status, 403, `${p}: ${JSON.stringify(r.data)}`);
     }
     assert.equal(prepares.length, 0);
-    assert.equal(store.safeOpsOf("org_1").length, 0);
+    assert.equal((await store.safeOpsOf("org_1")).length, 0);
   });
 
   let opId = "";
@@ -216,7 +218,7 @@ try {
     assert.ok(p.txs[1].data.toLowerCase().includes(strip(GUARDIAN)), "addGuardianWithThreshold names Zoldenburg's guardian");
     assert.ok(p.txs[1].data.toLowerCase().endsWith("1".padStart(64, "0")), "at threshold 1");
     assert.ok(p.txs.every((t) => BigInt(t.value) === 0n), "no value moves");
-    assert.equal(store.findOrganisation("org_1")!.recovery, undefined, "nothing recorded while queued");
+    assert.equal((await store.findOrganisation("org_1"))!.recovery, undefined, "nothing recorded while queued");
     assert.equal((await read("viewer")).data.setupOp.id, opId, "the read shows the queued op");
   });
 
@@ -225,7 +227,7 @@ try {
     assert.equal(r.status, 200, JSON.stringify(r.data));
     assert.equal(r.data.op.id, opId);
     assert.equal(prepares.length, 1);
-    assert.equal(store.safeOpsOf("org_1").length, 1);
+    assert.equal((await store.safeOpsOf("org_1")).length, 1);
   });
 
   await check("below the threshold nothing relays; a non-owner cannot sign", async () => {
@@ -236,7 +238,7 @@ try {
     assert.equal(a.data.op.state, "PENDING");
     assert.equal(safeChain.relays.length, 0);
     assert.equal((await read("viewer")).data.guardianOnChain, false);
-    assert.equal(store.findOrganisation("org_1")!.recovery, undefined);
+    assert.equal((await store.findOrganisation("org_1"))!.recovery, undefined);
   });
 
   await check("at the threshold it relays; the read shows the guardian, unarmed, and records it", async () => {
@@ -251,9 +253,9 @@ try {
     assert.deepEqual(r.data.otherGuardians, []);
     assert.equal(r.data.armed, false, "armed needs the company's IBAN (10b)");
     assert.equal(r.data.setupOp, null);
-    const rec = store.findOrganisation("org_1")!.recovery!;
+    const rec = (await store.findOrganisation("org_1"))!.recovery!;
     assert.equal(rec.guardianAddress.toLowerCase(), GUARDIAN);
-    assert.equal(rec.addedAt, store.findSafeOp(opId)!.updatedAt);
+    assert.equal(rec.addedAt, (await store.findSafeOp(opId))!.updatedAt);
     assert.equal(r.data.addedAt, rec.addedAt);
   });
 
@@ -298,7 +300,7 @@ try {
     assert.equal(none.data.code, "RECOVERY_UNAVAILABLE");
     assert.equal(noneRead.data.available, false);
     assert.equal(prepares.length, 1);
-    assert.equal(store.safeOpsOf("org_2").length, 0);
+    assert.equal((await store.safeOpsOf("org_2")).length, 0);
   });
 
   await check("before a signature the module is read again: a failed read refuses, a changed module ends the op", async () => {
@@ -312,7 +314,7 @@ try {
       const r = await sign("anna", id, "org_2");
       assert.equal(r.status, 409, JSON.stringify(r.data));
       assert.equal(r.data.code, code);
-      const op = store.findSafeOp(id)!;
+      const op = (await store.findSafeOp(id))!;
       assert.equal(op.state, "INVALIDATED", code);
       assert.equal(op.signatures.length, 0, "no signature is taken");
     };
@@ -323,8 +325,8 @@ try {
     readFails = false;
     assert.equal(down.status, 502, JSON.stringify(down.data));
     assert.equal(down.data.code, "RECOVERY_UNREADABLE");
-    assert.equal(store.findSafeOp(id)!.state, "PENDING", "a failed read refuses this signature only");
-    assert.equal(store.findSafeOp(id)!.signatures.length, 0);
+    assert.equal((await store.findSafeOp(id))!.state, "PENDING", "a failed read refuses this signature only");
+    assert.equal((await store.findSafeOp(id))!.signatures.length, 0);
 
     // An owner adds their own guardian in Safe{Wallet} while the op waits.
     modules[SAFE2.toLowerCase()] = { moduleEnabled: true, guardians: [FOREIGN], pending: null };
@@ -353,7 +355,7 @@ try {
     modules[SAFE2.toLowerCase()] = { moduleEnabled: true, guardians: [FOREIGN], pending: null };
     const last = await sign("bert", id, "org_2");
     assert.equal(last.data.code, "OTHER_GUARDIAN");
-    assert.equal(store.findSafeOp(id)!.state, "INVALIDATED");
+    assert.equal((await store.findSafeOp(id))!.state, "INVALIDATED");
     assert.equal(safeChain.relays.length, relays, "nothing relayed");
     modules[SAFE2.toLowerCase()] = fresh();
   });
@@ -368,43 +370,44 @@ try {
         return q.data.op.id as string;
       } finally { bareCallData = false; }
     };
-    const end = (id: string) => store.endPendingSafeOp(id, { state: "CANCELLED", reason: "test" });
+    const end = async (id: string) => await store.endPendingSafeOp(id, { state: "CANCELLED", reason: "test" });
     const refused = async (id: string) => {
       const r = await sign("anna", id, "org_2");
       assert.equal(r.status, 409, JSON.stringify(r.data));
       assert.equal(r.data.code, "RECOVERY_UNAVAILABLE");
-      assert.equal(store.findSafeOp(id)!.state, "INVALIDATED");
-      assert.equal(store.findSafeOp(id)!.signatures.length, 0, "no signature is taken");
+      assert.equal((await store.findSafeOp(id))!.state, "INVALIDATED");
+      assert.equal((await store.findSafeOp(id))!.signatures.length, 0, "no signature is taken");
     };
 
     // The UserOperation does not name the guardian; the stored field does.
     let id = await queue(true);
-    let op = store.findSafeOp(id)!;
+    let op = (await store.findSafeOp(id))!;
     assert.equal(op.guardianAddress?.toLowerCase(), GUARDIAN, "the guardian is stored on the op");
     assert.ok(!op.userOperation.toLowerCase().includes(strip(GUARDIAN)), "the op itself does not name it");
     assert.equal((await sign("anna", id, "org_2")).status, 201, "the stored field matches the deployment's guardian");
-    end(id);
+    await end(id);
 
     // The UserOperation names the guardian, but the stored field is another one.
     id = await queue(false);
-    op = store.findSafeOp(id)!;
+    op = (await store.findSafeOp(id))!;
     assert.ok(op.userOperation.toLowerCase().includes(strip(GUARDIAN)));
-    op.guardianAddress = FOREIGN;
+    // No store method rewrites an op's guardian: the stored row is set by hand.
+    dbm.db.safeOps.find((o) => o.id === id)!.guardianAddress = FOREIGN;
     await refused(id);
 
     // An op queued before the field existed: the substring check decides.
     id = await queue(false);
-    delete store.findSafeOp(id)!.guardianAddress;
+    delete dbm.db.safeOps.find((x) => x.id === id)!.guardianAddress;
     assert.equal((await sign("anna", id, "org_2")).status, 201, "a legacy op that names the guardian may be signed");
-    end(id);
+    await end(id);
     id = await queue(true);
-    delete store.findSafeOp(id)!.guardianAddress;
+    delete dbm.db.safeOps.find((x) => x.id === id)!.guardianAddress;
     await refused(id);
     modules[SAFE2.toLowerCase()] = fresh();
   });
 
   await check("the unarmed guardian cannot be made to sign: /admin/recoveries refuses the company's Safe", async () => {
-    store.addRecoveryRequest({
+    await store.addRecoveryRequest({
       id: "rr_org", userId: "u_anna", safeAddress: SAFE, mode: "zoldenburg", status: "REVIEW_PENDING",
       requestedAt: now, expiresAt: new Date(Date.now() + 86_400_000).toISOString(), recoveryDelayHours: 72,
       guardianAddress: GUARDIAN, recoveryModuleAddress: MODULE,

@@ -34,6 +34,7 @@ import express from "express";
 import { privateKeyToAccount } from "viem/accounts";
 import { keccak256, toHex, type Hex } from "viem";
 import { makeSoftwarePasskey } from "./_software-passkey.js";
+import { filterSeq } from "../services/api/src/seq.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-turnkey-recovery-")), "db.json");
@@ -72,10 +73,10 @@ const tkGuardian = (status = "active", address: `0x${string}` = guardian.address
 const user = (id: string, extra: Record<string, unknown>) => ({
   id, name: id, email: `${id}@example.com`, country: "DE", kycStatus: "approved", iban: "", address: SAFE, createdAt: now, passkey: passkey(`old-${id}`), ...extra,
 });
-store.addUser(user("u_rec", { passkeySafe: safe({ socialGuardians: [tkGuardian()] }) }) as any);
-store.addUser(user("u_none", { passkeySafe: safe() }) as any);
-store.addUser(user("u_created", { passkeySafe: safe({ socialGuardians: [tkGuardian("created")] }) }) as any);
-store.addUser(user("u_imported", { passkeySafe: safe({ importedAt: now, socialGuardians: [tkGuardian()] }) }) as any);
+await store.addUser(user("u_rec", { passkeySafe: safe({ socialGuardians: [tkGuardian()] }) }) as any);
+await store.addUser(user("u_none", { passkeySafe: safe() }) as any);
+await store.addUser(user("u_created", { passkeySafe: safe({ socialGuardians: [tkGuardian("created")] }) }) as any);
+await store.addUser(user("u_imported", { passkeySafe: safe({ importedAt: now, socialGuardians: [tkGuardian()] }) }) as any);
 
 // ---- the chain, as the module would answer ---------------------------------
 const chainState = {
@@ -110,7 +111,7 @@ const chain: Chain = {
 };
 
 let switchOn = true;
-const requireUserSession = (req: express.Request, res: express.Response, userId: string) => {
+const requireUserSession = async (req: express.Request, res: express.Response, userId: string) => {
   if (req.get("x-test-user") === userId) return true;
   res.status(401).json({ error: "sign in" });
   return false;
@@ -119,7 +120,7 @@ const app = express();
 app.use(express.json());
 let mailOn = true;
 const ownerAlerted = (r: any) => mailOn && Boolean(r.ownerAlerts?.requested);
-const markAlerted = (rid: string) => store.updateRecoveryRequest(rid, { ownerAlerts: { requested: new Date().toISOString() } });
+const markAlerted = async (rid: string) => await store.updateRecoveryRequest(rid, { ownerAlerts: { requested: new Date().toISOString() } });
 const activityReads: { subOrgId: string; activityId: string }[] = [];
 const turnkey = () => ({
   async signActivity(subOrgId: string, activityId: string) {
@@ -180,7 +181,7 @@ try {
     }
     assert.ok(!/0x[0-9a-fA-F]{40}/.test(JSON.stringify(r.body)), "the start names no address");
     assert.equal(r.body.turnkey?.guardianSubOrgId, undefined);
-    const row = store.findRecoveryRequest(r.body.id)!;
+    const row = (await store.findRecoveryRequest(r.body.id))!;
     assert.equal(row.guardianAddress, guardian.address);
     assert.equal(row.recoveryModuleAddress.toLowerCase(), MODULE.toLowerCase());
     assert.ok(Date.parse(row.expiresAt) - Date.now() <= 3600_000, "an unapproved Google/Apple recovery times out within the hour");
@@ -222,8 +223,8 @@ try {
     assert.equal(r.body.status, "REVIEW_PENDING");
     assert.equal(r.body.turnkey.newPasskeyRegistered, true);
     assert.equal(r.body.turnkey.newPasskey, undefined);
-    assert.equal(store.findUser("u_rec")!.passkey!.credentialId, "old-u_rec", "the account keeps its passkey");
-    assert.equal(store.findRecoveryRequest(id)!.turnkey!.newOwners!.length, 1);
+    assert.equal((await store.findUser("u_rec"))!.passkey!.credentialId, "old-u_rec", "the account keeps its passkey");
+    assert.equal((await store.findRecoveryRequest(id))!.turnkey!.newOwners!.length, 1);
   });
 
   console.log("signing");
@@ -233,7 +234,7 @@ try {
     const r = await call("GET", `/recovery/turnkey/requests/${id}/activity/act-1`, undefined, auth());
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.activity.status, "ACTIVITY_STATUS_COMPLETED");
-    assert.deepEqual(activityReads, [{ subOrgId: store.findRecoveryRequest(id)!.turnkey!.guardianSubOrgId, activityId: "act-1" }]);
+    assert.deepEqual(activityReads, [{ subOrgId: (await store.findRecoveryRequest(id))!.turnkey!.guardianSubOrgId, activityId: "act-1" }]);
     assert.equal((await call("GET", `/recovery/turnkey/requests/${id}/activity/act-1`)).status, 404, "no secret, no read");
     assert.equal((await call("GET", `/recovery/turnkey/requests/${id}/activity/a.b`, undefined, auth())).status, 400);
     assert.equal(activityReads.length, 1);
@@ -243,7 +244,7 @@ try {
   await check("the digest is the module's ExecuteRecovery hash for the new owner", async () => {
     const r = await call("GET", `/recovery/turnkey/requests/${id}/digest`, undefined, auth());
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    const rq = store.findRecoveryRequest(id)!;
+    const rq = (await store.findRecoveryRequest(id))!;
     const expected = recoveryDigest(recoveryTypedData({ moduleAddress: MODULE, safeAddress: SAFE, newOwners: rq.turnkey!.newOwners!, newThreshold: 1, nonce: 0n }));
     assert.equal(r.body.digest, expected);
     assert.deepEqual(Object.keys(r.body), ["digest"], "the sub-org and address come from the guardian's own login");
@@ -256,13 +257,13 @@ try {
       const r = await call("GET", `/recovery/turnkey/requests/${id}/digest`, undefined, auth());
       assert.equal(r.status, 503, "503, not 502: Cloudflare replaces a 502's body");
       assert.equal(r.body.code, "DIGEST_MISMATCH");
-      markAlerted(id);
+      await markAlerted(id);
       const s = await call("POST", `/recovery/turnkey/requests/${id}/signature`, await turnkeySign(guardian, digest), auth());
       assert.equal(s.body.code, "DIGEST_MISMATCH");
       assert.equal(relayed.length, 0);
     } finally {
       chainState.digestOff = false;
-      store.updateRecoveryRequest(id, { ownerAlerts: undefined });
+      await store.updateRecoveryRequest(id, { ownerAlerts: undefined });
     }
   });
 
@@ -270,7 +271,7 @@ try {
     const r = await call("POST", `/recovery/turnkey/requests/${id}/signature`, await turnkeySign(guardian, digest), auth());
     assert.equal(r.status, 409);
     assert.equal(r.body.code, "OWNER_NOT_ALERTED");
-    markAlerted(id);
+    await markAlerted(id);
     mailOn = false;
     try {
       const off = await call("POST", `/recovery/turnkey/requests/${id}/signature`, await turnkeySign(guardian, digest), auth());
@@ -337,7 +338,7 @@ try {
     assert.equal(relayed[0].signer, guardian.address);
     assert.ok(["1b", "1c"].includes(relayed[0].signature.slice(130)), relayed[0].signature);
     assert.equal(r.body.turnkey.finalizeAfter, new Date(GRACE_END * 1000).toISOString());
-    assert.equal(store.findRecoveryRequest(id)!.turnkey!.recoveryHash, digest);
+    assert.equal((await store.findRecoveryRequest(id))!.turnkey!.recoveryHash, digest);
     assert.equal(verifiers.length, 1, "the new passkey's verifier is deployed ahead of its first use");
   });
 
@@ -348,7 +349,7 @@ try {
   });
 
   await check("the other open request is closed once one is on chain, and no new one starts while it is", async () => {
-    assert.equal(store.findRecoveryRequest(strangerId)!.status, "CANCELED");
+    assert.equal((await store.findRecoveryRequest(strangerId))!.status, "CANCELED");
     const r = await call("POST", "/recovery/turnkey/requests", { email: "u_rec@example.com" });
     assert.equal(r.status, 409);
     assert.equal(r.body.code, "RECOVERY_IN_PROGRESS");
@@ -378,7 +379,7 @@ try {
   });
 
   await check("after the grace period, finalise binds the new passkey once the owners match", async () => {
-    store.updateRecoveryRequest(id, { turnkey: { ...store.findRecoveryRequest(id)!.turnkey!, finalizeAfter: new Date(Date.now() - 1000).toISOString() } });
+    await store.updateRecoveryRequest(id, { turnkey: { ...(await store.findRecoveryRequest(id))!.turnkey!, finalizeAfter: new Date(Date.now() - 1000).toISOString() } });
     // Two at once (a double tap, or the sweep): one relays, the other waits.
     const realFinalize = chain.relayFinalize;
     chain.relayFinalize = async (m, safe) => { await new Promise((ok) => setTimeout(ok, 50)); return realFinalize(m, safe); };
@@ -393,35 +394,61 @@ try {
     assert.equal(both.find((x) => x !== r).body.code, "BUSY");
     assert.equal(r.body.status, "FINALIZED");
     assert.deepEqual(finalized, [SAFE], "finalizeRecovery relayed once");
-    assert.equal(store.findUser("u_rec")!.passkey!.credentialId, newKey.credentialId, "the account now signs in with the new passkey");
+    assert.equal((await store.findUser("u_rec"))!.passkey!.credentialId, newKey.credentialId, "the account now signs in with the new passkey");
   });
 
   console.log("sweep and cancel");
 
   await check("the sweep expires an unanswered request and finalises one past its grace period", async () => {
-    const mk = (status: string, extra: Record<string, unknown> = {}) => {
+    const mk = async (status: string, extra: Record<string, unknown> = {}) => {
       const r: any = {
         id: `sw-${status}`, userId: "u_none", safeAddress: SAFE, mode: "turnkey", status, requestedAt: now,
         expiresAt: new Date(Date.now() - 1000).toISOString(), recoveryDelayHours: 1, guardianAddress: guardian.address,
         recoveryModuleAddress: MODULE, factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" }, turnkey: {}, ...extra,
       };
-      store.addRecoveryRequest(r);
+      await store.addRecoveryRequest(r);
       return r.id;
     };
-    const expiring = mk("PASSKEY_PENDING");
+    const expiring = await mk("PASSKEY_PENDING");
     const owners = [addr("7")];
     const sweptKey = await makeSoftwarePasskey("turnkey-recovery-swept", ORIGIN);
-    const grace = mk("GRACE_PERIOD", { turnkey: { newPasskey: { ...passkey(sweptKey.credentialId), publicKey: { jwk: sweptKey.jwk, alg: "ES256" } }, newOwners: owners, newThreshold: 1, finalizeAfter: new Date(Date.now() - 1000).toISOString() } });
+    const grace = await mk("GRACE_PERIOD", { turnkey: { newPasskey: { ...passkey(sweptKey.credentialId), publicKey: { jwk: sweptKey.jwk, alg: "ES256" } }, newOwners: owners, newThreshold: 1, finalizeAfter: new Date(Date.now() - 1000).toISOString() } });
     chainState.pending = { newOwners: owners, newThreshold: 1, executeAfter: 1 };
     const n = await sweepTurnkeyRecoveries(new Date(), chain);
-    assert.equal(store.findRecoveryRequest(expiring)!.status, "EXPIRED");
-    assert.equal(store.findRecoveryRequest(grace)!.status, "FINALIZED");
+    assert.equal((await store.findRecoveryRequest(expiring))!.status, "EXPIRED");
+    assert.equal((await store.findRecoveryRequest(grace))!.status, "FINALIZED");
     assert.equal(n, 1);
     chainState.pending = null;
   });
 
+  await check("the sweep never writes EXPIRED over a row that moved after it read the list", async () => {
+    await store.addRecoveryRequest({
+      id: "sw-moved", userId: "u_none", safeAddress: SAFE, mode: "turnkey", status: "PASSKEY_PENDING", requestedAt: now,
+      expiresAt: new Date(Date.now() - 1000).toISOString(), recoveryDelayHours: 1, guardianAddress: guardian.address,
+      recoveryModuleAddress: MODULE, factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" }, turnkey: {},
+    } as any);
+    const realList = store.list;
+    let moved = false;
+    (store as any).list = async (name: any) => {
+      const snap = await realList.call(store, name);
+      // The guardian's approval lands between the sweep's read and its write.
+      if (name === "recoveryRequests" && !moved) {
+        moved = true;
+        await store.updateRecoveryRequest("sw-moved", { status: "GRACE_PERIOD" });
+      }
+      return snap;
+    };
+    try {
+      await sweepTurnkeyRecoveries(new Date(), chain);
+    } finally {
+      (store as any).list = realList;
+    }
+    assert.equal((await store.findRecoveryRequest("sw-moved"))!.status, "GRACE_PERIOD");
+    await store.updateRecoveryRequest("sw-moved", { status: "FINALIZED" });
+  });
+
   await check("the owner cancels a request still waiting for the guardian", async () => {
-    store.updateUser("u_none", { passkeySafe: { ...store.findUser("u_none")!.passkeySafe!, socialGuardians: [tkGuardian()] as any } });
+    await store.updateUser("u_none", { passkeySafe: { ...(await store.findUser("u_none"))!.passkeySafe!, socialGuardians: [tkGuardian()] as any } });
     chainState.owners = [addr("e")];
     const start = await call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" });
     assert.equal(start.status, 201, JSON.stringify(start.body));
@@ -429,22 +456,22 @@ try {
     assert.equal(other.status, 401);
     const r = await call("POST", `/users/u_none/recovery/turnkey/requests/${start.body.id}/cancel`, {}, { "x-test-user": "u_none" });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(store.findRecoveryRequest(start.body.id)!.status, "CANCELED");
+    assert.equal((await store.findRecoveryRequest(start.body.id))!.status, "CANCELED");
   });
 
-  const waitingFor = (userId: string) =>
-    store.recoveryRequestsForUser(userId).filter((r) => r.mode === "turnkey" && ["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status));
+  const waitingFor = async (userId: string) =>
+    (await store.recoveryRequestsForUser(userId)).filter((r) => r.mode === "turnkey" && ["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status));
 
   await check("at most five requests wait per account; a new start expires the oldest one without a passkey", async () => {
-    for (const r of waitingFor("u_none")) store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+    for (const r of (await waitingFor("u_none"))) await store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
     const ids: string[] = [];
     for (let i = 0; i < 6; i++) ids.push((await call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" })).body.id);
-    assert.equal(waitingFor("u_none").length, 5);
-    assert.equal(store.findRecoveryRequest(ids[0])!.status, "EXPIRED");
+    assert.equal((await waitingFor("u_none")).length, 5);
+    assert.equal((await store.findRecoveryRequest(ids[0]))!.status, "EXPIRED");
   });
 
   await check("a stranger's starts never expire the owner's request once its passkey is in; with every slot holding one, starts are refused", async () => {
-    for (const r of waitingFor("u_none")) store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+    for (const r of (await waitingFor("u_none"))) await store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
     const register = async (start: any, label: string) => {
       const key = await makeSoftwarePasskey(label, ORIGIN);
       const r = await call("POST", `/recovery/turnkey/requests/${start.id}/passkey`, key.register(start.registerChallenge), { "x-recovery-secret": start.recoverySecret });
@@ -454,29 +481,29 @@ try {
     await register(owner, "turnkey-recovery-owner");
     // Ten at once: the cap is counted after the chain read, so a race cannot pass it.
     const strangers = (await Promise.all(Array.from({ length: 10 }, () => call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" })))).map((r) => r.body);
-    assert.equal(store.findRecoveryRequest(owner.id)!.status, "REVIEW_PENDING", "the owner's request survives");
-    assert.equal(waitingFor("u_none").length, 5);
-    const live = strangers.filter((b) => store.findRecoveryRequest(b.id)!.status === "PASSKEY_PENDING");
+    assert.equal((await store.findRecoveryRequest(owner.id))!.status, "REVIEW_PENDING", "the owner's request survives");
+    assert.equal((await waitingFor("u_none")).length, 5);
+    const live = await filterSeq(strangers, async (b) => (await store.findRecoveryRequest(b.id))!.status === "PASSKEY_PENDING");
     for (const [i, b] of live.entries()) await register(b, `turnkey-recovery-stranger-${i}`);
     const refused = await call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" });
     assert.equal(refused.status, 429, JSON.stringify(refused.body));
     assert.equal(refused.body.code, "TOO_MANY_RECOVERIES");
-    assert.equal(store.findRecoveryRequest(owner.id)!.status, "REVIEW_PENDING");
-    for (const r of waitingFor("u_none")) store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
+    assert.equal((await store.findRecoveryRequest(owner.id))!.status, "REVIEW_PENDING");
+    for (const r of (await waitingFor("u_none"))) await store.updateRecoveryRequest(r.id, { status: "EXPIRED" });
   });
 
   await check("a signature racing the owner's cancel is refused before the relay", async () => {
-    store.updateUser("u_created", { passkeySafe: { ...store.findUser("u_created")!.passkeySafe!, socialGuardians: [tkGuardian()] as any } });
+    await store.updateUser("u_created", { passkeySafe: { ...(await store.findUser("u_created"))!.passkeySafe!, socialGuardians: [tkGuardian()] as any } });
     const start = await call("POST", "/recovery/turnkey/requests", { email: "u_created@example.com" });
     const h = { "x-recovery-secret": start.body.recoverySecret };
     const key = await makeSoftwarePasskey("turnkey-recovery-race", ORIGIN);
     await call("POST", `/recovery/turnkey/requests/${start.body.id}/passkey`, key.register(start.body.registerChallenge), h);
-    markAlerted(start.body.id);
+    await markAlerted(start.body.id);
     const d = await call("GET", `/recovery/turnkey/requests/${start.body.id}/digest`, undefined, h);
     const realNonce = chain.nonce;
     chain.nonce = async (m, s) => {
       // The owner cancels while the API is reading the module.
-      store.updateRecoveryRequest(start.body.id, { status: "CANCELED" });
+      await store.updateRecoveryRequest(start.body.id, { status: "CANCELED" });
       return realNonce(m, s);
     };
     try {
@@ -494,7 +521,7 @@ try {
     const h = { "x-recovery-secret": start.body.recoverySecret };
     const key = await makeSoftwarePasskey("turnkey-recovery-cancel-race", ORIGIN);
     await call("POST", `/recovery/turnkey/requests/${start.body.id}/passkey`, key.register(start.body.registerChallenge), h);
-    markAlerted(start.body.id);
+    await markAlerted(start.body.id);
     const d = await call("GET", `/recovery/turnkey/requests/${start.body.id}/digest`, undefined, h);
     const realRelay = chain.relayRecovery;
     const pendingBefore = chainState.pending;
@@ -511,7 +538,7 @@ try {
     } finally {
       chain.relayRecovery = realRelay;
       chainState.pending = pendingBefore;
-      store.updateRecoveryRequest(start.body.id, { status: "CANCELED" });
+      await store.updateRecoveryRequest(start.body.id, { status: "CANCELED" });
     }
   });
 
@@ -531,7 +558,7 @@ try {
 
   await check("an expired request answers 410 to its starter", async () => {
     const start = await call("POST", "/recovery/turnkey/requests", { email: "u_none@example.com" });
-    store.updateRecoveryRequest(start.body.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+    await store.updateRecoveryRequest(start.body.id, { expiresAt: new Date(Date.now() - 1000).toISOString() });
     const r = await call("GET", `/recovery/turnkey/requests/${start.body.id}`, undefined, { "x-recovery-secret": start.body.recoverySecret });
     assert.equal(r.status, 410);
   });

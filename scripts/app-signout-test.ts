@@ -25,7 +25,7 @@ const { createAuthRouter } = await import("../services/api/src/routes/auth.js");
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PUB = path.join(ROOT, "services/api/public");
 
-initStore();
+await initStore();
 const app = express();
 app.use(express.json());
 app.use("/api", createAuthRouter({ requireUserSession }));
@@ -87,11 +87,11 @@ const run = (code: string) => vm.runInContext(code, ctx);
 const now = new Date().toISOString();
 let n = 0;
 /** A signed-in browser: a fresh account, its token in storage and in scope. */
-function signIn() {
+async function signIn() {
   n += 1;
   const id = `u_signout_${n}`;
-  store.addUser({ id, name: `Person ${n}`, email: `s${n}@example.com`, country: "DE", kycStatus: "pending", createdAt: now, address: `0x${String(n).padStart(40, "b")}`, iban: "" } as any);
-  const token = issueSession(id);
+  await store.addUser({ id, name: `Person ${n}`, email: `s${n}@example.com`, country: "DE", kycStatus: "pending", createdAt: now, address: `0x${String(n).padStart(40, "b")}`, iban: "" } as any);
+  const token = await issueSession(id);
   ctx.localStorage.setItem("zold-session", token);
   ctx.localStorage.setItem("zoll-session", token);
   ctx.localStorage.setItem("zoll-contacts", JSON.stringify([{ id: "c1", name: "A", destination: "DE00" }]));
@@ -105,7 +105,7 @@ const t = async (name: string, fn: () => unknown) => { await fn(); pass++; conso
 
 try {
   await t("Sign out revokes the token on the server: it gets 401 afterwards", async () => {
-    const token = signIn();
+    const token = await signIn();
     assert.equal(await status("GET", token), 200, "the session works before sign-out");
     sent.length = 0;
     run("signOut()");
@@ -122,7 +122,7 @@ try {
   });
 
   await t("no network: this browser is still signed out", async () => {
-    const token = signIn();
+    const token = await signIn();
     network = false;
     sent.length = 0;
     run("signOut()");

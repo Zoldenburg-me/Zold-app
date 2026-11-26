@@ -73,6 +73,8 @@ for sol in contracts/src/*.sol; do n="$(basename "$sol" .sol)"; mkdir -p "contra
   writeFileSync(path.join(repo, "package.json"), JSON.stringify({ name: "z", devDependencies: { tsx: "1" } }));
   mkdirSync(path.join(repo, "services/api/src/operators"), { recursive: true });
   writeFileSync(path.join(repo, "services/api/src/operators/enrol-cli.ts"), "// enrol\n");
+  mkdirSync(path.join(repo, "services/api/migrations"), { recursive: true });
+  writeFileSync(path.join(repo, "services/api/migrations/0001_init.sql"), "SELECT 1;\n");
   const m1 = commitFile("services/api/src/server.ts", "v1\n");
   const m2 = commitFile("services/api/src/server.ts", "v2\n");
   git("push", "-q", "origin", "main");
@@ -110,6 +112,8 @@ for sol in contracts/src/*.sol; do n="$(basename "$sol" .sol)"; mkdir -p "contra
     const scripts = JSON.parse(git("show", `${head}:package.json`)).scripts;
     check("it keeps the operator enrolment command", scripts["operator:enrol"] === "tsx services/api/src/operators/enrol-cli.ts", JSON.stringify(scripts));
     check("and the file it runs", git("ls-tree", "--name-only", head, "services/api/src/operators/enrol-cli.ts") !== "");
+    // An API on Postgres checks its schema against these files (store/pg/migrate.ts).
+    check("it keeps the migrations", git("ls-tree", "--name-only", head, "services/api/migrations/0001_init.sql") !== "");
   }
   console.log(`\nproduction branch: ${passed}/${passed} checks passed`);
 } finally {

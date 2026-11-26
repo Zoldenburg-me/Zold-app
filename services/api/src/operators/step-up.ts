@@ -76,5 +76,5 @@ export async function verifyOperatorStepUp(req: express.Request, operator: Opera
   } catch {
     throw new StepUpRefusal("the passkey approval does not match this change: approve it again", "STEP_UP_INVALID");
   }
-  store.recordOperatorCredentialUse(operator.id, credential.credentialId, signCount);
+  await store.recordOperatorCredentialUse(operator.id, credential.credentialId, signCount);
 }

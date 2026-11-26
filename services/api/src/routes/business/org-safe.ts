@@ -28,7 +28,7 @@ export function createOrgSafeRoutes(deps: OrgRoutes, reader: OrgSafeReader = liv
   r.get(
     "/:orgId/safe",
     wrap(async (req, res) => {
-      const ctx = deps.ctxOf(req, res);
+      const ctx = await deps.ctxOf(req, res);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "accounts.read")) return;
       let view;

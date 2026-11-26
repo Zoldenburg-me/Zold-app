@@ -40,7 +40,7 @@ const { issueOperatorSession } = await import("../services/api/src/operators/ses
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { publicDocument } = await import("../services/api/src/documents.js");
 
-initStore();
+await initStore();
 let failed = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
   try { await fn(); console.log(`  ok  ${name}`); }
@@ -102,13 +102,13 @@ async function account(extra: Record<string, unknown> = {}) {
   n += 1;
   const id = `u_identity_${n}`;
   const key = await makePasskey(id);
-  store.addUser({
+  await store.addUser({
     id, name: `Person ${n}`, email: `p${n}@example.com`, country: "DE", kycStatus: "pending", createdAt: now,
     address: `0x${String(n).padStart(40, "a")}` as `0x${string}`, iban: "",
     passkey: key.stored,
     ...extra,
   } as any);
-  const token = issueSession(id);
+  const token = await issueSession(id);
   /** A step-up assertion over a challenge the server issued for `action`. */
   const stepUp = async (action?: string) => {
     const c = await call("POST", "/api/webauthn/challenge", token, { purpose: "step_up", ...(action ? { action } : {}) });
@@ -124,7 +124,7 @@ await check("a brand-new pending account connects Monerium for the first time wi
   const a = await account();
   const r = await call("POST", `/api/users/${a.id}/monerium/connect/start`, a.token, {});
   assert.equal(r.status, 201, r.text);
-  assert.equal(publicUser(store.findUser(a.id)!).moneriumChangeNeedsPasskey, false);
+  assert.equal((await publicUser((await store.findUser(a.id))!)).moneriumChangeNeedsPasskey, false);
 });
 await check("an approved account with no connection and an empty IBAN needs the passkey to relink", async () => {
   const a = await account({
@@ -137,8 +137,8 @@ await check("an approved account with no connection and an empty IBAN needs the 
   assert.match(start.data.error, /fresh passkey approval/);
   const keys = await call("POST", `/api/users/${a.id}/monerium/api-keys`, a.token, { clientId: "other_login_app", clientSecret: "other-login-secret" });
   assert.equal(keys.status, 401, `API-key relink on a session alone: ${keys.text}`);
-  assert.equal(store.findUser(a.id)!.funding?.moneriumProfileId, "profile-old", "the recorded profile is untouched");
-  assert.equal(publicUser(store.findUser(a.id)!).moneriumChangeNeedsPasskey, true, "the app is told to ask for the passkey");
+  assert.equal((await store.findUser(a.id))!.funding?.moneriumProfileId, "profile-old", "the recorded profile is untouched");
+  assert.equal((await publicUser((await store.findUser(a.id))!)).moneriumChangeNeedsPasskey, true, "the app is told to ask for the passkey");
 });
 await check("a pending account that once carried a Monerium profile needs the passkey too", async () => {
   const a = await account({ funding: { mode: "sandbox", status: "kyc_pending", moneriumProfileId: "profile-seen" } });
@@ -178,11 +178,11 @@ await check("the account projection sends only named fields", async () => {
     monerium: { connectedAt: now, profileId: "p", accessTokenEnc: "token-ciphertext", futureMoneriumSecret: "nested-leak" },
     passkeySafe: { address: `0x${"b".repeat(40)}`, status: "active", threshold: 1, passkeyPublicKey: { x: "1", y: "2" }, createdAt: now, futurePlanSecret: "plan-leak" },
   });
-  const json = JSON.stringify(publicUser(store.findUser(a.id)!));
+  const json = JSON.stringify(await publicUser((await store.findUser(a.id))!));
   for (const leak of ["must-not-leak", "futureSecret", "cv-secret", "code-hash-secret", "token-ciphertext", "nested-leak", "plan-leak"]) {
     assert.ok(!json.includes(leak), `published ${leak}`);
   }
-  const pub = publicUser(store.findUser(a.id)!);
+  const pub = await publicUser((await store.findUser(a.id))!);
   assert.equal(pub.id, a.id);
   assert.equal(pub.passkeySafe?.address, `0x${"b".repeat(40)}`);
   assert.equal(pub.monerium?.profileId, "p");
@@ -203,27 +203,27 @@ await check("declining Zoldenburg on an account with no Safe is refused and writ
   const a = await account();
   const r = await call("POST", `/api/users/${a.id}/recovery/zoldenburg/decline`, a.token, { acknowledged: true });
   assert.equal(r.status, 409, r.text);
-  assert.equal(store.findUser(a.id)!.passkeySafe, undefined);
+  assert.equal((await store.findUser(a.id))!.passkeySafe, undefined);
 });
 
 // ── 7. Monerium profile history ─────────────────────────────────────────────
 await check("every Monerium profile the account held is kept, in order, and shown to the operator", async () => {
   const a = await account({ passkeySafe: { address: `0x${"c".repeat(40)}`, status: "active", threshold: 1, passkeyPublicKey: { x: "1", y: "2" }, createdAt: now } });
-  store.updateUser(a.id, { funding: { mode: "sandbox", status: "provisioning", moneriumProfileId: "profile-1" } });
-  store.updateUser(a.id, { monerium: { connectedAt: now, profileId: "profile-1" } });
-  store.updateUser(a.id, { monerium: { connectedAt: now, profileId: "profile-2" }, funding: { mode: "sandbox", status: "provisioning", moneriumProfileId: "profile-2" } });
-  store.updateUser(a.id, { monerium: undefined });
-  store.updateUser(a.id, { moneriumProfileHistory: [] } as any);
-  const history = store.findUser(a.id)!.moneriumProfileHistory ?? [];
+  await store.updateUser(a.id, { funding: { mode: "sandbox", status: "provisioning", moneriumProfileId: "profile-1" } });
+  await store.updateUser(a.id, { monerium: { connectedAt: now, profileId: "profile-1" } });
+  await store.updateUser(a.id, { monerium: { connectedAt: now, profileId: "profile-2" }, funding: { mode: "sandbox", status: "provisioning", moneriumProfileId: "profile-2" } });
+  await store.updateUser(a.id, { monerium: undefined });
+  await store.updateUser(a.id, { moneriumProfileHistory: [] } as any);
+  const history = (await store.findUser(a.id))!.moneriumProfileHistory ?? [];
   assert.deepEqual(history.map((h) => h.profileId), ["profile-1", "profile-2"]);
   assert.ok(history.every((h) => h.at), "each entry is dated");
-  store.addRecoveryRequest({
+  await store.addRecoveryRequest({
     id: "rec-identity", userId: a.id, safeAddress: `0x${"c".repeat(40)}`, mode: "zoldenburg", status: "REVIEW_PENDING",
     requestedAt: now, expiresAt: now, recoveryDelayHours: 0, guardianAddress: `0x${"d".repeat(40)}`, recoveryModuleAddress: `0x${"e".repeat(40)}`,
     factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" },
   } as any);
-  store.addOperator({ id: "op_identity", name: "Identity Operator", email: "identity@example.com", createdAt: now, credentials: [] });
-  const r = await call("GET", "/api/admin/recoveries", issueOperatorSession("op_identity"));
+  await store.addOperator({ id: "op_identity", name: "Identity Operator", email: "identity@example.com", createdAt: now, credentials: [] });
+  const r = await call("GET", "/api/admin/recoveries", await issueOperatorSession("op_identity"));
   assert.equal(r.status, 200, r.text);
   const row = r.data.requests.find((x: any) => x.id === "rec-identity");
   assert.deepEqual(row.account.moneriumProfileHistory.map((h: any) => h.profileId), ["profile-1", "profile-2"]);
@@ -238,7 +238,7 @@ await check("a pending account cannot have Zold sign a balance or ownership lett
     assert.equal(r.status, 409, `${kind}: ${r.text}`);
     assert.equal(r.data.code, "ACCOUNT_NOT_VERIFIED");
   }
-  assert.equal(store.documentsForUser(a.id).length, 0);
+  assert.equal((await store.documentsForUser(a.id)).length, 0);
 });
 
 server.close();

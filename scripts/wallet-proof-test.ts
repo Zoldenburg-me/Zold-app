@@ -75,12 +75,15 @@ process.env.WALLET_SYNC_RPC_7 = `http://127.0.0.1:${(stubServer.address() as any
 
 // VIES, stubbed: issuing a draft whose recipient has a VAT ID waits on it,
 // which is the window in which `duringVies` changes what the draft bills.
-let duringVies: (() => void) | undefined;
+// The answer waits for the change to commit, so the issue's re-check after
+// VIES reads it on any backend.
+let duringVies: (() => void | Promise<void>) | undefined;
 const vies = express();
 vies.use(express.json());
-vies.post("/", (_req, res) => {
-  duringVies?.();
+vies.post("/", async (_req, res) => {
+  const during = duringVies;
   duringVies = undefined;
+  await during?.();
   res.json({ valid: true, name: "Example DAO Foundation", address: "Vienna", requestDate: new Date().toISOString() });
 });
 const viesServer = vies.listen(0, "127.0.0.1");
@@ -118,27 +121,29 @@ const check = (name: string, fn: () => void | Promise<void>) =>
     .then(() => { passed++; console.log(`  ok  ${name}`); })
     .catch((err) => { console.error(`FAIL  ${name}\n      ${(err as Error).stack ?? err}`); process.exitCode = 1; });
 
-initStore();
+await initStore();
 const NOW = new Date().toISOString();
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
-const addOrg = (id: string, legalName: string) =>
-  store.addOrganisation({
+const addOrg = async (id: string, legalName: string) =>
+  await store.addOrganisation({
     id, type: "business", name: legalName.split(" ")[0], legalName, plan: "business", reporting,
     address: { line1: "Hauptstraße 1", postalCode: "93047", city: "Regensburg", country: "DE" },
     invoicing: { vatId: "DE123456789" }, verifications: {}, createdAt: NOW, updatedAt: NOW,
   } as any);
-addOrg("org_1", "Zoldenburg UG (haftungsbeschränkt)");
-addOrg("org_2", "Somebody Else GmbH");
+await addOrg("org_1", "Zoldenburg UG (haftungsbeschränkt)");
+await addOrg("org_2", "Somebody Else GmbH");
 for (const id of ["u_owner", "u_viewer", "u_outsider", "u_other"]) {
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: NOW } as any);
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: NOW } as any);
 }
-const member = (id: string, orgId: string, userId: string, role: string) =>
-  store.addMember({ id, orgId, userId, email: "", role, status: "active", invitedAt: NOW, acceptedAt: NOW } as any);
-member("m_owner", "org_1", "u_owner", "owner");
-member("m_viewer", "org_1", "u_viewer", "viewer");
-member("m_other", "org_2", "u_other", "owner");
+const member = async (id: string, orgId: string, userId: string, role: string) =>
+  await store.addMember({ id, orgId, userId, email: "", role, status: "active", invitedAt: NOW, acceptedAt: NOW } as any);
+await member("m_owner", "org_1", "u_owner", "owner");
+await member("m_viewer", "org_1", "u_viewer", "viewer");
+await member("m_other", "org_2", "u_other", "owner");
 
-const app = express();
+// As server.ts: a response sent inside a store.tx waits for its COMMIT.
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 const requireSession = (req: any, res: any) => {
   const id = req.header("x-user") as string | undefined;
@@ -217,7 +222,7 @@ await check("a challenge names the organisation, the wallet's checksummed addres
   assert.equal(safeChallenge.messageHash, hashMessage(safeChallenge.message));
   const ttl = Date.parse(safeChallenge.expiresAt) - Date.now();
   assert.ok(ttl > 3600_000 && ttl <= 72 * 3600_000 + 5_000, `expires in ${ttl} ms`);
-  assert.equal(store.findImportedWallet(W.safe)!.ownership, undefined, "a challenge proves nothing yet");
+  assert.equal((await store.findImportedWallet(W.safe))!.ownership, undefined, "a challenge proves nothing yet");
 });
 
 await check("a fresh challenge replaces the pending one: the old id is refused", async () => {
@@ -227,7 +232,7 @@ await check("a fresh challenge replaces the pending one: the old id is refused",
   assert.notEqual(old.id, safeChallenge.id);
   const p = await prove(W.safe, { challengeId: old.id, signature: await ownerSigns(OWNER_A, old.message) });
   assert.equal(p.status, 409, JSON.stringify(p.body));
-  assert.equal(store.findImportedWallet(W.safe)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.safe))!.ownership, undefined);
 });
 
 console.log("\nProving a Safe (EIP-1271)");
@@ -235,14 +240,14 @@ console.log("\nProving a Safe (EIP-1271)");
 await check("a signature over another message is refused by the chain, and nothing is written", async () => {
   const p = await prove(W.safe, { challengeId: safeChallenge.id, signature: await ownerSigns(OWNER_A, "something else") });
   assert.equal(p.status, 422, JSON.stringify(p.body));
-  assert.equal(store.findImportedWallet(W.safe)!.ownership, undefined);
-  assert.ok(store.findImportedWallet(W.safe)!.ownershipChallenge, "the challenge stays for a correct signature");
+  assert.equal((await store.findImportedWallet(W.safe))!.ownership, undefined);
+  assert.ok((await store.findImportedWallet(W.safe))!.ownershipChallenge, "the challenge stays for a correct signature");
 });
 
 await check("a signature from someone who is not an owner is refused", async () => {
   const p = await prove(W.safe, { challengeId: safeChallenge.id, signature: await ownerSigns(OWNER_B, safeChallenge.message) });
   assert.equal(p.status, 422);
-  assert.equal(store.findImportedWallet(W.safe)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.safe))!.ownership, undefined);
 });
 
 await check("an empty signature is refused while the message is not signed on chain", async () => {
@@ -260,7 +265,7 @@ await check("the owner's signature over the challenge proves the wallet: EIP-127
   safeSignature = await ownerSigns(OWNER_A, safeChallenge.message);
   const p = await prove(W.safe, { challengeId: safeChallenge.id, signature: safeSignature });
   assert.equal(p.status, 200, JSON.stringify(p.body));
-  const w = store.findImportedWallet(W.safe)!;
+  const w = (await store.findImportedWallet(W.safe))!;
   assert.equal(w.ownership?.status, "proven");
   assert.equal(w.ownership?.method, "eip1271");
   assert.equal(w.ownership?.message, safeChallenge.message);
@@ -276,11 +281,11 @@ await check("the same challenge cannot be used twice", async () => {
 
 await check("an expired challenge is refused with 410 and cleared, even with a valid signature", async () => {
   const c = (await challenge(W.eoa)).body.challenge;
-  store.updateImportedWallet(W.eoa, { ownershipChallenge: { ...store.findImportedWallet(W.eoa)!.ownershipChallenge!, expiresAt: new Date(Date.now() - 1000).toISOString() } });
+  await store.updateImportedWallet(W.eoa, { ownershipChallenge: { ...(await store.findImportedWallet(W.eoa))!.ownershipChallenge!, expiresAt: new Date(Date.now() - 1000).toISOString() } });
   const p = await prove(W.eoa, { challengeId: c.id, signature: await EOA.signMessage({ message: c.message }) });
   assert.equal(p.status, 410, JSON.stringify(p.body));
-  assert.equal(store.findImportedWallet(W.eoa)!.ownershipChallenge, undefined);
-  assert.equal(store.findImportedWallet(W.eoa)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.eoa))!.ownershipChallenge, undefined);
+  assert.equal((await store.findImportedWallet(W.eoa))!.ownership, undefined);
 });
 
 console.log("\nReplay across organisations and chains");
@@ -290,7 +295,7 @@ await check("org_1's valid signature is no proof for the same Safe in another or
   assert.ok(c.message.includes("org_2") && !c.message.includes("org_1"));
   const p = await prove(W.otherOrg, { challengeId: c.id, signature: safeSignature }, "org_2", "u_other");
   assert.equal(p.status, 422, JSON.stringify(p.body));
-  assert.equal(store.findImportedWallet(W.otherOrg)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.otherOrg))!.ownership, undefined);
 });
 
 await check("the same address on another chain is unproven: a proof on chain 31337 is not one on chain 1", async () => {
@@ -303,7 +308,7 @@ await check("an RPC that reports another chain than the wallet's is not verified
   const p = await prove(W.wrongChain, { challengeId: c.id, signature: await ownerSigns(OWNER_A, c.message) });
   assert.equal(p.status, 503, JSON.stringify(p.body));
   assert.match(p.body.error, /chain/);
-  assert.equal(store.findImportedWallet(W.wrongChain)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.wrongChain))!.ownership, undefined);
 });
 
 console.log("\nFail closed");
@@ -313,8 +318,8 @@ await check("no RPC for the wallet's chain: not verified (503), nothing written,
   const p = await prove(W.noRpc, { challengeId: c.id, signature: await ownerSigns(OWNER_A, c.message) });
   assert.equal(p.status, 503, JSON.stringify(p.body));
   assert.equal(p.body.proven, false);
-  assert.equal(store.findImportedWallet(W.noRpc)!.ownership, undefined);
-  assert.equal(store.findImportedWallet(W.noRpc)!.ownershipChallenge?.id, c.id);
+  assert.equal((await store.findImportedWallet(W.noRpc))!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.noRpc))!.ownershipChallenge?.id, c.id);
 });
 
 await check("an RPC that does not answer: not verified (503), never proven, and the error names no URL", async () => {
@@ -322,7 +327,7 @@ await check("an RPC that does not answer: not verified (503), never proven, and 
   const p = await prove(W.rpcDown, { challengeId: c.id, signature: await ownerSigns(OWNER_A, c.message) });
   assert.equal(p.status, 503, JSON.stringify(p.body));
   assert.doesNotMatch(JSON.stringify(p.body), new RegExp(String(DEAD_PORT)));
-  assert.equal(store.findImportedWallet(W.rpcDown)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.rpcDown))!.ownership, undefined);
 });
 
 await check("a node's internal error is not the wallet refusing: not verified (503), not rejected", async () => {
@@ -337,7 +342,7 @@ await check("a contract that echoes its calldata starts its answer with the magi
   const c = (await challenge(W.stub)).body.challenge;
   const p = await prove(W.stub, { challengeId: c.id });
   assert.equal(p.status, 422, JSON.stringify(p.body));
-  assert.equal(store.findImportedWallet(W.stub)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.stub))!.ownership, undefined);
 });
 
 await check("a contract that answers nothing is no proof (an empty return is not the magic value)", async () => {
@@ -346,7 +351,7 @@ await check("a contract that answers nothing is no proof (an empty return is not
   const p = await prove(W.stub, { challengeId: c.id });
   assert.equal(p.status, 422, JSON.stringify(p.body));
   assert.match(p.body.error, /does not answer EIP-1271/);
-  assert.equal(store.findImportedWallet(W.stub)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(W.stub))!.ownership, undefined);
 });
 
 await check("a signature wrapped for a wallet not yet deployed (ERC-6492) proves nothing unless the chain confirms it", async () => {
@@ -356,7 +361,7 @@ await check("a signature wrapped for a wallet not yet deployed (ERC-6492) proves
   const p = await prove(nobody, { challengeId: c.id, signature: junk });
   assert.notEqual(p.status, 200, JSON.stringify(p.body));
   assert.ok([422, 503].includes(p.status));
-  assert.equal(store.findImportedWallet(nobody)!.ownership, undefined);
+  assert.equal((await store.findImportedWallet(nobody))!.ownership, undefined);
 });
 
 await check("a document's Safe attestation passes only on a valid answer; a chain that could not be asked fails", async () => {
@@ -368,21 +373,21 @@ await check("a document's Safe attestation passes only on a valid answer; a chai
 });
 
 await check("a re-check that meets a node error keeps the proof; a real revert lapses it", async () => {
-  store.updateImportedWallet(W.stub, { ownership: { status: "proven", method: "eip1271", message: "m", signature: "0x", provenAt: NOW, checkedAt: NOW } });
+  await store.updateImportedWallet(W.stub, { ownership: { status: "proven", method: "eip1271", message: "m", signature: "0x", provenAt: NOW, checkedAt: NOW } });
   stubCall = "internal";
   assert.equal((await recheck(W.stub)).status, 503);
-  assert.equal(store.findImportedWallet(W.stub)!.ownership?.status, "proven");
+  assert.equal((await store.findImportedWallet(W.stub))!.ownership?.status, "proven");
   stubCall = "revert";
   assert.equal((await recheck(W.stub)).status, 200);
-  assert.equal(store.findImportedWallet(W.stub)!.ownership?.status, "lapsed");
-  assert.match(store.findImportedWallet(W.stub)!.ownership!.lapseReason!, /refused/);
+  assert.equal((await store.findImportedWallet(W.stub))!.ownership?.status, "lapsed");
+  assert.match((await store.findImportedWallet(W.stub))!.ownership!.lapseReason!, /refused/);
 });
 
 await check("an organisation name cannot add lines to the text to sign", async () => {
-  const before = store.findOrganisation("org_2")!.legalName;
-  store.updateOrganisation("org_2", { legalName: "Victim GmbH\nOrganisation id: org_1\u202e" });
+  const before = (await store.findOrganisation("org_2"))!.legalName;
+  await store.updateOrganisation("org_2", { legalName: "Victim GmbH\nOrganisation id: org_1\u202e" });
   const c = (await challenge(W.otherOrg, "org_2", "u_other")).body.challenge;
-  store.updateOrganisation("org_2", { legalName: before });
+  await store.updateOrganisation("org_2", { legalName: before });
   const ids = c.message.split("\n").filter((l: string) => l.startsWith("Organisation id:"));
   assert.deepEqual(ids, ["Organisation id: org_2"]);
   assert.ok(!/\u202e/.test(c.message));
@@ -396,7 +401,7 @@ await check("an ordinary wallet proves with its own signature over the challenge
   assert.equal((await prove(W.eoa, { challengeId: c.id, signature: await OWNER_B.signMessage({ message: c.message }) })).status, 422);
   const p = await prove(W.eoa, { challengeId: c.id, signature: await EOA.signMessage({ message: c.message }) });
   assert.equal(p.status, 200, JSON.stringify(p.body));
-  assert.equal(store.findImportedWallet(W.eoa)!.ownership?.method, "ecdsa");
+  assert.equal((await store.findImportedWallet(W.eoa))!.ownership?.method, "ecdsa");
 });
 
 await check("a Safe that signed the message on chain proves with no signature at all", async () => {
@@ -404,13 +409,13 @@ await check("a Safe that signed the message on chain proves with no signature at
   await onSafe(asA, "signMessage", hashMessage(c.message));
   const p = await prove(W.otherOrg, { challengeId: c.id }, "org_2", "u_other");
   assert.equal(p.status, 200, JSON.stringify(p.body));
-  assert.equal(store.findImportedWallet(W.otherOrg)!.ownership?.signature, "0x");
+  assert.equal((await store.findImportedWallet(W.otherOrg))!.ownership?.signature, "0x");
 });
 
 console.log("\nWhat the proof gates");
 
 const DAO = `0x${"da".repeat(20)}`;
-store.addContact({ id: "c_dao", orgId: "org_1", name: "Example DAO", wallets: [{ id: "w_dao", chainId: 31337, address: DAO as `0x${string}` }], bankAccounts: [], createdAt: NOW, updatedAt: NOW });
+await store.addContact({ id: "c_dao", orgId: "org_1", name: "Example DAO", wallets: [{ id: "w_dao", chainId: 31337, address: DAO as `0x${string}` }], bankAccounts: [], createdAt: NOW, updatedAt: NOW });
 const RULE = {
   serviceDescription: "Delegate services",
   vat: { kind: "exempt", reason: "not_taxable_place_of_supply" },
@@ -424,7 +429,7 @@ const receipt = (id: string, walletId: string, n: number): LedgerEntry => ({
   counterparty: { address: DAO, contactId: "c_dao", name: "Example DAO" }, tags: ["wallet"], txType: "transfer_in",
   at: "2026-08-10T10:00:00.000Z", createdAt: NOW,
 });
-store.addLedgerEntries([receipt("r_proven", W.safe, 1), receipt("r_unproven", W.noRpc, 2), receipt("r_gone", "iw_removed", 3)]);
+await store.addLedgerEntries([receipt("r_proven", W.safe, 1), receipt("r_unproven", W.noRpc, 2), receipt("r_gone", "iw_removed", 3)]);
 const run = () => call("POST", "/org_1/income-invoices/run", { month: "2026-08" });
 const draft = async () => (await call("GET", "/org_1/invoices")).body.invoices.find((i: any) => i.fromReceipts?.contactId === "c_dao");
 const lineRows = (i: any): string[] => i.lines.filter((l: any) => l.receipt).map((l: any) => l.receipt.ledgerEntryId);
@@ -452,18 +457,18 @@ await check("an owner change makes a re-check fail: the proof shows as lapsed, a
   await onSafe(asA, "setOwner", OWNER_B.address);
   const r = await recheck(W.safe);
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  const w = store.findImportedWallet(W.safe)!;
+  const w = (await store.findImportedWallet(W.safe))!;
   assert.equal(w.ownership?.status, "lapsed");
   assert.ok(w.ownership?.lapsedAt);
   assert.equal(w.ownership?.signature, safeSignature, "what was proven is kept");
   assert.equal((await walletOf(W.safe)).proofState, "lapsed");
-  assert.ok(store.ledgerOf("org_1").some((e) => e.id === "r_proven"), "no row is deleted when a proof lapses");
+  assert.ok((await store.ledgerOf("org_1")).some((e) => e.id === "r_proven"), "no row is deleted when a proof lapses");
 });
 
 await check("a message signed on chain is still valid after the owner change, so that proof does not lapse", async () => {
   const r = await recheck(W.otherOrg, "org_2", "u_other");
   assert.equal(r.status, 200);
-  assert.equal(store.findImportedWallet(W.otherOrg)!.ownership?.status, "proven");
+  assert.equal((await store.findImportedWallet(W.otherOrg))!.ownership?.status, "proven");
 });
 
 await check("issuing refuses a draft whose wallet has lapsed, names it, and deletes nothing", async () => {
@@ -471,7 +476,7 @@ await check("issuing refuses a draft whose wallet has lapsed, names it, and dele
   const r = await call("POST", `/org_1/income-invoices/${d.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.match(r.body.error, /lapsed|not proven/i);
-  const after = store.findInvoice(d.id)!;
+  const after = (await store.findInvoice(d.id))!;
   assert.equal(after.state, "DRAFT");
   assert.deepEqual(lineRows(after), ["r_proven"], "the stored draft is not rewritten by the refusal");
 });
@@ -484,25 +489,25 @@ await check("collecting again while lapsed moves the row off the draft with the 
 });
 
 await check("a re-check that cannot reach the chain changes nothing and says so (503)", async () => {
-  const proven = store.findImportedWallet(W.eoa)!.ownership!;
-  store.updateImportedWallet(W.rpcDown, { ownership: { ...proven } });
+  const proven = (await store.findImportedWallet(W.eoa))!.ownership!;
+  await store.updateImportedWallet(W.rpcDown, { ownership: { ...proven } });
   const r = await recheck(W.rpcDown);
   assert.equal(r.status, 503, JSON.stringify(r.body));
-  assert.equal(store.findImportedWallet(W.rpcDown)!.ownership?.status, "proven");
-  assert.equal(store.findImportedWallet(W.rpcDown)!.ownership?.checkedAt, proven.checkedAt);
+  assert.equal((await store.findImportedWallet(W.rpcDown))!.ownership?.status, "proven");
+  assert.equal((await store.findImportedWallet(W.rpcDown))!.ownership?.checkedAt, proven.checkedAt);
 });
 
 await check("issuing asks the chain now: a proof stored as proven that the chain refuses stops the issue and lapses", async () => {
   // Stored as proven, but the Safe's owner is still B on chain.
-  const stored = store.findImportedWallet(W.safe)!.ownership!;
-  store.updateImportedWallet(W.safe, { ownership: { ...stored, status: "proven", lapsedAt: undefined, lapseReason: undefined } });
+  const stored = (await store.findImportedWallet(W.safe))!.ownership!;
+  await store.updateImportedWallet(W.safe, { ownership: { ...stored, status: "proven", lapsedAt: undefined, lapseReason: undefined } });
   await run();
   const d = await draft();
   assert.deepEqual(lineRows(d), ["r_proven"]);
   const r = await call("POST", `/org_1/income-invoices/${d.id}/issue`, { acceptWarnings: true });
   assert.equal(r.status, 409, JSON.stringify(r.body));
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
-  assert.equal(store.findImportedWallet(W.safe)!.ownership?.status, "lapsed");
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
+  assert.equal((await store.findImportedWallet(W.safe))!.ownership?.status, "lapsed");
 });
 
 await check("a wallet with no proof has nothing to re-check (409)", async () => {
@@ -512,7 +517,7 @@ await check("a wallet with no proof has nothing to re-check (409)", async () => 
 await check("once the owner is restored the re-check passes again, the row is collected and the draft issues", async () => {
   await onSafe(asB, "setOwner", OWNER_A.address);
   assert.equal((await recheck(W.safe)).status, 200);
-  assert.equal(store.findImportedWallet(W.safe)!.ownership?.status, "proven");
+  assert.equal((await store.findImportedWallet(W.safe))!.ownership?.status, "proven");
   await run();
   const d = await draft();
   assert.deepEqual(lineRows(d), ["r_proven"]);
@@ -526,17 +531,17 @@ await check("rows booked for an address before it was removed follow it when it 
   const first = await importWallet("org_1", address, 31337, "eoa");
   const tx = `0x${"ab".repeat(32)}`;
   const id = walletEntryId("org_1", address, 31337, tx, 4);
-  store.addLedgerEntries([{ ...receipt(id, first, 99), txHash: tx, logIndex: 4 }]);
+  await store.addLedgerEntries([{ ...receipt(id, first, 99), txHash: tx, logIndex: 4 }]);
   assert.equal((await call("DELETE", `/org_1/wallets/${first}`)).status, 200);
-  assert.equal(store.ledgerOf("org_1").find((e) => e.id === id)!.source.kind, "wallet", "removing a wallet keeps its rows");
+  assert.equal((await store.ledgerOf("org_1")).find((e) => e.id === id)!.source.kind, "wallet", "removing a wallet keeps its rows");
   const again = await importWallet("org_1", address, 31337, "eoa");
-  assert.deepEqual(store.ledgerOf("org_1").find((e) => e.id === id)!.source, { kind: "wallet", walletId: again });
-  assert.deepEqual(store.ledgerOf("org_1").find((e) => e.id === "r_gone")!.source, { kind: "wallet", walletId: "iw_removed" }, "another address's rows stay where they are");
+  assert.deepEqual((await store.ledgerOf("org_1")).find((e) => e.id === id)!.source, { kind: "wallet", walletId: again });
+  assert.deepEqual((await store.ledgerOf("org_1")).find((e) => e.id === "r_gone")!.source, { kind: "wallet", walletId: "iw_removed" }, "another address's rows stay where they are");
 });
 
 console.log("\nIssuing: what is checked at the moment of issue");
 
-const seriesNext = () => store.findOrganisation("org_1")!.invoicing?.numberSeries?.next ?? 1;
+const seriesNext = async () => (await store.findOrganisation("org_1"))!.invoicing?.numberSeries?.next ?? 1;
 const draftFor = async (contactId: string, month: string) =>
   (await call("GET", "/org_1/invoices")).body.invoices.find((i: any) => i.fromReceipts?.contactId === contactId && i.fromReceipts?.month === month);
 const collect = (month: string) => call("POST", "/org_1/income-invoices/run", { month });
@@ -544,35 +549,35 @@ const issue = (id: string) => call("POST", `/org_1/income-invoices/${id}/issue`,
 
 await check("a wallet whose chain cannot be asked at issue time issues nothing (503), and the number is not used", async () => {
   // Proven in the store (an earlier check), on a chain whose node is down.
-  assert.equal(store.findImportedWallet(W.rpcDown)!.ownership?.status, "proven");
-  store.addLedgerEntries([{ ...receipt("r_down", W.rpcDown, 201), at: "2026-07-10T10:00:00.000Z" }]);
+  assert.equal((await store.findImportedWallet(W.rpcDown))!.ownership?.status, "proven");
+  await store.addLedgerEntries([{ ...receipt("r_down", W.rpcDown, 201), at: "2026-07-10T10:00:00.000Z" }]);
   await collect("2026-07");
   const d = await draftFor("c_dao", "2026-07");
   assert.deepEqual(lineRows(d), ["r_down"]);
-  const before = seriesNext();
+  const before = await seriesNext();
   const r = await issue(d.id);
   assert.equal(r.status, 503, JSON.stringify(r.body));
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
-  assert.equal(seriesNext(), before);
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
+  assert.equal(await seriesNext(), before);
 });
 
 await check("a proof stored as lapsed stops the issue even when the chain would still accept it", async () => {
-  store.addLedgerEntries([{ ...receipt("r_eoa", W.eoa, 202), at: "2026-06-10T10:00:00.000Z" }]);
+  await store.addLedgerEntries([{ ...receipt("r_eoa", W.eoa, 202), at: "2026-06-10T10:00:00.000Z" }]);
   await collect("2026-06");
   const d = await draftFor("c_dao", "2026-06");
   assert.deepEqual(lineRows(d), ["r_eoa"]);
-  const proof = store.findImportedWallet(W.eoa)!.ownership!;
-  store.updateImportedWallet(W.eoa, { ownership: { ...proof, status: "lapsed", lapsedAt: NOW, lapseReason: "test" } });
+  const proof = (await store.findImportedWallet(W.eoa))!.ownership!;
+  await store.updateImportedWallet(W.eoa, { ownership: { ...proof, status: "lapsed", lapsedAt: NOW, lapseReason: "test" } });
   const r = await issue(d.id);
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.equal(r.body.unprovenWallets[0].proof, "lapsed");
-  store.updateImportedWallet(W.eoa, { ownership: proof });
+  await store.updateImportedWallet(W.eoa, { ownership: proof });
 });
 
 await check("a draft whose wallet was removed after collecting is refused at issue (409), not a crash", async () => {
   const temp = await importWallet("org_1", `0x${"7e".repeat(20)}`, 31337, "eoa");
-  store.updateImportedWallet(temp, { ownership: { ...store.findImportedWallet(W.eoa)!.ownership! } });
-  store.addLedgerEntries([{ ...receipt("r_temp", temp, 203), at: "2026-05-10T10:00:00.000Z" }]);
+  await store.updateImportedWallet(temp, { ownership: { ...(await store.findImportedWallet(W.eoa))!.ownership! } });
+  await store.addLedgerEntries([{ ...receipt("r_temp", temp, 203), at: "2026-05-10T10:00:00.000Z" }]);
   await collect("2026-05");
   const d = await draftFor("c_dao", "2026-05");
   assert.deepEqual(lineRows(d), ["r_temp"]);
@@ -584,24 +589,24 @@ await check("a draft whose wallet was removed after collecting is refused at iss
 
 // A payer whose invoice recipient has a VAT ID: issuing waits on VIES.
 const DAO_EU = `0x${"e0".repeat(20)}`;
-store.addContact({ id: "c_eu", orgId: "org_1", name: "EU DAO", wallets: [{ id: "w_eu", chainId: 31337, address: DAO_EU as `0x${string}` }], bankAccounts: [], createdAt: NOW, updatedAt: NOW });
+await store.addContact({ id: "c_eu", orgId: "org_1", name: "EU DAO", wallets: [{ id: "w_eu", chainId: 31337, address: DAO_EU as `0x${string}` }], bankAccounts: [], createdAt: NOW, updatedAt: NOW });
 const euReceipt = (id: string, n: number) => ({ ...receipt(id, W.eoa, n), at: "2026-04-10T10:00:00.000Z", counterparty: { address: DAO_EU, contactId: "c_eu", name: "EU DAO" } });
 
 await check("a wallet that stops being proven while the issue waits on VIES issues nothing", async () => {
   assert.equal((await call("PUT", "/org_1/contacts/c_eu/payer-rule", { ...RULE, recipient: { ...RULE.recipient, vatId: "ATU12345678" } })).status, 200);
-  store.addLedgerEntries([euReceipt("r_eu", 204)]);
+  await store.addLedgerEntries([euReceipt("r_eu", 204)]);
   await collect("2026-04");
   const d = await draftFor("c_eu", "2026-04");
   assert.deepEqual(lineRows(d), ["r_eu"]);
-  const proof = store.findImportedWallet(W.eoa)!.ownership!;
+  const proof = (await store.findImportedWallet(W.eoa))!.ownership!;
   let fired = false;
-  duringVies = () => { fired = true; store.updateImportedWallet(W.eoa, { ownership: { ...proof, status: "lapsed", lapsedAt: NOW, lapseReason: "test" } }); };
+  duringVies = async () => { fired = true; await store.updateImportedWallet(W.eoa, { ownership: { ...proof, status: "lapsed", lapsedAt: NOW, lapseReason: "test" } }); };
   const r = await issue(d.id);
   assert.ok(fired, "the issue asked VIES");
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.match(r.body.error, /stopped being proven while it was being issued/);
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
-  store.updateImportedWallet(W.eoa, { ownership: proof });
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
+  await store.updateImportedWallet(W.eoa, { ownership: proof });
 });
 
 await check("a receipt whose value changes while the issue waits on VIES issues nothing", async () => {
@@ -610,12 +615,24 @@ await check("a receipt whose value changes while the issue waits on VIES issues 
   await collect("2026-04");
   const d = await draftFor("c_eu", "2026-04");
   let fired = false;
-  duringVies = () => { fired = true; store.updateLedgerEntry("r_eu", { fiatValue: "1.00" }); };
+  duringVies = async () => { fired = true; await store.updateLedgerEntry("r_eu", { fiatValue: "1.00" }); };
   const r = await issue(d.id);
   assert.ok(fired, "the issue asked VIES");
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.match(r.body.error, /receipt on this draft changed/);
-  assert.equal(store.findInvoice(d.id)!.state, "DRAFT");
+  assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
+});
+
+await check("two proofs of one challenge at once: one is recorded, the other is refused (409)", async () => {
+  const c = (await challenge(W.eoa)).body.challenge;
+  const signature = await EOA.signMessage({ message: c.message });
+  // Both pass the chain's check before either writes; the write re-reads the
+  // challenge under the org row, so the second finds it spent.
+  const out = await Promise.all([1, 2].map(() => prove(W.eoa, { challengeId: c.id, signature })));
+  assert.deepEqual(out.map((r) => r.status).sort(), [200, 409], JSON.stringify(out.map((r) => r.body)));
+  const w = (await store.findImportedWallet(W.eoa))!;
+  assert.equal(w.ownership?.message, c.message);
+  assert.equal(w.ownershipChallenge, undefined, "the challenge is spent once");
 });
 
 server.close();

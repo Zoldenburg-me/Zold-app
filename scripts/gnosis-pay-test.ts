@@ -278,8 +278,8 @@ await check("an internal failure answers 500 with a reference, never the raw err
   const express = (await import("express")).default;
   const { initStore, store } = await import("../services/api/src/store.js");
   const { createGnosisPayRouter } = await import("../services/api/src/routes/gnosis-pay.js");
-  initStore();
-  store.addUser({ id: "u_gp", name: "u", country: "DE", kycStatus: "approved", createdAt: new Date().toISOString() } as any);
+  await initStore();
+  await store.addUser({ id: "u_gp", name: "u", country: "DE", kycStatus: "approved", createdAt: new Date().toISOString() } as any);
   const app = express();
   app.use("/api/gnosis-pay", createGnosisPayRouter(() => ({ userId: "u_gp" }) as any));
   const server = app.listen(0, "127.0.0.1");
@@ -314,7 +314,7 @@ await check("an internal failure answers 500 with a reference, never the raw err
   const { createGnosisPayRouter } = await import("../services/api/src/routes/gnosis-pay.js");
   const { readFileSync } = await import("node:fs");
   for (const id of ["u_a", "u_b"]) {
-    store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: new Date().toISOString() } as any);
+    await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: new Date().toISOString() } as any);
   }
   freshNonces = true;
   const app = express().use(express.json({ limit: SECURITY.jsonBodyLimit }));
@@ -360,15 +360,15 @@ await check("an internal failure answers 500 with a reference, never the raw err
   };
   const verify = (as: string, v: { message: string; cookie: string; signature: string }) =>
     call("POST", "/siwe/verify", as, { json: v });
-  const connectedOf = (id: string) => store.findUser(id)?.gnosisPay;
+  const connectedOf = async (id: string) => (await store.findUser(id))?.gnosisPay;
   const disconnect = (id: string) => store.updateUser(id, { gnosisPay: undefined });
 
   await check("router: a start and verify on one session connects the signer's profile", async () => {
     const r = await verify("u_a", await start("u_a", WALLET_A));
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(connectedOf("u_a")?.userId, "gp-A");
-    assert.equal(connectedOf("u_a")?.connectedAddress.toLowerCase(), WALLET_A);
-    disconnect("u_a");
+    assert.equal((await connectedOf("u_a"))?.userId, "gp-A");
+    assert.equal((await connectedOf("u_a"))?.connectedAddress.toLowerCase(), WALLET_A);
+    await disconnect("u_a");
   });
 
   await check("router: a sign-in started by session A cannot be finished by session B", async () => {
@@ -377,11 +377,11 @@ await check("an internal failure answers 500 with a reference, never the raw err
     const r = await verify("u_b", v);
     assert.notEqual(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.token, undefined, "B was handed A's Gnosis Pay token");
-    assert.equal(connectedOf("u_b"), undefined, "B connected to A's Gnosis Pay profile");
+    assert.equal((await connectedOf("u_b")), undefined, "B connected to A's Gnosis Pay profile");
     assert.equal(challengeCalls, before, "refused before Gnosis Pay is asked");
     const again = await verify("u_a", v);
     assert.notEqual(again.status, 200, "a start tried on another account is spent, not handed back");
-    assert.equal(connectedOf("u_a"), undefined);
+    assert.equal((await connectedOf("u_a")), undefined);
   });
 
   await check("router: verify with another start's cookie is refused", async () => {
@@ -389,7 +389,7 @@ await check("an internal failure answers 500 with a reference, never the raw err
     const v2 = await start("u_a", WALLET_A);
     const r = await verify("u_a", { ...v1, cookie: v2.cookie });
     assert.notEqual(r.status, 200, JSON.stringify(r.body));
-    assert.equal(connectedOf("u_a"), undefined);
+    assert.equal((await connectedOf("u_a")), undefined);
   });
 
   await check("router: session A cannot finish with a message for signer B on A's nonce", async () => {
@@ -399,28 +399,28 @@ await check("an internal failure answers 500 with a reference, never the raw err
     const r = await verify("u_a", { message: lines.join("\n"), cookie: v.cookie, signature: `signed:${WALLET_B}` });
     assert.notEqual(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.token, undefined);
-    assert.equal(connectedOf("u_a"), undefined, "A connected to B's profile");
+    assert.equal((await connectedOf("u_a")), undefined, "A connected to B's profile");
   });
 
   await check("router: a profile that does not list the signing wallet is not connected", async () => {
     const r = await verify("u_a", await start("u_a", WALLET_M));
     assert.notEqual(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.token, undefined);
-    assert.equal(connectedOf("u_a"), undefined, "A connected to a profile that is not the signer's");
+    assert.equal((await connectedOf("u_a")), undefined, "A connected to a profile that is not the signer's");
     const r2 = await verify("u_a", await start("u_a", WALLET_N));
     assert.notEqual(r2.status, 200, JSON.stringify(r2.body));
     assert.equal(r2.body.token, undefined);
-    assert.equal(connectedOf("u_a"), undefined, "A connected to a profile with no id");
+    assert.equal((await connectedOf("u_a")), undefined, "A connected to a profile with no id");
   });
 
   await check("router: a completed sign-in cannot be replayed", async () => {
     const v = await start("u_a", WALLET_A);
     assert.equal((await verify("u_a", v)).status, 200);
-    disconnect("u_a");
+    await disconnect("u_a");
     const before = challengeCalls;
     const r = await verify("u_a", v);
     assert.notEqual(r.status, 200, "the same message, signature and cookie signed in twice");
-    assert.equal(connectedOf("u_a"), undefined);
+    assert.equal((await connectedOf("u_a")), undefined);
     assert.equal(challengeCalls, before);
   });
 
@@ -431,27 +431,27 @@ await check("an internal failure answers 500 with a reference, never the raw err
     let r;
     try { r = await verify("u_a", v); } finally { Date.now = realNow; }
     assert.notEqual(r.status, 200, JSON.stringify(r.body));
-    assert.equal(connectedOf("u_a"), undefined);
+    assert.equal((await connectedOf("u_a")), undefined);
   });
 
   await check("router: /account with another profile's token never overwrites the connection", async () => {
     assert.equal((await verify("u_a", await start("u_a", WALLET_A))).status, 200);
-    const mine = structuredClone(connectedOf("u_a"));
+    const mine = structuredClone((await connectedOf("u_a")));
     const theirs = await verify("u_b", await start("u_b", WALLET_B));
     assert.equal(theirs.status, 200);
     const r = await call("GET", "/account", "u_a", { token: theirs.body.token });
     assert.equal(r.status, 409, JSON.stringify(r.body));
     assert.equal(r.body.reauth, true);
     assert.equal(r.body.user, undefined, "B's profile was served as A's card account");
-    assert.deepEqual(connectedOf("u_a"), mine, "A's stored connection was rewritten from B's profile");
+    assert.deepEqual((await connectedOf("u_a")), mine, "A's stored connection was rewritten from B's profile");
   });
 
   await check("router: /account with no connection records none", async () => {
     const tokenB = tokens[tokens.length - 1];
-    disconnect("u_a");
+    await disconnect("u_a");
     const r = await call("GET", "/account", "u_a", { token: tokenB });
     assert.notEqual(r.status, 500);
-    assert.equal(connectedOf("u_a"), undefined, "a bare token connected a profile without a sign-in");
+    assert.equal((await connectedOf("u_a")), undefined, "a bare token connected a profile without a sign-in");
   });
 
   await check("router: empty, malformed, wrong-typed and oversized request bodies connect nothing and call nobody", async () => {
@@ -464,7 +464,7 @@ await check("an internal failure answers 500 with a reference, never the raw err
     assert.equal((await call("POST", "/siwe/verify", "u_a", { json: { message: big, signature: "s", cookie: "c" } })).status, 413);
     assert.equal((await call("POST", "/siwe/start", "u_a", { raw: "" })).status, 400);
     assert.equal(challengeCalls, before);
-    assert.equal(connectedOf("u_a"), undefined);
+    assert.equal((await connectedOf("u_a")), undefined);
   });
 
   const upstream = async (path: string, kind: NonNullable<typeof fault>["kind"], run: () => Promise<{ status: number; body: any }>) => {
@@ -497,36 +497,36 @@ await check("an internal failure answers 500 with a reference, never the raw err
   });
 
   await check("router: an empty, malformed, oversized or stalled sign-in answer connects nothing", async () => {
-    disconnect("u_a");
+    await disconnect("u_a");
     for (const kind of ["empty", "malformed", "oversized", "hang"] as const) {
       const v = await start("u_a", WALLET_A);
       const r = await upstream("/api/v1/auth/challenge", kind, () => verify("u_a", v));
       assert.equal(r.status, kind === "hang" ? 504 : 502, `${kind}: ${JSON.stringify(r.body)}`);
       assert.equal(r.body.token, undefined);
-      assert.equal(connectedOf("u_a"), undefined, kind);
+      assert.equal((await connectedOf("u_a")), undefined, kind);
     }
   });
 
   await check("router: a sign-in whose profile read fails is refused whole, and a retry connects", async () => {
-    disconnect("u_a");
+    await disconnect("u_a");
     const v = await start("u_a", WALLET_A);
     const r = await upstream("/api/v1/user", "unavailable", () => verify("u_a", v));
     assert.equal(r.status, 502, JSON.stringify(r.body));
     assert.equal(r.body.token, undefined, "a token was handed back for a sign-in that connected nothing");
-    assert.equal(connectedOf("u_a"), undefined);
+    assert.equal((await connectedOf("u_a")), undefined);
     const again = await verify("u_a", await start("u_a", WALLET_A));
     assert.equal(again.status, 200, JSON.stringify(again.body));
-    assert.equal(connectedOf("u_a")?.userId, "gp-A");
+    assert.equal((await connectedOf("u_a"))?.userId, "gp-A");
   });
 
   await check("router: a sign-in whose profile read answers null or stalls connects nothing and hands back no token", async () => {
-    disconnect("u_a");
+    await disconnect("u_a");
     for (const kind of ["null", "hang"] as const) {
       const v = await start("u_a", WALLET_A);
       const r = await upstream("/api/v1/user", kind, () => verify("u_a", v));
       assert.equal(r.status, 502, `${kind}: ${JSON.stringify(r.body)}`);
       assert.equal(r.body.token, undefined, kind);
-      assert.equal(connectedOf("u_a"), undefined, kind);
+      assert.equal((await connectedOf("u_a")), undefined, kind);
     }
   });
 
@@ -548,7 +548,7 @@ await check("an internal failure answers 500 with a reference, never the raw err
 
   await check("router: no Gnosis Pay token in the store, the logs or any answer but its own sign-in", async () => {
     assert.ok(tokens.length >= 3, "the matrix issued tokens");
-    const stored = JSON.stringify(store.findUser("u_a")) + JSON.stringify(store.findUser("u_b")) + readFileSync(DB_PATH, "utf8");
+    const stored = JSON.stringify(await store.findUser("u_a")) + JSON.stringify(await store.findUser("u_b")) + readFileSync(DB_PATH, "utf8");
     const log = logged.join("\n");
     for (const token of tokens) {
       assert.ok(!stored.includes(token), "a token is in the store");

@@ -64,7 +64,7 @@ const low = (a: string) => a.toLowerCase();
 
 /** The deployed org Safe and its euro account; null before deployment.
  *  Throws OrgSafePlanRefusal for an org with no Safe of its own. */
-function deployedSafe(org: Organisation): { plan: OrgSafePlan; account: Account } | null {
+async function deployedSafe(org: Organisation): Promise<{ plan: OrgSafePlan; account: Account } | null> {
   let plan: OrgSafePlan;
   try {
     plan = orgSafePlan(org);
@@ -72,30 +72,33 @@ function deployedSafe(org: Organisation): { plan: OrgSafePlan; account: Account 
     if (err instanceof OrgSafePlanRefusal && err.code === "ORG_SAFE_MISSING") return null;
     throw err;
   }
-  const account = store.accountsOf(org.id).find((a) => a.currency === "EUR" && !!a.address && low(a.address) === low(plan.address));
+  const account = (await store.accountsOf(org.id)).find((a) => a.currency === "EUR" && !!a.address && low(a.address) === low(plan.address));
   return plan.status === "active" && account ? { plan, account } : null;
 }
 
 /** A setup op that is still open, or may have landed: a second one is never
  *  queued beside it. */
-function openSetupOp(orgId: string, safeAddress: string, now: number): PendingSafeOp | undefined {
-  return store.safeOpsOf(orgId).find((op) =>
+async function openSetupOp(orgId: string, safeAddress: string, now: number): Promise<PendingSafeOp | undefined> {
+  return (await store.safeOpsOf(orgId)).find((op) =>
     op.kind === GUARDIAN_OP_KIND && low(op.safeAddress) === low(safeAddress) &&
     ((op.state === "PENDING" && Date.parse(op.expiresAt) > now) || op.state === "RELAYING" || op.state === "MANUAL_REVIEW"));
 }
 
 /** Write Organisation.recovery once an executed setup op exists and the chain
  *  lists the guardian it added. */
-function noteExecuted(org: Organisation, safeAddress: string, guardian: Address, onChain: boolean): Organisation["recovery"] {
-  if (!onChain) return undefined;
-  if (org.recovery && low(org.recovery.guardianAddress) === low(guardian)) return org.recovery;
-  const done = store.safeOpsOf(org.id)
-    .filter((op) => op.kind === GUARDIAN_OP_KIND && op.state === "EXECUTED" && low(op.safeAddress) === low(safeAddress))
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
-  if (!done) return undefined;
-  const recovery = { guardianAddress: guardian, addedAt: done.updatedAt };
-  store.updateOrganisation(org.id, { recovery });
-  return recovery;
+async function noteExecuted(org: Organisation, safeAddress: string, guardian: Address, onChain: boolean): Promise<Organisation["recovery"]> {
+  return store.tx(async () => {
+    if (!onChain) return undefined;
+    const now = (await store.lockOrganisation(org.id)) ?? org;
+    if (now.recovery && low(now.recovery.guardianAddress) === low(guardian)) return now.recovery;
+    const done = (await store.safeOpsOf(org.id))
+      .filter((op) => op.kind === GUARDIAN_OP_KIND && op.state === "EXECUTED" && low(op.safeAddress) === low(safeAddress))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+    if (!done) return undefined;
+    const recovery = { guardianAddress: guardian, addedAt: done.updatedAt };
+    await store.updateOrganisation(org.id, { recovery });
+    return recovery;
+  });
 }
 
 export type OrgRecoveryView =
@@ -127,12 +130,12 @@ export type OrgRecoveryView =
 export async function readOrgRecovery(org: Organisation, chain: OrgRecoveryChain = liveOrgRecoveryChain, now = Date.now()): Promise<OrgRecoveryView> {
   const available = zoldenburgRecoveryEnabled();
   const guardian = zoldenburgGuardianAddress() ?? null;
-  const safe = deployedSafe(org);
+  const safe = await deployedSafe(org);
   if (!safe) return { state: "not_set_up", available, guardian, armed: false };
   const state = await chain.read(safe.plan.address);
   const onChain = !!guardian && state.guardians.some((g) => low(g) === low(guardian));
-  const recovery = guardian ? noteExecuted(org, safe.plan.address, guardian, onChain) : undefined;
-  const open = openSetupOp(org.id, safe.plan.address, now);
+  const recovery = guardian ? (await noteExecuted(org, safe.plan.address, guardian, onChain)) : undefined;
+  const open = await openSetupOp(org.id, safe.plan.address, now);
   return {
     state: "set_up",
     available,
@@ -181,9 +184,9 @@ export async function queueOrgGuardianSetup(args: {
   }
   const guardian = zoldenburgGuardianAddress();
   if (!guardian) throw new OrgRecoveryRefusal(503, "RECOVERY_UNAVAILABLE", "Zoldenburg recovery is not available on this deployment.");
-  const safe = deployedSafe(org);
+  const safe = await deployedSafe(org);
   if (!safe) throw new OrgRecoveryRefusal(409, "ORG_SAFE_NOT_DEPLOYED", "The company’s Safe is not set up yet, so no guardian can be added to it.");
-  const open = openSetupOp(org.id, safe.plan.address, now);
+  const open = await openSetupOp(org.id, safe.plan.address, now);
   if (open) return { op: open, created: false };
 
   const module = moduleAddress();
@@ -210,29 +213,32 @@ export async function queueOrgGuardianSetup(args: {
     throw err;
   }
   // The org and member as they are now, and no setup op queued meanwhile:
-  // everything from here to the write is synchronous.
-  const orgNow = store.findOrganisation(org.id);
-  const memberNow = store.findMember(member.id);
-  if (!orgNow || !memberNow || memberNow.status !== "active" || memberNow.role !== "owner") {
-    throw new OrgRecoveryRefusal(409, "CANNOT_QUEUE", "This organisation or your membership changed; nothing was created.");
-  }
-  const raced = openSetupOp(org.id, safe.plan.address, now);
-  if (raced) return { op: raced, created: false };
-  try {
-    const op = queueSafeOp({
-      org: orgNow,
-      member: memberNow,
-      safeAddress: safe.plan.address,
-      kind: GUARDIAN_OP_KIND,
-      summary: `${state.moduleEnabled ? "" : "Enable the recovery module and "}${state.moduleEnabled ? "Add" : "add"} Zoldenburg UG (${guardian}) as the Safe’s recovery guardian`,
-      prepared,
-      guardianAddress: guardian,
-    });
-    return { op, created: true };
-  } catch (err) {
-    if (err instanceof SafeOpRefusal) throw new OrgRecoveryRefusal(err.status, err.code, err.message);
-    throw err;
-  }
+  // checked and written in one transaction, which holds the organisation.
+  return store.tx(async () => {
+    await store.lockOrganisation(org.id);
+    const orgNow = await store.findOrganisation(org.id);
+    const memberNow = await store.findMember(member.id);
+    if (!orgNow || !memberNow || memberNow.status !== "active" || memberNow.role !== "owner") {
+      throw new OrgRecoveryRefusal(409, "CANNOT_QUEUE", "This organisation or your membership changed; nothing was created.");
+    }
+    const raced = await openSetupOp(org.id, safe.plan.address, now);
+    if (raced) return { op: raced, created: false };
+    try {
+      const op = await queueSafeOp({
+        org: orgNow,
+        member: memberNow,
+        safeAddress: safe.plan.address,
+        kind: GUARDIAN_OP_KIND,
+        summary: `${state.moduleEnabled ? "" : "Enable the recovery module and "}${state.moduleEnabled ? "Add" : "add"} Zoldenburg UG (${guardian}) as the Safe’s recovery guardian`,
+        prepared,
+        guardianAddress: guardian,
+      });
+      return { op, created: true };
+    } catch (err) {
+      if (err instanceof SafeOpRefusal) throw new OrgRecoveryRefusal(err.status, err.code, err.message);
+      throw err;
+    }
+  });
 }
 
 type SignRefusal = { status: number; code: string; error: string; invalidate?: string };

@@ -90,12 +90,14 @@ try {
 
   // Imported after the deploy so config/chain read the right addresses.
   const { initStore, store } = await import("../services/api/src/store.js");
+  // The live rows, for arranging state no store method writes (store/db.ts).
+  const dbm = await import("../services/api/src/store/db.js");
   const { abis, addrs, eur, orchestratorAddress, orchestratorWallet, publicClient, writeAndWait, deployerWallet } =
     await import("../services/api/src/chain.js");
   const { compensateTransfer, sweepStrandedTransfers, dailyCapUsage, DEBIT_STEP, strandedAction } = await import(
     "../services/api/src/orchestrator.js"
   );
-  initStore();
+  await initStore();
 
   const eureBalance = async (who: `0x${string}`) =>
     eur.fromWei(
@@ -118,7 +120,7 @@ try {
       createdAt: new Date().toISOString(),
       kyc: { status: "approved" as const, updatedAt: new Date().toISOString() },
     } as any;
-    store.addUser(user);
+    await store.addUser(user);
     if (safeEur > 0) {
       await writeAndWait(deployerWallet!, {
         address: addrs().eure,
@@ -160,7 +162,7 @@ try {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     } as any;
-    store.addTransfer(t);
+    await store.addTransfer(t);
     return t;
   }
 
@@ -199,7 +201,7 @@ try {
   {
     const user = await seedUser("Safe Swapped", 0);
     const t = await seedSafeFundedTransfer(user, 60, ["swapper.swapExactIn"]);
-    store.updateTransfer(t.id, {
+    await store.updateTransfer(t.id, {
       usdcOut: 50,
       liquidity: {
         provider: "dex",
@@ -261,7 +263,7 @@ try {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     } as any;
-    store.addTransfer(t);
+    await store.addTransfer(t);
     const before = await eureBalance(user.address);
     const out = await compensateTransfer(t.id);
     check("state is REFUNDED", out.state === "REFUNDED", `got ${out.state} (${out.error ?? ""})`);
@@ -284,7 +286,7 @@ try {
     const user = await seedUser("Safe Sweep", 0);
     const t = await seedSafeFundedTransfer(user, 25);
     const n = await sweepStrandedTransfers();
-    const out = store.findTransfer(t.id)!;
+    const out = (await store.findTransfer(t.id))!;
     check("sweep compensated at least one transfer", n >= 1, `n=${n}`);
     check("swept transfer reached REFUNDED", out.state === "REFUNDED", `got ${out.state}`);
     check("swept refund is €25", out.refund?.amountEur === 25, `got ${out.refund?.amountEur}`);
@@ -307,7 +309,7 @@ try {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     } as any;
-    store.addTransfer(t);
+    await store.addTransfer(t);
     const out = await compensateTransfer(t.id);
     check("nothing moved, so nothing is owed", out.refund?.amountEur === 0);
     check(
@@ -353,7 +355,7 @@ try {
     } finally {
       (publicClient as any).waitForTransactionReceipt = waitReceipt;
     }
-    const out = store.findTransfer(t.id)!;
+    const out = (await store.findTransfer(t.id))!;
     const after = await eureBalance(user.address);
     check("the concurrent sweep did not refund a second time", after - before === 30, `${before} -> ${after}`);
     check(
@@ -384,16 +386,16 @@ try {
     const stale = new Date(Date.now() - 60 * 60_000).toISOString();
     const user = await seedUser("Stranded Outbound", 0);
     const sepa = await seedSafeFundedTransfer(user, 15, ["monerium.redeem.pending"]);
-    store.updateTransfer(sepa.id, { state: "DEBITED", error: undefined });
-    store.findTransfer(sepa.id)!.updatedAt = stale;
+    await store.updateTransfer(sepa.id, { state: "DEBITED", error: undefined });
+    dbm.db.transfers.find((x) => x.id === sepa.id)!.updatedAt = stale;
     const cash = await seedSafeFundedTransfer(user, 15, ["bridge.xyz.deposit.pending"]);
-    store.updateTransfer(cash.id, { state: "SWAPPED", error: undefined });
-    store.findTransfer(cash.id)!.updatedAt = stale;
+    await store.updateTransfer(cash.id, { state: "SWAPPED", error: undefined });
+    dbm.db.transfers.find((x) => x.id === cash.id)!.updatedAt = stale;
     const before = await eureBalance(user.address);
     await sweepStrandedTransfers();
     const after = await eureBalance(user.address);
-    const s = store.findTransfer(sepa.id)!;
-    const c = store.findTransfer(cash.id)!;
+    const s = (await store.findTransfer(sepa.id))!;
+    const c = (await store.findTransfer(cash.id))!;
     check("a stranded row with a redeem in flight goes to review", s.state === "MANUAL_REVIEW", `got ${s.state}`);
     check("a stranded row with a Bridge deposit in flight goes to review", c.state === "MANUAL_REVIEW", `got ${c.state}`);
     check("neither was refunded", after === before && !s.refund && !c.refund, `${before} -> ${after}`);
@@ -421,7 +423,7 @@ try {
 
   console.log("   a refund that definitely did not go out is retried; an uncertain one is reviewed…");
   {
-    const steps = (id: string) => store.findTransfer(id)!.txs.map((x: any) => x.step);
+    const steps = async (id: string) => (await store.findTransfer(id))!.txs.map((x: any) => x.step);
     const realWrite = orchestratorWallet.writeContract;
     const realWait = publicClient.waitForTransactionReceipt;
     const restore = () => {
@@ -444,10 +446,10 @@ try {
       }
       check(
         "a refund write that threw before a hash records not-sent after its intent",
-        steps(t.id).join(",").endsWith("safe.refundTransfer.pending,safe.refundTransfer.not-sent"),
-        steps(t.id).join(","),
+        (await steps(t.id)).join(",").endsWith("safe.refundTransfer.pending,safe.refundTransfer.not-sent"),
+        (await steps(t.id)).join(","),
       );
-      check("and the transfer is still FAILED, not in review", store.findTransfer(t.id)!.state === "FAILED");
+      check("and the transfer is still FAILED, not in review", (await store.findTransfer(t.id))!.state === "FAILED");
       const out = await compensateTransfer(t.id);
       check("the retried refund lands", out.state === "REFUNDED" && out.refund?.amountEur === 12, `got ${out.state} (${out.error ?? ""})`);
       check("exactly once", (await eureBalance(user.address)) - before === 12);
@@ -467,15 +469,15 @@ try {
           try {
             out = await compensateTransfer(t.id);
           } catch {
-            out = store.findTransfer(t.id);
+            out = await store.findTransfer(t.id);
           }
         }
       } finally {
         restore();
       }
-      const notSent = steps(t.id).filter((s) => s === "safe.refundTransfer.not-sent").length;
-      const pending = steps(t.id).filter((s) => s === "safe.refundTransfer.pending").length;
-      check("a refund refused every time is attempted a bounded number of times", notSent === 5 && pending === 5, steps(t.id).join(","));
+      const notSent = (await steps(t.id)).filter((s) => s === "safe.refundTransfer.not-sent").length;
+      const pending = (await steps(t.id)).filter((s) => s === "safe.refundTransfer.pending").length;
+      check("a refund refused every time is attempted a bounded number of times", notSent === 5 && pending === 5, (await steps(t.id)).join(","));
       check(
         "and then goes to review with the reason",
         out.state === "MANUAL_REVIEW" && /5 refund attempts/.test(out.error ?? "") && !out.refund,
@@ -496,8 +498,8 @@ try {
       } finally {
         restore();
       }
-      const reverted = store.findTransfer(t.id)!.txs.find((x: any) => x.step === "safe.refundTransfer.reverted");
-      check("a reverted refund records reverted with its hash", reverted?.hash === fakeHash, steps(t.id).join(","));
+      const reverted = (await store.findTransfer(t.id))!.txs.find((x: any) => x.step === "safe.refundTransfer.reverted");
+      check("a reverted refund records reverted with its hash", reverted?.hash === fakeHash, (await steps(t.id)).join(","));
       const out = await compensateTransfer(t.id);
       check("the refund is retried and lands", out.state === "REFUNDED" && out.refund?.amountEur === 13, `got ${out.state} (${out.error ?? ""})`);
       check("exactly once after a revert", (await eureBalance(user.address)) - before === 13);
@@ -518,8 +520,8 @@ try {
       }
       check(
         "a post-hash timeout settles nothing",
-        steps(t.id).at(-1) === "safe.refundTransfer.pending",
-        steps(t.id).join(","),
+        (await steps(t.id)).at(-1) === "safe.refundTransfer.pending",
+        (await steps(t.id)).join(","),
       );
       const out = await compensateTransfer(t.id);
       check("and goes to review, not a second refund", out.state === "MANUAL_REVIEW" && !out.refund, `got ${out.state}`);
@@ -563,7 +565,7 @@ try {
       } finally {
         restore();
       }
-      check(`${label} on the write settles nothing`, steps(t.id).at(-1) === "safe.refundTransfer.pending", steps(t.id).join(","));
+      check(`${label} on the write settles nothing`, (await steps(t.id)).at(-1) === "safe.refundTransfer.pending", (await steps(t.id)).join(","));
       const out = await compensateTransfer(t.id);
       check(`${label} goes to review without a second refund`, out.state === "MANUAL_REVIEW" && !out.refund, `got ${out.state}`);
       check(`${label}: nothing was paid twice`, (await eureBalance(user.address)) === before);
@@ -597,9 +599,9 @@ try {
     // writeAndWait itself: the hooks fire only on a definite outcome.
     const calls: string[] = [];
     const hooks = {
-      beforeSend: () => calls.push("before"),
-      onNotSent: () => calls.push("not-sent"),
-      onReverted: (h: string) => calls.push(`reverted:${h}`),
+      beforeSend: () => void calls.push("before"),
+      onNotSent: () => void calls.push("not-sent"),
+      onReverted: (h: string) => void calls.push(`reverted:${h}`),
     };
     const args = {
       address: addrs().eure,
@@ -645,6 +647,38 @@ try {
       restore();
     }
     check("insufficient funds is a definite refusal", calls.join(",") === "before,not-sent", calls.join(","));
+    // An async hook is awaited: the intent is stored before the send, and a
+    // hook that rejects stops the write (nothing went out unrecorded).
+    {
+      const order: string[] = [];
+      const slow = (label: string) => async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        order.push(label);
+      };
+      (orchestratorWallet as any).writeContract = async () => {
+        order.push("send");
+        throw new TransactionExecutionError(new InsufficientFundsError({ cause: new InternalRpcError(new Error("insufficient funds")) }), {
+          account: orchestratorWallet.account,
+        } as any);
+      };
+      try {
+        await assert.rejects(writeAndWait(orchestratorWallet, args, { beforeSend: slow("before"), onNotSent: slow("not-sent") }), /insufficient funds/i);
+      } finally {
+        restore();
+      }
+      check("an async beforeSend finishes before the send, and onNotSent before the error propagates", order.join(",") === "before,send,not-sent", order.join(","));
+      order.length = 0;
+      (orchestratorWallet as any).writeContract = async () => {
+        order.push("send");
+        return "0x" as const;
+      };
+      try {
+        await assert.rejects(writeAndWait(orchestratorWallet, args, { beforeSend: async () => { throw new Error("intent not stored"); } }), /intent not stored/);
+      } finally {
+        restore();
+      }
+      check("a beforeSend that rejects stops the write", order.length === 0, order.join(","));
+    }
     // The refusal classifier reads only the error viem throws, which after a
     // retry is the LAST attempt's: an accepted first attempt would hide behind
     // a refusal on the retry. Write clients therefore never retry.
@@ -689,6 +723,11 @@ try {
     const intentAt = src.indexOf('recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending")');
     const swapAt = src.indexOf("executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan })");
     check("the swap intent is recorded before the orchestrator runs the swap", intentAt > 0 && intentAt < swapAt, `${intentAt} vs ${swapAt}`);
+    // Inside try/finally, a returned promise that is not awaited lets the
+    // finally (executing.delete) run before compensation's first write: a
+    // stranded sweep in that window sees neither marker.
+    const bare = [...src.matchAll(/return failAndCompensate\(/g)].length;
+    check("every failAndCompensate returned is awaited (return await), so `executing` holds until it is done", bare === 0 && /return await failAndCompensate\(/.test(src), `${bare} bare`);
   }
 
   console.log("   daily cap counts both pots…");
@@ -698,7 +737,7 @@ try {
     check("cap is read from the contract", usage.capEur > 0, `€${usage.capEur}`);
     check("nothing used yet", usage.usedEur === 0, `€${usage.usedEur}`);
 
-    store.addTransfer({
+    await store.addTransfer({
       id: randomUUID(),
       userId: user.id,
       quoteId: randomUUID(),

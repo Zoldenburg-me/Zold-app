@@ -190,12 +190,12 @@ await t("words Monerium did not report, in any script or as symbols, make the ty
     const holder = docs.holderBlock({ ...base, name: typed });
     assert.equal(holder.name, "Christian Lindner", typed);
     assert.equal(holder.operatedBy, typed);
-    assert.equal(publicUser({ ...base, name: typed }).nameVerified, false, typed);
+    assert.equal((await publicUser({ ...base, name: typed })).nameVerified, false, typed);
   }
   // Case, spacing, order, accents and punctuation still read as the same person.
   for (const typed of ["CHRISTIAN  LINDNER", "Lindner, Christian", "Christián Lindner"]) {
     assert.equal(docs.holderBlock({ ...base, name: typed }).operatedBy, undefined, typed);
-    assert.equal(publicUser({ ...base, name: typed }).nameVerified, true, typed);
+    assert.equal((await publicUser({ ...base, name: typed })).nameVerified, true, typed);
   }
   // Apostrophes and hyphens are punctuation; a name in another script is compared word by word.
   const pairs: [reported: string, typed: string, same: boolean][] = [
@@ -206,7 +206,7 @@ await t("words Monerium did not report, in any script or as symbols, make the ty
   for (const [reported, typed, same] of pairs) {
     const user = { ...base, name: typed, monerium: { ibans: [{ iban: base.iban, name: reported }] } };
     assert.equal(docs.holderBlock(user).operatedBy, same ? undefined : typed, `${reported} / ${typed}`);
-    assert.equal(publicUser(user).nameVerified, same, `${reported} / ${typed}`);
+    assert.equal((await publicUser(user)).nameVerified, same, `${reported} / ${typed}`);
   }
 });
 

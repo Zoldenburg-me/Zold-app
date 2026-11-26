@@ -52,7 +52,7 @@ export function createMoneriumWebhookRouter() {
       // would let anyone spend an id, and make every forged one a store write.
       // The order id dedupes either way (store.isOrderProcessed).
       const webhookId = SECURITY.moneriumWebhookSecret ? req.header("webhook-id") : undefined;
-      if (webhookId && store.isWebhookProcessed(webhookId)) {
+      if (webhookId && (await store.isWebhookProcessed(webhookId))) {
         return res.json({ handled: false, duplicate: true });
       }
       const result = await handleWebhookEvent(req.body);
@@ -63,7 +63,7 @@ export function createMoneriumWebhookRouter() {
       if (result.outcome === "unavailable") {
         return res.status(503).json({ ...result, retry: true });
       }
-      if (webhookId) store.markWebhookProcessed(webhookId);
+      if (webhookId) await store.markWebhookProcessed(webhookId);
       res.json(result);
     }),
   );

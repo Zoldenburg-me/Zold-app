@@ -13,6 +13,7 @@
 
 import type express from "express";
 import { store } from "../store.js";
+import { openTxToken } from "../store/backend.js";
 import { LIMITS, can, capabilityMatrix, type CapabilityId } from "../domain/plans.js";
 import { roleCan, type Permission } from "../domain/roles.js";
 import { paymentReviewRequired } from "../domain/payment-review.js";
@@ -27,7 +28,7 @@ export interface OrgContext {
 }
 
 export interface SessionResolver {
-  (req: express.Request, res: express.Response): { userId: string } | undefined;
+  (req: express.Request, res: express.Response): Promise<{ userId: string } | undefined>;
 }
 
 /**
@@ -38,17 +39,21 @@ export interface SessionResolver {
  * answering 403 for "exists but not yours" versus 404 for "no such org" leaks
  * which organisations exist. Both answer 404.
  */
-export function resolveOrg(
+export async function resolveOrg(
   req: express.Request,
   res: express.Response,
   requireSession: SessionResolver,
-): OrgContext | undefined {
-  const session = requireSession(req, res);
+): Promise<OrgContext | undefined> {
+  const session = await requireSession(req, res);
   if (!session) return undefined;
 
   const orgId = String(req.params.orgId ?? "");
-  const org = store.findOrganisation(orgId);
-  const member = org ? store.memberFor(org.id, session.userId) : undefined;
+  // Inside a store.tx the organisation row is locked before it is read
+  // (Postgres FOR UPDATE; §2 rule 4): the member, role and capability checks,
+  // and whatever the handler decides from the org's rows, hold until it
+  // commits. Every change to an org's members takes the same lock.
+  const org = openTxToken() ? await store.lockOrganisation(orgId) : await store.findOrganisation(orgId);
+  const member = org ? (await store.memberFor(org.id, session.userId)) : undefined;
 
   if (!org || !member || member.status !== "active") {
     res.status(404).json({ error: "no such organisation" });
@@ -108,12 +113,12 @@ export function requireWithinLimit(
 }
 
 /** The org as the client should see it. */
-export function publicOrg(org: Organisation, member?: Member) {
+export async function publicOrg(org: Organisation, member?: Member) {
   return {
     id: org.id,
     type: org.type,
     // Business orgs only; `entityLocked` says whether an owner may still change it.
-    ...(org.type === "business" ? { entity: orgEntity(org), entityLocked: entityLocked(org, store.accountsOf(org.id)) } : {}),
+    ...(org.type === "business" ? { entity: orgEntity(org), entityLocked: entityLocked(org, await store.accountsOf(org.id)) } : {}),
     name: org.name,
     legalName: org.legalName,
     taxId: org.taxId,

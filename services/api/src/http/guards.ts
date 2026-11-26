@@ -71,11 +71,11 @@ export function custodyBlockerBeforeFunding(user: User): string | null {
  */
 const refusalAudited = new Map<string, number>();
 
-export function requireCapability(
+export async function requireCapability(
   user: User,
   capability: Parameters<typeof can>[1],
   res: express.Response,
-): boolean {
+): Promise<boolean> {
   const segment: Segment = user.segment?.value ?? "EU_FULL";
   if (can(segment, capability)) return true;
   // One audit row per user and capability per hour: each row is a write of
@@ -85,7 +85,7 @@ export function requireCapability(
   const last = refusalAudited.get(key);
   if (!last || Date.now() - last > 60 * 60_000) {
     refusalAudited.set(key, Date.now());
-    store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
+    await store.audit(auditEntry("partner.call_refused", { segment, capability }, user.id));
   }
   res.status(403).json({
     error: "This is not part of your account.",
@@ -119,8 +119,8 @@ export async function assertDailyCap(
 /** The rate-limit key of the operator calling (a live passkey session), or
  *  undefined. The limiter's question only; the gate decides what the caller
  *  may do. */
-export function operatorBucketId(req: express.Request): string | undefined {
-  const found = operatorSessionFor(bearerToken(req));
+export async function operatorBucketId(req: express.Request): Promise<string | undefined> {
+  const found = await operatorSessionFor(bearerToken(req));
   return "refused" in found ? undefined : found.operator.id;
 }
 

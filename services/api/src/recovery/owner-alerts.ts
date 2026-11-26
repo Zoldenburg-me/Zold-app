@@ -39,9 +39,9 @@ function completesAt(r: RecoveryRequest): Date | undefined {
 }
 
 /** When this account was last sent an "asked" mail, or marked covered by one. */
-function lastAsked(userId: string): number {
+async function lastAsked(userId: string): Promise<number> {
   let last = 0;
-  for (const r of store.recoveryRequestsForUser(userId)) {
+  for (const r of (await store.recoveryRequestsForUser(userId))) {
     const t = r.ownerAlerts?.requested ? Date.parse(r.ownerAlerts.requested) : 0;
     if (t > last) last = t;
   }
@@ -58,8 +58,8 @@ function due(r: RecoveryRequest, now: Date): "requested" | "executed" | null {
   return now.getTime() < Date.parse(r.expiresAt) ? "requested" : null;
 }
 
-const mark = (r: RecoveryRequest, patch: NonNullable<RecoveryRequest["ownerAlerts"]>) =>
-  store.updateRecoveryRequest(r.id, { ownerAlerts: { ...r.ownerAlerts, ...patch } });
+const mark = async (r: RecoveryRequest, patch: NonNullable<RecoveryRequest["ownerAlerts"]>) =>
+  await store.updateRecoveryRequest(r.id, { ownerAlerts: { ...r.ownerAlerts, ...patch } });
 
 /** What a sent (or covered) mail records: the grace mail says everything
  *  the "asked" one would, so it marks both. */
@@ -73,17 +73,17 @@ const sentPatch = (r: RecoveryRequest, kind: "requested" | "executed", at: strin
 export async function sweepOwnerAlerts(now = new Date(), { mailOn = mailAvailable() } = {}): Promise<number> {
   if (!mailOn) return 0;
   let sent = 0;
-  for (const r of [...store.recoveryRequests]) {
+  for (const r of [...await store.list("recoveryRequests")]) {
     const kind = due(r, now);
     if (!kind) continue;
     const at = now.toISOString();
-    if (kind === "requested" && now.getTime() - lastAsked(r.userId) < OWNER_ALERTS.askedWindowMs) {
-      mark(r, { requested: at });
+    if (kind === "requested" && now.getTime() - (await lastAsked(r.userId)) < OWNER_ALERTS.askedWindowMs) {
+      await mark(r, { requested: at });
       continue;
     }
-    const email = store.findUser(r.userId)?.email;
+    const email = (await store.findUser(r.userId))?.email;
     if (!email) {
-      mark(r, sentPatch(r, kind, at));
+      await mark(r, sentPatch(r, kind, at));
       console.error(`recovery alert: ${r.id} ${kind}: the account has no email`);
       continue;
     }
@@ -91,12 +91,12 @@ export async function sweepOwnerAlerts(now = new Date(), { mailOn = mailAvailabl
       await sendRecoveryAlert(email, kind, new Date(r.requestedAt), completesAt(r));
     } catch (err: any) {
       const failures = (r.ownerAlerts?.failures ?? 0) + 1;
-      mark(r, { failures });
+      await mark(r, { failures });
       // Codes only: the SMTP server's reply can quote the address.
       console.error(`recovery alert: ${r.id} ${kind} failed (${failures}/${OWNER_ALERTS.maxAttempts}): ${err?.code ?? "error"}${err?.responseCode ? ` (SMTP ${err.responseCode})` : ""}`);
       continue;
     }
-    mark(r, sentPatch(r, kind, at));
+    await mark(r, sentPatch(r, kind, at));
     console.log(`recovery alert: ${r.id} ${kind} sent`);
     sent++;
   }

@@ -48,9 +48,9 @@ export interface MerchantLinkRefusal {
 
 /** Whether this deployment can link a shop: the checkout's origin is known,
  *  a checkout credential exists, and the link secret can be sealed. */
-export function merchantLinksAvailable(): { available: boolean; checkoutOrigin?: string; reason?: string } {
+export async function merchantLinksAvailable(): Promise<{ available: boolean; checkoutOrigin?: string; reason?: string }> {
   if (!CHECKOUT_SERVICE.origin) return { available: false, reason: "CHECKOUT_SERVICE_ORIGIN is not set" };
-  if (!checkoutCredentialIssued()) return { available: false, reason: "no checkout service credential has been issued" };
+  if (!(await checkoutCredentialIssued())) return { available: false, reason: "no checkout service credential has been issued" };
   const keyProblem = dataEncryptionProblem();
   if (keyProblem) return { available: false, reason: `${keyProblem}, so a link's secret cannot be stored` };
   return { available: true, checkoutOrigin: CHECKOUT_SERVICE.origin };
@@ -61,19 +61,19 @@ export function merchantLinksAvailable(): { available: boolean; checkoutOrigin?:
  * Asked when the code is issued and again at exchange. `installerId` is the
  * member whose consent it is; a missing org refuses like a missing member.
  */
-export function linkRefusal(orgId: string, shop: string, installerId: string): MerchantLinkRefusal | undefined {
-  const member = store.findOrganisation(orgId) ? store.memberFor(orgId, installerId) : undefined;
+export async function linkRefusal(orgId: string, shop: string, installerId: string): Promise<MerchantLinkRefusal | undefined> {
+  const member = (await store.findOrganisation(orgId)) ? (await store.memberFor(orgId, installerId)) : undefined;
   if (!member || member.status !== "active" || !roleCan(member.role, "org.update")) {
     return { code: "INSTALLER_NOT_ALLOWED", error: "whoever started this link can no longer connect stores for the organisation — start again from the dashboard" };
   }
-  const active = store.activeMerchantLinkForShop(shop);
+  const active = await store.activeMerchantLinkForShop(shop);
   if (active && active.orgId !== orgId) {
     return { code: "SHOP_LINKED_ELSEWHERE", error: "this store is linked to a different organisation" };
   }
-  if (store.findShopifyConnectionByShop(shop)) {
+  if ((await store.findShopifyConnectionByShop(shop))) {
     return { code: "SHOP_CONNECTED_IN_CORE", error: "this store is connected to Zold directly — disconnect it under Connected stores first" };
   }
-  const payee = payeeFor(orgId, installerId);
+  const payee = await payeeFor(orgId, installerId);
   if (!payee.user) return { code: "NO_PAYMENT_PAGE", error: payee.reason ?? "no account to receive into" };
   return undefined;
 }
@@ -158,30 +158,33 @@ export function linkSecretOf(l: MerchantLink): string {
  * fresh consent names. The secret is sealed before the row is written; no
  * await between the caller's last check and this write.
  */
-export function establishLink(p: PendingLink): { link: MerchantLink; previousPayeeUserId?: string } {
-  const existing = store.activeMerchantLinkForShop(p.shop);
-  if (existing && existing.orgId === p.orgId) {
-    if (existing.payeeUserId === p.payeeUserId && existing.createdBy === p.installerId) return { link: existing };
-    const previousPayeeUserId = existing.payeeUserId !== p.payeeUserId ? existing.payeeUserId : undefined;
-    // The fresh consent is the one in force: its member and its payee.
-    const link = store.updateMerchantLink(existing.id, { payeeUserId: p.payeeUserId, createdBy: p.installerId });
-    return { link, ...(previousPayeeUserId ? { previousPayeeUserId } : {}) };
-  }
-  const id = randomUUID();
-  const linkSecretEnc = SECRETS.merchantLinkSecret.seal(id, randomBytes(32).toString("hex"));
-  const now = new Date().toISOString();
-  const link = store.addMerchantLink({
-    id,
-    orgId: p.orgId,
-    integration: "shopify",
-    shop: p.shop,
-    payeeUserId: p.payeeUserId,
-    linkSecretEnc,
-    createdBy: p.installerId,
-    createdAt: now,
-    updatedAt: now,
+export async function establishLink(p: PendingLink): Promise<{ link: MerchantLink; previousPayeeUserId?: string }> {
+  return store.tx(async () => {
+    await store.lockOrganisation(p.orgId);
+    const existing = await store.activeMerchantLinkForShop(p.shop);
+    if (existing && existing.orgId === p.orgId) {
+      if (existing.payeeUserId === p.payeeUserId && existing.createdBy === p.installerId) return { link: existing };
+      const previousPayeeUserId = existing.payeeUserId !== p.payeeUserId ? existing.payeeUserId : undefined;
+      // The fresh consent is the one in force: its member and its payee.
+      const link = await store.updateMerchantLink(existing.id, { payeeUserId: p.payeeUserId, createdBy: p.installerId });
+      return { link, ...(previousPayeeUserId ? { previousPayeeUserId } : {}) };
+    }
+    const id = randomUUID();
+    const linkSecretEnc = SECRETS.merchantLinkSecret.seal(id, randomBytes(32).toString("hex"));
+    const now = new Date().toISOString();
+    const link = await store.addMerchantLink({
+      id,
+      orgId: p.orgId,
+      integration: "shopify",
+      shop: p.shop,
+      payeeUserId: p.payeeUserId,
+      linkSecretEnc,
+      createdBy: p.installerId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return { link };
   });
-  return { link };
 }
 
 /**
@@ -191,14 +194,14 @@ export function establishLink(p: PendingLink): { link: MerchantLink; previousPay
  * page it was. Either way the money would land somewhere the org did not
  * choose, so nothing opens until an admin links the store again.
  */
-export function linkPayeeProblem(l: MerchantLink): string | undefined {
+export async function linkPayeeProblem(l: MerchantLink): Promise<string | undefined> {
   const relink = "an organisation admin must link the store again from the dashboard";
-  const eurBacked = store.accountsOf(l.orgId).some((a) => a.currency === "EUR" && a.backingUserId);
+  const eurBacked = (await store.accountsOf(l.orgId)).some((a) => a.currency === "EUR" && a.backingUserId);
   if (!eurBacked) {
-    const m = store.memberFor(l.orgId, l.createdBy);
+    const m = await store.memberFor(l.orgId, l.createdBy);
     if (!m || m.status !== "active") return `the member whose payment page this store pays into has left the organisation; ${relink}`;
   }
-  const payee = payeeFor(l.orgId, l.createdBy);
+  const payee = await payeeFor(l.orgId, l.createdBy);
   if (!payee.user) return `${payee.reason ?? "no account to receive into"}; ${relink}`;
   if (payee.user.id !== l.payeeUserId) return `the organisation's receiving account has changed since this store was linked; ${relink}`;
   return undefined;
@@ -211,27 +214,27 @@ export function payLinkTemplate(origin: string, l: MerchantLink): string {
 }
 
 /** What the org sees of a link. The creator by display name only. */
-export function publicLink(l: MerchantLink) {
+export async function publicLink(l: MerchantLink) {
   return {
     id: l.id,
     integration: l.integration,
     shop: l.shop,
-    payeeHandle: store.findUser(l.payeeUserId)?.paymentPage?.handle,
+    payeeHandle: (await store.findUser(l.payeeUserId))?.paymentPage?.handle,
     createdAt: l.createdAt,
-    createdBy: store.findUser(l.createdBy)?.name,
+    createdBy: (await store.findUser(l.createdBy))?.name,
     ...(l.revokedAt ? { revokedAt: l.revokedAt } : {}),
     ...(l.lastRequestAt ? { lastRequestAt: l.lastRequestAt } : {}),
   };
 }
 
 /** What the checkout reads of a link. */
-export function serviceLinkView(l: MerchantLink) {
+export async function serviceLinkView(l: MerchantLink) {
   return {
     linkId: l.id,
     shop: l.shop,
     active: !l.revokedAt,
     ...(l.revokedAt ? { revokedAt: l.revokedAt } : {}),
-    payeeHandle: store.findUser(l.payeeUserId)?.paymentPage?.handle,
+    payeeHandle: (await store.findUser(l.payeeUserId))?.paymentPage?.handle,
   };
 }
 

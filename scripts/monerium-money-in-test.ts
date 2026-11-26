@@ -174,22 +174,28 @@ const check = async (name: string, fn: () => void | Promise<void>) => {
   catch (err) { console.error(`FAIL  ${name}\n      ${(err as Error).stack}`); process.exitCode = 1; }
 };
 
-initStore();
+await initStore();
 const now = new Date().toISOString();
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
 const addr = (c: string) => `0x${c.repeat(40)}` as `0x${string}`;
 
-function org(id: string, type: "personal" | "business", entity?: "company" | "sole_trader") {
-  store.addOrganisation({ id, type, ...(entity ? { entity } : {}), name: id, reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
+async function org(id: string, type: "personal" | "business", entity?: "company" | "sole_trader") {
+  await store.addOrganisation({ id, type, ...(entity ? { entity } : {}), name: id, reporting, verifications: {}, createdAt: now, updatedAt: now } as any);
 }
-function account(id: string, orgId: string, address: `0x${string}`, backingUserId?: string) {
-  store.addAccount({
+async function account(id: string, orgId: string, address: `0x${string}`, backingUserId?: string) {
+  const row = {
     id, orgId, currency: "EUR", label: "EUR account", status: backingUserId ? "active" : "gated", provider: "monerium" as any,
     identifier: {}, address, ...(backingUserId ? { backingUserId, backedSince: "2026-01-01T00:00:00.000Z" } : {}), createdAt: now, updatedAt: now,
-  } as any);
+  } as any;
+  if (await store.addAccount(row)) return;
+  // A second company account at one Safe is refused now; a store from before
+  // that rule can still hold one. On db.json the fixture writes it as such a
+  // store would have; Postgres's key cannot hold it at all.
+  if (process.env.STORE_BACKEND !== "postgres") (await import("../services/api/src/store/db.js")).db.accounts.push(row);
 }
-function user(id: string, address: `0x${string}`) {
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: "2026-01-01T00:00:00.000Z", address, iban: "" } as any);
+const twinsPossible = process.env.STORE_BACKEND !== "postgres";
+async function user(id: string, address: `0x${string}`) {
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: "2026-01-01T00:00:00.000Z", address, iban: "" } as any);
 }
 let n = 0;
 function issue(address: string, amount = "12.50") {
@@ -202,30 +208,30 @@ function issue(address: string, amount = "12.50") {
   });
   return id;
 }
-const recordOf = (orderId: string) => store.moneriumIssueOrders.find((o) => o.orderId === orderId);
-const lineOf = (orgId: string, orderId: string) => store.ledgerOf(orgId).find((e) => e.statement?.links.orderId === orderId);
+const recordOf = async (orderId: string) => (await store.list("moneriumIssueOrders")).find((o) => o.orderId === orderId);
+const lineOf = async (orgId: string, orderId: string) => (await store.ledgerOf(orgId)).find((e) => e.statement?.links.orderId === orderId);
 
 // A company with its own Safe (no backing user), and its owner's personal Safe.
 const COMPANY_SAFE = addr("c");
-org("org_co", "business", "company");
-account("acc_co", "org_co", COMPANY_SAFE);
-user("u_owner", addr("a"));
-org("org_owner", "personal");
-account("acc_owner", "org_owner", addr("a"), "u_owner");
+await org("org_co", "business", "company");
+await account("acc_co", "org_co", COMPANY_SAFE);
+await user("u_owner", addr("a"));
+await org("org_owner", "personal");
+await account("acc_owner", "org_owner", addr("a"), "u_owner");
 // A sole trader: the person's Safe backs both their personal and business accounts.
-user("u_st", addr("b"));
-org("org_st_personal", "personal");
-account("acc_st_personal", "org_st_personal", addr("b"), "u_st");
-org("org_st", "business", "sole_trader");
-account("acc_st", "org_st", addr("b"), "u_st");
+await user("u_st", addr("b"));
+await org("org_st_personal", "personal");
+await account("acc_st_personal", "org_st_personal", addr("b"), "u_st");
+await org("org_st", "business", "sole_trader");
+await account("acc_st", "org_st", addr("b"), "u_st");
 // Ambiguous: a user's Safe that is also a company's account; two company accounts on one address.
-user("u_clash", addr("d"));
-org("org_clash", "business", "company");
-account("acc_clash", "org_clash", addr("d"));
-org("org_twin_1", "business", "company");
-org("org_twin_2", "business", "company");
-account("acc_twin_1", "org_twin_1", addr("e"));
-account("acc_twin_2", "org_twin_2", addr("e"));
+await user("u_clash", addr("d"));
+await org("org_clash", "business", "company");
+await account("acc_clash", "org_clash", addr("d"));
+await org("org_twin_1", "business", "company");
+await org("org_twin_2", "business", "company");
+await account("acc_twin_1", "org_twin_1", addr("e"));
+await account("acc_twin_2", "org_twin_2", addr("e"));
 
 console.log("\nA failed token request");
 
@@ -250,7 +256,7 @@ await check("a refused or failed token request leaves the delivery unresolved an
     tokenFault = 0;
     console.warn = realWarn;
   }
-  assert.equal(store.isOrderProcessed(id), false);
+  assert.equal(await store.isOrderProcessed(id), false);
   orders.delete(id);
 });
 
@@ -259,39 +265,40 @@ console.log("\nBooked to the holder");
 await check("a SEPA credit to a company's own Safe is booked to the company's account and books, not a person", async () => {
   const id = issue(COMPANY_SAFE.toUpperCase().replace("0X", "0x"));
   assert.equal(await mirrorOrderById(id), "recorded");
-  assert.ok(store.isOrderProcessed(id));
-  const r = recordOf(id)!;
+  assert.ok(await store.isOrderProcessed(id));
+  const r = (await recordOf(id))!;
   assert.equal(r.accountId, "acc_co");
   assert.equal(r.userId, undefined, "no person's record");
-  writeStatementLines();
-  const line = lineOf("org_co", id);
+  await writeStatementLines();
+  const line = await lineOf("org_co", id);
   assert.ok(line, "the company's books have the line");
   assert.equal(line!.statement!.event, "sepa_in");
   assert.equal(line!.statement!.amountCents, 1250);
   assert.equal(line!.source.kind === "account" && line!.source.accountId, "acc_co");
-  assert.equal(lineOf("org_owner", id), undefined, "nothing on the owner's personal books");
+  assert.equal(await lineOf("org_owner", id), undefined, "nothing on the owner's personal books");
   // The org's refresh (bookkeeping-export.ts) re-projects the account: nothing new, nothing doubled.
-  assert.deepEqual(writeAccountStatementLines(store.findAccount("acc_co")!), { added: 0, updated: 0 });
+  assert.deepEqual(await writeAccountStatementLines((await store.findAccount("acc_co"))!), { added: 0, updated: 0 });
 });
 
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {
   const id = issue(addr("a"));
   assert.equal(await mirrorOrderById(id), "recorded");
-  const r = recordOf(id)!;
+  const r = (await recordOf(id))!;
   assert.equal(r.userId, "u_owner");
   assert.equal(r.accountId, undefined);
-  writeStatementLines();
-  assert.ok(lineOf("org_owner", id));
-  assert.equal(lineOf("org_co", id), undefined, "the owner's own money is not the company's");
+  await writeStatementLines();
+  assert.ok(await lineOf("org_owner", id));
+  assert.equal(await lineOf("org_co", id), undefined, "the owner's own money is not the company's");
 });
 
 await check("a SEPA credit to a sole trader's Safe is booked under the user, on the business's books (unchanged)", async () => {
   const id = issue(addr("b"));
   assert.equal(await mirrorOrderById(id), "recorded");
-  assert.equal(recordOf(id)!.userId, "u_st");
-  writeStatementLines();
-  assert.ok(lineOf("org_st", id));
-  assert.equal(lineOf("org_st_personal", id), undefined);
+  assert.equal((await recordOf(id))!.userId, "u_st");
+  // Two statement sweeps in parallel write what one does (§2, ledger).
+  await Promise.all([writeStatementLines(), writeStatementLines()]);
+  assert.equal((await store.ledgerOf("org_st")).filter((e) => e.statement?.links.orderId === id).length, 1, "one line, whichever sweep wrote it");
+  assert.equal(await lineOf("org_st_personal", id), undefined);
 });
 
 console.log("\nFail closed");
@@ -299,20 +306,24 @@ console.log("\nFail closed");
 await check("a user's Safe that is also another org's account books nothing, and the reconciler reports it", async () => {
   const id = issue(addr("d"));
   assert.equal(await mirrorOrderById(id), "ignored");
-  assert.equal(store.isOrderProcessed(id), false);
-  assert.equal(recordOf(id), undefined);
+  assert.equal(await store.isOrderProcessed(id), false);
+  assert.equal(await recordOf(id), undefined);
   const report = await reconcile();
   assert.ok(report.findings.some((f) => f.kind === "UNMIRRORED" && f.orderId === id));
 });
 
 await check("two accounts at one address book nothing, by the webhook or the poller", async () => {
+  if (!twinsPossible) {
+    assert.equal((await store.accountsAtAddress(addr("e"))).length, 1, "Postgres refused the second company account at one Safe");
+    return;
+  }
   const id = issue(addr("e"));
   assert.equal(await mirrorOrderById(id), "ignored");
   await pollDepositsOnce();
-  assert.equal(store.isOrderProcessed(id), false);
-  assert.equal(recordOf(id), undefined, "keepIssueFacts refuses it too");
-  assert.equal(lineOf("org_twin_1", id), undefined);
-  assert.equal(lineOf("org_twin_2", id), undefined);
+  assert.equal(await store.isOrderProcessed(id), false);
+  assert.equal(await recordOf(id), undefined, "keepIssueFacts refuses it too");
+  assert.equal(await lineOf("org_twin_1", id), undefined);
+  assert.equal(await lineOf("org_twin_2", id), undefined);
 });
 
 await check("an address no one holds is ignored and not reported", async () => {
@@ -328,8 +339,8 @@ await check("a recorded company order delivered again is `duplicate`, and the po
   const id = [...orders.keys()][0];
   assert.equal(await mirrorOrderById(id), "duplicate");
   await pollDepositsOnce();
-  assert.equal(store.moneriumIssueOrders.filter((o) => o.orderId === id).length, 1);
-  assert.equal(store.ledgerOf("org_co").filter((e) => e.statement?.links.orderId === id).length, 1);
+  assert.equal((await store.list("moneriumIssueOrders")).filter((o) => o.orderId === id).length, 1);
+  assert.equal((await store.ledgerOf("org_co")).filter((e) => e.statement?.links.orderId === id).length, 1);
 });
 
 // ── Restart and two-worker boundaries ────────────────────────────────────
@@ -341,14 +352,14 @@ await check("a recorded company order delivered again is `duplicate`, and the po
 
 let generation = 0;
 async function restart() {
-  initStore();
+  await initStore();
   generation++;
   return {
     sandbox: await import(`../services/api/src/adapters/monerium-sandbox.js?restart=${generation}`),
     connection: await import(`../services/api/src/adapters/monerium-connection.js?restart=${generation}`),
   };
 }
-const issueRecords = (id: string) => store.moneriumIssueOrders.filter((o) => o.orderId === id).length;
+const issueRecords = async (id: string) => (await store.list("moneriumIssueOrders")).filter((o) => o.orderId === id).length;
 const releaseHeldOrders = () => { for (const r of stub.heldOrders.splice(0)) r(); };
 const waitFor = async (cond: () => boolean, what: string) => {
   for (let i = 0; i < 200 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
@@ -364,27 +375,27 @@ await check("two webhook deliveries of one order at once: one upstream read, one
   assert.equal(outcomes.filter((o) => o === "recorded").length, 1, outcomes.join(","));
   assert.ok(outcomes.every((o) => o === "recorded" || o === "unavailable" || o === "duplicate"), outcomes.join(","));
   assert.equal(stub.lookups.get(id), 1, "concurrent deliveries share one upstream read");
-  assert.equal(issueRecords(id), 1);
+  assert.equal(await issueRecords(id), 1);
 });
 
 await check("a webhook and the poller on one order at once book it once", async () => {
   const id = issue(addr("a"));
   await Promise.all([mirrorOrderById(id), pollDepositsOnce(), mirrorOrderById(id)]);
-  assert.ok(store.isOrderProcessed(id));
-  assert.equal(issueRecords(id), 1);
-  writeStatementLines();
-  assert.equal(store.ledgerOf("org_owner").filter((e) => e.statement?.links.orderId === id).length, 1);
+  assert.ok(await store.isOrderProcessed(id));
+  assert.equal(await issueRecords(id), 1);
+  await writeStatementLines();
+  assert.equal((await store.ledgerOf("org_owner")).filter((e) => e.statement?.links.orderId === id).length, 1);
 });
 
 await check("restart after the order was marked processed, before its issue record: the poller adds the record once", async () => {
   const id = issue(addr("a"));
-  store.markOrderProcessed(id); // the crash lands between the two writes
+  await store.markOrderProcessed(id); // the crash lands between the two writes
   const { sandbox } = await restart();
-  assert.equal(issueRecords(id), 0);
+  assert.equal(await issueRecords(id), 0);
   assert.equal(await sandbox.mirrorOrderById(id), "duplicate", "a redelivery does not book it again");
   await sandbox.pollDepositsOnce();
   await sandbox.pollDepositsOnce();
-  assert.equal(issueRecords(id), 1);
+  assert.equal(await issueRecords(id), 1);
 });
 
 await check("restart while a worker holds the claim: the new process books it once, the old worker's late finish adds nothing", async () => {
@@ -396,8 +407,8 @@ await check("restart while a worker holds the claim: the new process books it on
   assert.equal(await sandbox.mirrorOrderById(id), "recorded");
   releaseHeldOrders();
   assert.ok(["duplicate", "unavailable"].includes(await stuck), "the stale worker does not record");
-  assert.equal(issueRecords(id), 1);
-  assert.equal(store.mirroredOrderIds().filter((x) => x === id).length, 1);
+  assert.equal(await issueRecords(id), 1);
+  assert.equal((await store.mirroredOrderIds()).filter((x) => x === id).length, 1);
 });
 
 await check("restart before the claim: nothing was written, the redelivery books it", async () => {
@@ -405,7 +416,7 @@ await check("restart before the claim: nothing was written, the redelivery books
   const { sandbox } = await restart();
   assert.equal(await sandbox.mirrorOrderById(id), "recorded");
   assert.equal(await mirrorOrderById(id), "duplicate");
-  assert.equal(issueRecords(id), 1);
+  assert.equal(await issueRecords(id), 1);
 });
 
 console.log("\nIssue amounts and states from upstream");
@@ -414,21 +425,21 @@ await check("an issue order with an amount that is not a euro decimal is not boo
   for (const amount of ["0x10", "Infinity", "1e3", "12.505", "-5", " 12.50", "12,50", "", "NaN"]) {
     const id = issue(addr("a"), amount);
     assert.equal(await mirrorOrderById(id), "ignored", `amount ${JSON.stringify(amount)}`);
-    assert.equal(store.isOrderProcessed(id), false, `amount ${JSON.stringify(amount)}`);
-    assert.equal(issueRecords(id), 0, `amount ${JSON.stringify(amount)}`);
+    assert.equal(await store.isOrderProcessed(id), false, `amount ${JSON.stringify(amount)}`);
+    assert.equal(await issueRecords(id), 0, `amount ${JSON.stringify(amount)}`);
     orders.delete(id);
   }
   for (const amount of ["12.5", "12.50", "1000", "12.500000"]) {
     const id = issue(addr("a"), amount);
     assert.equal(await mirrorOrderById(id), "recorded", `amount ${amount}`);
-    assert.equal(recordOf(id)!.amountEur, Number(amount));
+    assert.equal((await recordOf(id))!.amountEur, Number(amount));
   }
 });
 
 await check("an issue order whose amount is not a euro decimal settles no invoice and no payment link", async () => {
   const number = `RE-2026-${9000 + ++n}`;
   const invoiceId = `inv_0x10_${n}`;
-  store.addInvoice({
+  await store.addInvoice({
     id: invoiceId, orgId: "org_owner", direction: "outgoing", state: "SUBMITTED", linkTokenHash: `h${n}`,
     lines: [{ description: "Work", quantity: "1", unitPrice: "16.00", amount: "16.00" }], currency: "EUR", total: "16.00",
     createdByMemberId: "m", createdAt: now, updatedAt: now,
@@ -437,7 +448,7 @@ await check("an issue order whose amount is not a euro decimal settles no invoic
   } as any);
   const code = "0X10ABCDEFGH234";
   const linkId = `pr_0x10_${n}`;
-  store.addPaymentRequest({
+  await store.addPaymentRequest({
     id: linkId, code, userId: "u_owner", handle: "owner", amountEur: 16, currency: "EUR", methods: ["bank"], state: "OPEN",
     payments: [], createdAt: now, updatedAt: now, expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
   } as any);
@@ -449,17 +460,17 @@ await check("an issue order whose amount is not a euro decimal settles no invoic
       orders.get(id).memo = `${number} ${code}`;
       await pollDepositsOnce();
       orders.delete(id);
-      assert.equal(issueRecords(id), 0, amount);
-      const inv = store.findInvoice(invoiceId)!;
+      assert.equal(await issueRecords(id), 0, amount);
+      const inv = (await store.findInvoice(invoiceId))!;
       assert.equal(inv.state, "SUBMITTED", `${amount}: the invoice is not marked paid`);
       assert.equal((inv.settlements ?? []).length, 0, `${amount}: no settlement on the invoice`);
-      const link = store.findPaymentRequest(linkId)!;
+      const link = (await store.findPaymentRequest(linkId))!;
       assert.equal(link.state, "OPEN", `${amount}: the link is not marked paid`);
       assert.equal(link.payments.length, 0, `${amount}: no payment on the link`);
     }
   } finally {
     console.warn = realWarn;
-    store.updatePaymentRequest(linkId, { state: "CANCELLED" });
+    await store.updatePaymentRequest(linkId, { state: "CANCELLED" });
   }
 });
 
@@ -468,7 +479,7 @@ await check("an issue order in a state other than processed is not booked", asyn
     const id = issue(addr("a"));
     orders.get(id).meta.state = state;
     assert.equal(await mirrorOrderById(id), "ignored", state);
-    assert.equal(issueRecords(id), 0, state);
+    assert.equal(await issueRecords(id), 0, state);
     orders.delete(id);
   }
 });
@@ -493,7 +504,7 @@ await check("an order read answered with nothing usable leaves the delivery unre
     for (const [status, raw, want] of cases) {
       stub.orderAnswer.set(id, { status, raw });
       assert.equal(await mirrorOrderById(id), want, `HTTP ${status} ${raw.slice(0, 30)}`);
-      assert.equal(store.isOrderProcessed(id), false);
+      assert.equal(await store.isOrderProcessed(id), false);
     }
     stub.orderAnswer.set(id, { status: 404, raw: '{"code":404}' });
     assert.equal(await mirrorOrderById(`${id}`), "ignored", "a 404 is Monerium's answer");
@@ -501,7 +512,7 @@ await check("an order read answered with nothing usable leaves the delivery unre
     stub.orderAnswer.delete(id);
     console.warn = realWarn;
   }
-  assert.equal(issueRecords(id), 0);
+  assert.equal(await issueRecords(id), 0);
 });
 
 await check("a body that starts with a UTF-8 byte-order mark reads as Response.text() does", async () => {
@@ -544,9 +555,9 @@ await check("pagination: an order Monerium lists on no page the poller reads is 
   stub.orderAnswer.set(id, { status: 200, raw: JSON.stringify(order) });
   try {
     await pollDepositsOnce();
-    assert.equal(store.isOrderProcessed(id), false, "not on the list, not booked by the poller");
+    assert.equal(await store.isOrderProcessed(id), false, "not on the list, not booked by the poller");
     assert.equal(await mirrorOrderById(id), "recorded", "the webhook's re-read books it");
-    assert.equal(issueRecords(id), 1);
+    assert.equal(await issueRecords(id), 1);
   } finally {
     stub.orderAnswer.delete(id);
   }
@@ -566,7 +577,7 @@ const post = (raw: string, headers: Record<string, string> = {}) =>
 const signed = (raw: string, id = `msg_${Math.random().toString(36).slice(2)}`, ts = String(Math.floor(Date.now() / 1000))) => ({
   "webhook-id": id, "webhook-timestamp": ts, "webhook-signature": signStandardWebhook(id, ts, Buffer.from(raw), WEBHOOK_SECRET),
 });
-const moneyState = () => JSON.stringify([store.moneriumIssueOrders.length, store.transfers.map((t) => [t.id, t.state])]);
+const moneyState = async () => JSON.stringify([(await store.list("moneriumIssueOrders")).length, (await store.list("transfers")).map((t) => [t.id, t.state])]);
 let seed = 0x2366;
 const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
 const pick = <T,>(xs: T[]) => xs[Math.floor(rand() * xs.length)];
@@ -583,7 +594,7 @@ const randomId = () => pick([
 await check("200 fuzzed unsigned bodies with forged amounts, addresses and states book nothing", async () => {
   const pendingId = issue(addr("a"));
   orders.get(pendingId).meta.state = "pending"; // known to Monerium, not settled
-  const before = moneyState();
+  const before = await moneyState();
   for (let i = 0; i < 200; i++) {
     const id = pick([randomId(), pendingId, pendingId]);
     const forged = { amount: pick(["999999", "12.50", -1]), address: pick([addr("a"), addr("c"), "0x0"]), chain: "base", currency: "eur", kind: "issue", state: "processed", meta: { state: "processed" } };
@@ -599,8 +610,8 @@ await check("200 fuzzed unsigned bodies with forged amounts, addresses and state
     const res = await post(JSON.stringify(body));
     assert.ok([200, 400, 503].includes(res.status), `status ${res.status}`);
   }
-  assert.equal(moneyState(), before, "no issue record and no transfer state changed");
-  assert.equal(store.isOrderProcessed(pendingId), false);
+  assert.equal(await moneyState(), before, "no issue record and no transfer state changed");
+  assert.equal(await store.isOrderProcessed(pendingId), false);
   orders.delete(pendingId);
 });
 
@@ -608,12 +619,12 @@ await check("a forged body naming a real processed order books Monerium's amount
   const id = issue(addr("a"), "7.25");
   const res = await post(JSON.stringify({ data: { id, amount: "999999", address: COMPANY_SAFE } }));
   assert.equal(res.status, 200);
-  assert.equal(recordOf(id)!.amountEur, 7.25);
-  assert.equal(recordOf(id)!.userId, "u_owner");
+  assert.equal((await recordOf(id))!.amountEur, 7.25);
+  assert.equal((await recordOf(id))!.userId, "u_owner");
 });
 
 await check("empty, non-JSON, wrong-type and oversized bodies change nothing and read nothing upstream", async () => {
-  const before = moneyState();
+  const before = await moneyState();
   const lookups = [...stub.lookups.values()].reduce((a, b) => a + b, 0);
   const answers = [
     await post(""),
@@ -624,7 +635,7 @@ await check("empty, non-JSON, wrong-type and oversized bodies change nothing and
   ];
   assert.deepEqual(answers.map((r) => r.status >= 400 || r.status === 200), answers.map(() => true));
   assert.equal(answers[4].status, 413, "past the JSON body limit");
-  assert.equal(moneyState(), before);
+  assert.equal(await moneyState(), before);
   assert.equal([...stub.lookups.values()].reduce((a, b) => a + b, 0), lookups, "no upstream read");
 });
 
@@ -672,7 +683,7 @@ await check("an unsigned delivery's webhook-id is not stored; an unknown id answ
   for (let i = 0; i < 20; i++) {
     const res = await post(JSON.stringify({ data: { id: `ord-nobody-${n}-${i}` } }), { "webhook-id": `msg_forged_${n}_${i}` });
     assert.equal(res.status, 200);
-    assert.equal(store.isWebhookProcessed(`msg_forged_${n}_${i}`), false, "an id nobody signed costs no store write");
+    assert.equal(await store.isWebhookProcessed(`msg_forged_${n}_${i}`), false, "an id nobody signed costs no store write");
   }
 });
 
@@ -692,11 +703,11 @@ await check("with MONERIUM_WEBHOOK_SECRET: a missing, wrong or stale signature i
     ];
     for (const headers of bad) assert.equal((await post(raw, headers)).status, 401, JSON.stringify(Object.keys(headers)));
     assert.equal(stub.lookups.get(id) ?? 0, lookups, "no read for an unauthenticated delivery");
-    assert.equal(issueRecords(id), 0);
+    assert.equal(await issueRecords(id), 0);
     const good = signed(raw, "msg_good_236");
     assert.equal((await post(raw, good)).status, 200);
-    assert.equal(recordOf(id)!.amountEur, 4);
-    assert.ok(store.isWebhookProcessed("msg_good_236"));
+    assert.equal((await recordOf(id))!.amountEur, 4);
+    assert.ok(await store.isWebhookProcessed("msg_good_236"));
     const again = await (await post(raw, signed(raw, "msg_good_236"))).json();
     assert.equal(again.duplicate, true);
   } finally {
@@ -709,11 +720,11 @@ console.log("\nRedeem orders against the persisted transfer");
 const PAYEE_IBAN = "DE89370400440532013000";
 let tn = 0;
 /** A SEPA transfer whose redeem was placed: what executeSepaTransfer leaves. */
-function placedRedeem(amount = "20.00", state = "PAYOUT_SUBMITTED", memoFor: (id: string) => string = (id) => paymentMemo(id, `RE-${tn}`)) {
+async function placedRedeem(amount = "20.00", state = "PAYOUT_SUBMITTED", memoFor: (id: string) => string = (id) => paymentMemo(id, `RE-${tn}`)) {
   const id = `t_redeem_${++tn}`;
   const orderId = `ord-redeem-${tn}`;
   const memo = memoFor(id);
-  store.addTransfer({
+  await store.addTransfer({
     id, userId: "u_owner", rail: "sepa", state, sendEur: Number(amount), receiveEur: Number(amount),
     recipientName: "Supplier GmbH", recipientIban: PAYEE_IBAN, reference: `RE-${tn}`, txs: [{ step: "monerium.redeem.placed", hash: orderId }],
     moneriumRedeem: { amount, iban: PAYEE_IBAN, issuedAt: now, message: `Send EUR ${amount} to ${PAYEE_IBAN} at ${now}`, memo },
@@ -726,15 +737,15 @@ function placedRedeem(amount = "20.00", state = "PAYOUT_SUBMITTED", memoFor: (id
   });
   return { id, orderId };
 }
-const stateOf = (id: string) => store.findTransfer(id)!.state;
+const stateOf = async (id: string) => (await store.findTransfer(id))!.state;
 
 await check("an older transfer that signed the full-id memo is PAID when Monerium echoes that memo", async () => {
   // Older releases wrote the whole transfer id when the reference was blank;
   // paymentMemo now writes eight characters. The stored memo is what was signed.
-  const { id } = placedRedeem("20.00", "PAYOUT_SUBMITTED", (tid) => `Powered by Zold ${tid}`);
-  assert.notEqual(store.findTransfer(id)!.moneriumRedeem!.memo, paymentMemo(id, store.findTransfer(id)!.reference));
+  const { id } = await placedRedeem("20.00", "PAYOUT_SUBMITTED", (tid) => `Powered by Zold ${tid}`);
+  assert.notEqual((await store.findTransfer(id))!.moneriumRedeem!.memo, paymentMemo(id, (await store.findTransfer(id))!.reference));
   await pollRedeemOrdersOnce();
-  assert.equal(stateOf(id), "PAID");
+  assert.equal(await stateOf(id), "PAID");
 });
 
 await check("a processed redeem whose answer carries no memo, or another transfer's, goes to review, never PAID", async () => {
@@ -746,10 +757,10 @@ await check("a processed redeem whose answer carries no memo, or another transfe
       ["empty memo", (o: any) => { o.memo = ""; }, /carries none/],
       ["another transfer's memo", (o: any) => { o.memo = paymentMemo("t_other_transfer", `RE-${tn}`); }, /payment memo/],
     ] as const) {
-      const { id, orderId } = placedRedeem();
+      const { id, orderId } = await placedRedeem();
       change(orders.get(orderId));
       await pollRedeemOrdersOnce();
-      const t = store.findTransfer(id)!;
+      const t = (await store.findTransfer(id))!;
       assert.equal(t.state, "MANUAL_REVIEW", what);
       assert.match(t.error ?? "", why, what);
       assert.equal(t.sepa!.state, "mismatch", `${what}: no payout evidence`);
@@ -761,25 +772,32 @@ await check("a processed redeem whose answer carries no memo, or another transfe
 });
 
 await check("a processed redeem that matches the transfer is PAID once, by two pollers at once and after a restart", async () => {
-  const { id } = placedRedeem();
+  const { id } = await placedRedeem();
   const update = store.updateTransfer;
   let paidWrites = 0;
   store.updateTransfer = (tid, patch) => {
     if (tid === id && patch.state === "PAID") paidWrites++;
     return update.call(store, tid, patch);
   };
+  // The poller writes PAID with the sepa sub-record in one patch.
+  const patchSub = store.patchTransferSub;
+  store.patchTransferSub = ((tid: string, key: any, fn: any, patch?: any) => {
+    if (tid === id && patch?.state === "PAID") paidWrites++;
+    return patchSub.call(store, tid, key, fn, patch);
+  }) as typeof patchSub;
   try {
     await Promise.all([pollRedeemOrdersOnce(), pollRedeemOrdersOnce()]);
-    assert.equal(stateOf(id), "PAID");
+    assert.equal(await stateOf(id), "PAID");
     const { sandbox } = await restart();
     await sandbox.pollRedeemOrdersOnce();
   } finally {
     store.updateTransfer = update;
+    store.patchTransferSub = patchSub;
   }
   assert.equal(paidWrites, 1, "PAID is written once");
-  writeStatementLines();
-  assert.equal(stateOf(id), "PAID");
-  assert.equal(store.ledgerOf("org_owner").filter((e) => e.statement?.links.transferId === id).length, 1, "one statement line");
+  await writeStatementLines();
+  assert.equal(await stateOf(id), "PAID");
+  assert.equal((await store.ledgerOf("org_owner")).filter((e) => e.statement?.links.transferId === id).length, 1, "one statement line");
 });
 
 await check("a processed or rejected redeem whose amount, IBAN, kind, currency or Safe differs is neither PAID nor FAILED", async () => {
@@ -798,11 +816,11 @@ await check("a processed or rejected redeem whose amount, IBAN, kind, currency o
     ];
     for (const final of ["processed", "rejected"]) {
       for (const [what, change] of variants) {
-        const { id, orderId } = placedRedeem();
+        const { id, orderId } = await placedRedeem();
         change(orders.get(orderId));
         orders.get(orderId).meta.state = final;
         await pollRedeemOrdersOnce();
-        const t = store.findTransfer(id)!;
+        const t = (await store.findTransfer(id))!;
         assert.ok(t.state !== "PAID" && t.state !== "FAILED", `${final} with a different ${what}: ${t.state}`);
         assert.equal(t.state, "MANUAL_REVIEW", `${final} with a different ${what} goes to review`);
         assert.match(t.error ?? "", /does not match/, what);
@@ -818,16 +836,16 @@ await check("a mismatched redeem whose stored state already reads processed is n
   console.warn = () => {};
   try {
     for (const start of ["PAYOUT_SUBMITTED", "MANUAL_REVIEW"]) {
-      const { id, orderId } = placedRedeem("20.00", start);
+      const { id, orderId } = await placedRedeem("20.00", start);
       // executeSepaTransfer copies the state of Monerium's first answer, which can be processed.
-      store.updateTransfer(id, { sepa: { ...store.findTransfer(id)!.sepa!, state: "processed" } });
+      await store.updateTransfer(id, { sepa: { ...(await store.findTransfer(id))!.sepa!, state: "processed" } });
       orders.get(orderId).amount = "2000.00";
       await pollRedeemOrdersOnce();
-      const t = store.findTransfer(id)!;
+      const t = (await store.findTransfer(id))!;
       assert.equal(t.state, "MANUAL_REVIEW", start);
       assert.deepEqual(payoutEvidence(t), [], `${start}: a mismatched order cannot be cited as paid`);
       await pollRedeemOrdersOnce();
-      assert.deepEqual(payoutEvidence(store.findTransfer(id)!), [], `${start}: nor after a second pass`);
+      assert.deepEqual(payoutEvidence((await store.findTransfer(id))!), [], `${start}: nor after a second pass`);
     }
   } finally {
     console.warn = realWarn;
@@ -835,7 +853,7 @@ await check("a mismatched redeem whose stored state already reads processed is n
 });
 
 await check("a redeem read that is not this order (empty, another id, non-JSON, oversized) or fails (401/409/429/5xx) changes nothing", async () => {
-  const { id, orderId } = placedRedeem();
+  const { id, orderId } = await placedRedeem();
   const realWarn = console.warn;
   console.warn = () => {};
   try {
@@ -846,7 +864,7 @@ await check("a redeem read that is not this order (empty, another id, non-JSON, 
     ] as [number, string][]) {
       stub.orderAnswer.set(orderId, { status, raw });
       await pollRedeemOrdersOnce();
-      const t = store.findTransfer(id)!;
+      const t = (await store.findTransfer(id))!;
       assert.equal(t.state, "PAYOUT_SUBMITTED", `HTTP ${status} ${raw.slice(0, 20)}`);
       assert.equal(t.sepa!.state, "placed", `HTTP ${status} ${raw.slice(0, 20)}: the stored order state is not overwritten`);
     }
@@ -857,11 +875,11 @@ await check("a redeem read that is not this order (empty, another id, non-JSON, 
 });
 
 await check("a redeem in a state Monerium did not document halts: not PAID, not FAILED, no refund", async () => {
-  const { id, orderId } = placedRedeem();
+  const { id, orderId } = await placedRedeem();
   orders.get(orderId).meta.state = "on_hold_new_state";
   await pollRedeemOrdersOnce();
-  assert.equal(stateOf(id), "PAYOUT_SUBMITTED");
-  assert.equal(store.findTransfer(id)!.refund, undefined);
+  assert.equal(await stateOf(id), "PAYOUT_SUBMITTED");
+  assert.equal((await store.findTransfer(id))!.refund, undefined);
 });
 
 console.log("\nOAuth token refresh across workers and restarts");
@@ -869,8 +887,8 @@ console.log("\nOAuth token refresh across workers and restarts");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { moneriumAccessToken, moneriumClientFor } = await import("../services/api/src/adapters/monerium-connection.js");
 const past = () => new Date(Date.now() - 3_600_000).toISOString();
-user("u_oauth", addr("9"));
-store.updateUser("u_oauth", {
+await user("u_oauth", addr("9"));
+await store.updateUser("u_oauth", {
   monerium: {
     connectedAt: now, method: "oauth", profileId: "profile-oauth",
     accessTokenEnc: SECRETS.moneriumAccessToken.seal("u_oauth", "at-0"),
@@ -878,76 +896,81 @@ store.updateUser("u_oauth", {
     expiresAt: past(),
   } as any,
 });
-const oauthUser = () => store.findUser("u_oauth")!;
-const expire = () => store.updateUser("u_oauth", { monerium: { ...oauthUser().monerium!, expiresAt: past() } });
-/** The refresh token as it is on disk right now. */
-const refreshOnDisk = () => {
-  const row = JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8")).users.find((u: any) => u.id === "u_oauth");
-  return SECRETS.moneriumRefreshToken.open("u_oauth", row.monerium.refreshTokenEnc);
+const oauthUser = async () => (await store.findUser("u_oauth"))!;
+const expire = async () => store.updateUser("u_oauth", { monerium: { ...(await oauthUser()).monerium!, expiresAt: past() } });
+/** The refresh token as it is stored right now: db.json on disk, or the
+ *  committed row on Postgres (STORE_BACKEND=postgres, check:pg). The read
+ *  starts when this is called. */
+const refreshOnDisk = async () => {
+  const row = process.env.STORE_BACKEND === "postgres"
+    ? await store.findUser("u_oauth")
+    : JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8")).users.find((u: any) => u.id === "u_oauth");
+  return SECRETS.moneriumRefreshToken.open("u_oauth", row!.monerium!.refreshTokenEnc!);
 };
 
 await check("two workers inside the refresh window spend the refresh token once and get the same new token", async () => {
   const presented = stub.refresh.presented.length;
-  const [a, b, c] = await Promise.all([moneriumAccessToken(oauthUser()), moneriumAccessToken(oauthUser()), moneriumAccessToken(oauthUser())]);
+  const [u1, u2, u3] = [await oauthUser(), await oauthUser(), await oauthUser()];
+  const [a, b, c] = await Promise.all([moneriumAccessToken(u1), moneriumAccessToken(u2), moneriumAccessToken(u3)]);
   assert.equal(stub.refresh.presented.length - presented, 1, "one refresh grant");
   assert.deepEqual([a, b, c], ["at-1", "at-1", "at-1"]);
-  assert.equal(refreshOnDisk(), "rt-1");
+  assert.equal(await refreshOnDisk(), "rt-1");
 });
 
 await check("the rotated refresh token is on disk before the new access token is used", async () => {
-  expire();
-  const seenOnDisk: string[] = [];
+  await expire();
+  const seenOnDisk: Promise<string>[] = [];
   stub.onBearer = (token) => { if (token === "at-2") seenOnDisk.push(refreshOnDisk()); };
   try {
-    await moneriumClientFor(oauthUser()).ibans();
+    await moneriumClientFor(await oauthUser()).ibans();
   } finally {
     stub.onBearer = undefined;
   }
-  assert.deepEqual(seenOnDisk, ["rt-2"]);
+  assert.deepEqual(await Promise.all(seenOnDisk), ["rt-2"]);
 });
 
 await check("after a restart the fresh process refreshes with the persisted token and never presents a spent one", async () => {
-  expire();
+  await expire();
   const { connection } = await restart();
-  assert.equal(await connection.moneriumAccessToken(store.findUser("u_oauth")), "at-3");
-  assert.equal(refreshOnDisk(), "rt-3");
+  assert.equal(await connection.moneriumAccessToken((await store.findUser("u_oauth"))!), "at-3");
+  assert.equal(await refreshOnDisk(), "rt-3");
   assert.equal(stub.refresh.spentPresented, 0);
 });
 
 await check("restart mid-refresh: the new process's refresh wins, the old one's late answer writes nothing", async () => {
-  expire();
+  await expire();
   stub.refresh.hold = 1;
-  const old = moneriumAccessToken(oauthUser()); // the old process, its grant in flight
+  const old = moneriumAccessToken(await oauthUser()); // the old process, its grant in flight
   await waitFor(() => stub.refresh.held.length === 1, "the held refresh");
   const { connection } = await restart();
-  assert.equal(await connection.moneriumAccessToken(store.findUser("u_oauth")), "at-4");
+  assert.equal(await connection.moneriumAccessToken((await store.findUser("u_oauth"))!), "at-4");
   for (const r of stub.refresh.held.splice(0)) r();
   await assert.rejects(old, (e: any) => e?.name === "MoneriumAccessError", "the spent token is refused, not retried");
-  assert.equal(refreshOnDisk(), "rt-4", "the new process's tokens stay");
-  assert.equal(SECRETS.moneriumAccessToken.open("u_oauth", oauthUser().monerium!.accessTokenEnc!), "at-4");
+  assert.equal(await refreshOnDisk(), "rt-4", "the new process's tokens stay");
+  assert.equal(SECRETS.moneriumAccessToken.open("u_oauth", (await oauthUser()).monerium!.accessTokenEnc!), "at-4");
 });
 
 await check("a refresh answer lost after Monerium rotated: the next refresh is refused, nothing falls back to the old token or the app", async () => {
-  expire();
+  await expire();
   stub.refresh.loseNext = true;
-  await assert.rejects(moneriumAccessToken(oauthUser()), (e: any) => e?.name !== "MoneriumAccessError", "a lost answer is a transient");
-  assert.equal(refreshOnDisk(), "rt-4", "nothing written");
+  await assert.rejects(moneriumAccessToken(await oauthUser()), (e: any) => e?.name !== "MoneriumAccessError", "a lost answer is a transient");
+  assert.equal(await refreshOnDisk(), "rt-4", "nothing written");
   const bearers = stub.bearers.length;
-  await assert.rejects(moneriumClientFor(oauthUser()).ibans(), (e: any) => e?.name === "MoneriumAccessError");
+  await assert.rejects(moneriumClientFor(await oauthUser()).ibans(), (e: any) => e?.name === "MoneriumAccessError");
   assert.equal(stub.bearers.length, bearers, "no request went out on the expired token or the app's");
 });
 
 await check("disconnected while the refresh was in flight: the late answer does not reconnect the account", async () => {
-  store.updateUser("u_oauth", {
-    monerium: { ...oauthUser().monerium!, refreshTokenEnc: SECRETS.moneriumRefreshToken.seal("u_oauth", stub.refresh.current), expiresAt: past() },
+  await store.updateUser("u_oauth", {
+    monerium: { ...(await oauthUser()).monerium!, refreshTokenEnc: SECRETS.moneriumRefreshToken.seal("u_oauth", stub.refresh.current), expiresAt: past() },
   });
   stub.refresh.hold = 1;
-  const p = moneriumAccessToken(oauthUser());
+  const p = moneriumAccessToken(await oauthUser());
   await waitFor(() => stub.refresh.held.length === 1, "the held refresh");
-  store.updateUser("u_oauth", { monerium: undefined });
+  await store.updateUser("u_oauth", { monerium: undefined });
   for (const r of stub.refresh.held.splice(0)) r();
   await assert.rejects(p, (e: any) => e?.name === "MoneriumAccessError");
-  assert.equal(oauthUser().monerium, undefined);
+  assert.equal((await oauthUser()).monerium, undefined);
 });
 
 hookServer.close();

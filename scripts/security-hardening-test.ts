@@ -41,11 +41,16 @@ const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { persist } = await import("../services/api/src/store/db.js");
 const { issueOperatorSession } = await import("../services/api/src/operators/sessions.js");
 
-initStore();
+await initStore();
 let failed = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
   try { await fn(); console.log(`  ok  ${name}`); }
   catch (err) { failed++; console.error(`  FAIL ${name}\n       ${(err as Error).message}`); }
+}
+/** A check of the JSON file itself; npm run check:pg runs this suite on Postgres too. */
+async function checkJsonFile(name: string, fn: () => void | Promise<void>) {
+  if (process.env.STORE_BACKEND === "postgres") return console.log(`  skip ${name} (the JSON file; this run is on Postgres)`);
+  await check(name, fn);
 }
 
 console.log("password policy");
@@ -86,7 +91,8 @@ await check("IPv6 is keyed on its /64; mapped IPv4 as IPv4", () => {
 });
 
 // ── HTTP ─────────────────────────────────────────────────────────────────────
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 app.use(securityHeaders);
 app.use("/api", apiRateLimit);
@@ -129,8 +135,8 @@ await check("Shopify's signed calls are not on the 20/min credential bucket", as
 });
 await check("a live operator session has its own bucket: the dashboard's refresh loop is not the 20/min one", async () => {
   // The challenge test above has already spent this IP's credential bucket.
-  store.addOperator({ id: "op_rate", name: "Rate Operator", email: "rate@example.com", createdAt: new Date().toISOString(), credentials: [] });
-  const auth = { authorization: `Bearer ${issueOperatorSession("op_rate")}` };
+  await store.addOperator({ id: "op_rate", name: "Rate Operator", email: "rate@example.com", createdAt: new Date().toISOString(), credentials: [] });
+  const auth = { authorization: `Bearer ${await issueOperatorSession("op_rate")}` };
   const statuses = [];
   for (let i = 0; i < 40; i++) statuses.push((await fetch(`${base}/api/admin/overview`, { headers: auth })).status);
   assert.deepEqual([...new Set(statuses)], [200]);
@@ -162,7 +168,7 @@ await check("every response carries a same-origin CSP and refuses to be framed",
 });
 await check("production pins HTTPS on every subdomain (five minutes while subdomains are confirmed); local dev does not", async () => {
   const headersFrom = async (production: boolean) => {
-    const one = express();
+    const one = express().use(sendAfterCommit);
     one.use(securityHeadersFor(production));
     one.get("/", (_req, res) => res.end());
     const s = one.listen(0);
@@ -179,7 +185,7 @@ await check("production pins HTTPS on every subdomain (five minutes while subdom
 console.log("invoice-link password");
 const now = new Date().toISOString();
 const token = "tok-" + "a".repeat(40);
-store.addInvoice({
+await store.addInvoice({
   id: "inv_sec", orgId: "org_sec", linkTokenHash: hashToken(token),
   linkPasswordHash: await hashPassword("copper kettle harbour 42"),
   state: "LINK_CREATED", lines: [], currency: "EUR", total: "0.00",
@@ -202,7 +208,7 @@ await check("ten wrong guesses from ten addresses lock the link, even for the ri
 });
 await check("guesses sent all at once still stop at ten, though checking is asynchronous", async () => {
   const token2 = "tok-" + "b".repeat(40);
-  store.addInvoice({
+  await store.addInvoice({
     id: "inv_sec2", orgId: "org_sec", linkTokenHash: hashToken(token2),
     linkPasswordHash: await hashPassword("copper kettle harbour 42"),
     state: "LINK_CREATED", lines: [], currency: "EUR", total: "0.00",
@@ -527,13 +533,13 @@ for (const release of releaseUpstream.splice(0)) release();
 preServer.close();
 
 console.log("no hashes, no IPs");
-await check("the owner view drops both link hashes", () => {
-  const v = ownerInvoiceView(store.findInvoice("inv_sec")!) as Record<string, unknown>;
+await check("the owner view drops both link hashes", async () => {
+  const v = ownerInvoiceView((await store.findInvoice("inv_sec"))!) as Record<string, unknown>;
   assert.equal("linkTokenHash" in v, false);
   assert.equal("linkPasswordHash" in v, false);
 });
-await check("a legacy consent row's IP is never projected", () => {
-  const u = publicUser({
+await check("a legacy consent row's IP is never projected", async () => {
+  const u = await publicUser({
     id: "u1", name: "n", country: "DE", kycStatus: "pending", iban: "", address: "0x0", createdAt: now,
     consents: [{ kind: "zold_terms", version: "1", at: now, ip: "203.0.113.9" }],
   } as any);
@@ -551,28 +557,28 @@ await check("the email check answers a hostile 60,000-character address at once"
   assert.equal(emailLooksValid("a@b" + ".c".repeat(30_000) + "@"), false);
   assert.ok(Date.now() - t < 50, `took ${Date.now() - t} ms`);
 });
-await check("writes inside batched() reach the file once, at its end", async () => {
+await checkJsonFile("writes inside store.tx reach the file once, at its end", async () => {
   const { readFileSync } = await import("node:fs");
   const onDisk = () => readFileSync(process.env.TRANSF_DB_PATH!, "utf8");
-  store.batched(() => {
-    store.audit({ id: "aud_batch_1", at: now, action: "test.batch", data: {}, actorId: "t" } as any);
-    store.audit({ id: "aud_batch_2", at: now, action: "test.batch", data: {}, actorId: "t" } as any);
+  await store.tx(async () => {
+    await store.audit({ id: "aud_batch_1", at: now, action: "test.batch", data: {}, actorId: "t" } as any);
+    await store.audit({ id: "aud_batch_2", at: now, action: "test.batch", data: {}, actorId: "t" } as any);
     assert.equal(onDisk().includes("aud_batch_1"), false, "written before the batch ended");
   });
   assert.ok(onDisk().includes("aud_batch_1") && onDisk().includes("aud_batch_2"));
 });
-await check("a quote nobody took is dropped a day after it expired; a consumed one stays", () => {
+await check("a quote nobody took is dropped a day after it expired; a consumed one stays", async () => {
   const q = (id: string, status: string, hoursAgo: number) => ({
     id, userId: "u1", rail: "sepa", status, sendEur: 1, fixedFeeEur: 0, fxRate: 1, receiveKes: 0, receiveEur: 1,
     midRate: 1, marginBps: 0, effectiveRate: 1, createdAt: now,
     expiresAt: new Date(Date.now() - hoursAgo * 3600_000).toISOString(),
   } as any);
-  store.addQuote(q("q_old_open", "OPEN", 30));
-  store.addQuote(q("q_old_used", "CONSUMED", 30));
-  store.addQuote(q("q_recent", "EXPIRED", 2));
-  store.addQuote(q("q_new", "OPEN", -1));
-  assert.equal(store.findQuote("q_old_open"), undefined);
-  assert.ok(store.findQuote("q_old_used") && store.findQuote("q_recent") && store.findQuote("q_new"));
+  await store.addQuote(q("q_old_open", "OPEN", 30));
+  await store.addQuote(q("q_old_used", "CONSUMED", 30));
+  await store.addQuote(q("q_recent", "EXPIRED", 2));
+  await store.addQuote(q("q_new", "OPEN", -1));
+  assert.equal(await store.findQuote("q_old_open"), undefined);
+  assert.ok((await store.findQuote("q_old_used")) && (await store.findQuote("q_recent")) && (await store.findQuote("q_new")));
 });
 
 console.log("a passkey replaced by recovery while an approval is being verified");
@@ -616,12 +622,12 @@ console.log("a passkey replaced by recovery while an approval is being verified"
   const oldKey = await softPasskey("old-device");
   const newKey = await softPasskey("recovered");
   const uid = "u_race";
-  store.addUser({
+  await store.addUser({
     id: uid, name: "Race", country: "DE", kycStatus: "approved", address: "0x5afe00000000000000000000000000000000ace1", createdAt: now,
     passkey: oldKey.stored(),
     passkeySafe: { address: "0x5afe00000000000000000000000000000000ace1", status: "active", threshold: 1 },
   } as any);
-  const reset = () => store.updateUser(uid, { passkey: oldKey.stored() as any });
+  const reset = async () => await store.updateUser(uid, { passkey: oldKey.stored() as any });
 
   // Hold WebCrypto's verify open until the test lets it go: the window in
   // which a recovery can finish.
@@ -637,7 +643,7 @@ console.log("a passkey replaced by recovery while an approval is being verified"
     hold = { reached, release: new Promise<void>((r) => (release = r)) };
     const result = call();
     await verifying;
-    bindRecoveredPasskey(store.findUser(uid)!, { ...newKey.stored(), attestation: "none" } as any, new Date());
+    await bindRecoveredPasskey((await store.findUser(uid))!, { ...newKey.stored(), attestation: "none" } as any, new Date());
     release();
     try { return await result; } finally { hold = undefined; }
   };
@@ -649,28 +655,28 @@ console.log("a passkey replaced by recovery while an approval is being verified"
   };
 
   await check("a Safe-op approval by the old passkey does not put it back after recovery", async () => {
-    reset();
+    await reset();
     const challenge = b64url(randomBytes(32));
     const res = fakeRes();
-    const ok = await recoverDuring(async () => checkOpAssertion(store.findUser(uid)!, await oldKey.assert(challenge), challenge, res));
-    assert.equal(store.findUser(uid)!.passkey!.credentialId, newKey.credentialId);
-    assert.equal(store.findUserByCredential(oldKey.credentialId), undefined);
+    const ok = await recoverDuring(async () => checkOpAssertion((await store.findUser(uid))!, await oldKey.assert(challenge), challenge, res));
+    assert.equal((await store.findUser(uid))!.passkey!.credentialId, newKey.credentialId);
+    assert.equal(await store.findUserByCredential(oldKey.credentialId), undefined);
     assert.equal(ok, undefined);
     assert.ok(res.statusCode >= 400);
   });
 
   await check("a step-up by the old passkey that finishes after recovery is refused", async () => {
-    reset();
+    await reset();
     const step = await oldKey.assert(issueChallenge("step_up", stepUpBinding(uid, "passkey.replace")));
     const res = fakeRes();
-    const ok = await recoverDuring(() => verifyPasskeyStepUp(store.findUser(uid)!, { stepUp: step }, res, "passkey.replace"));
+    const ok = await recoverDuring(async () => verifyPasskeyStepUp((await store.findUser(uid))!, { stepUp: step }, res, "passkey.replace"));
     assert.equal(ok, false);
-    assert.equal(store.findUser(uid)!.passkey!.credentialId, newKey.credentialId);
+    assert.equal((await store.findUser(uid))!.passkey!.credentialId, newKey.credentialId);
   });
 
   await check("a login by the old passkey that finishes after recovery gets no session", async () => {
-    reset();
-    const app = express().use(express.json()).use("/api", createAuthRouter({ requireUserSession: () => undefined }));
+    await reset();
+    const app = express().use(sendAfterCommit).use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
     const server = app.listen(0);
     try {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/passkey/login`;
@@ -679,22 +685,54 @@ console.log("a passkey replaced by recovery while an approval is being verified"
       const json = (await r.json()) as any;
       assert.equal(json.sessionToken, undefined);
       assert.equal(r.status, 401);
-      assert.equal(store.sessions.filter((s) => s.userId === uid && !s.revokedAt).length, 0);
-      assert.equal(store.findUser(uid)!.passkey!.credentialId, newKey.credentialId);
+      assert.equal((await store.list("sessions")).filter((s) => s.userId === uid && !s.revokedAt).length, 0);
+      assert.equal((await store.findUser(uid))!.passkey!.credentialId, newKey.credentialId);
     } finally {
       server.close();
     }
   });
 
+  await check("a recovery that lands after the login's passkey check and before its session is minted leaves no session of the old device", async () => {
+    await reset();
+    const app = express().use(sendAfterCommit).use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
+    const server = app.listen(0);
+    const s = store as any;
+    const realUse = s.recordPasskeyUse;
+    let reached!: () => void;
+    const minting = new Promise<void>((r) => (reached = r));
+    let release!: () => void;
+    const go = new Promise<void>((r) => (release = r));
+    // Held once the passkey check has passed: the window before the session.
+    s.recordPasskeyUse = async (...args: unknown[]) => { const out = await realUse(...args); reached(); await go; return out; };
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/passkey/login`;
+      const body = await oldKey.assert(issueChallenge("login"));
+      // Read before the login holds the store.
+      const owner = (await store.findUser(uid))!;
+      const login = fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      await minting;
+      // Started, not awaited: while the login holds the store it waits behind it.
+      const recovered = bindRecoveredPasskey(owner, { ...newKey.stored(), attestation: "none" } as any, new Date());
+      await new Promise((r) => setTimeout(r, 30));
+      release();
+      await Promise.all([login, recovered]);
+      assert.equal((await store.list("sessions")).filter((x) => x.userId === uid && !x.revokedAt).length, 0, "no session of the old device outlives the recovery");
+      assert.equal((await store.findUser(uid))!.passkey!.credentialId, newKey.credentialId);
+    } finally {
+      s.recordPasskeyUse = realUse;
+      server.close();
+    }
+  });
+
   await check("sign-out revokes the session on the server: the old token is refused, other sessions live", async () => {
-    reset();
+    await reset();
     const { issueSession } = await import("../services/api/src/http/sessions.js");
-    const app = express().use(express.json()).use("/api", createAuthRouter({ requireUserSession: () => undefined }));
+    const app = express().use(sendAfterCommit).use(express.json()).use("/api", createAuthRouter({ requireUserSession: async () => undefined }));
     const server = app.listen(0);
     try {
       const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/session`;
-      const signedOut = issueSession(uid);
-      const other = issueSession(uid);
+      const signedOut = await issueSession(uid);
+      const other = await issueSession(uid);
       const auth = (t: string) => ({ authorization: `Bearer ${t}` });
       assert.equal((await fetch(url, { method: "DELETE", headers: auth(signedOut) })).status, 204);
       assert.equal((await fetch(url, { headers: auth(signedOut) })).status, 401);
@@ -717,7 +755,7 @@ console.log("a passkey replaced by recovery while an approval is being verified"
 }
 
 console.log("database file");
-await check("the database file is readable by its owner only, even over a stale world-readable .tmp", () => {
+await checkJsonFile("the database file is readable by its owner only, even over a stale world-readable .tmp", () => {
   const dbPath = process.env.TRANSF_DB_PATH!;
   rmSync(dbPath, { force: true });
   writeFileSync(dbPath + ".tmp", "{}", { mode: 0o644 });
@@ -725,14 +763,14 @@ await check("the database file is readable by its owner only, even over a stale 
   persist();
   assert.equal(statSync(dbPath).mode & 0o777, 0o600);
 });
-await check("a store write under umask 022 replaces the database file at mode 600, and a new store dir is 700", async () => {
+await checkJsonFile("a store write under umask 022 replaces the database file at mode 600, and a new store dir is 700", async () => {
   const dbPath = process.env.TRANSF_DB_PATH!;
   const { auditEntry } = await import("../services/api/src/audit.js");
   const oldUmask = process.umask(0o022);
   try {
     chmodSync(dbPath, 0o600);
     const inode = statSync(dbPath).ino;
-    store.audit(auditEntry("operator.request", { test: "file-mode" }));
+    await store.audit(auditEntry("operator.request", { test: "file-mode" }));
     assert.notEqual(statSync(dbPath).ino, inode, "the write renamed a new file over the store");
     assert.equal(statSync(dbPath).mode & 0o777, 0o600);
     // The child inherits umask 022, so a missing mkdir mode would show as 755.
@@ -1464,7 +1502,7 @@ await check("capabilities.privacyBundle is true only when the bundle is switched
     for (const f of FLAGS) delete env[f];
     for (const f of on) env[f] = "1";
     const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
-      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String(capabilities().privacyBundle));`],
+      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String((await capabilities()).privacyBundle));`],
       { env, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
@@ -1488,7 +1526,7 @@ await check("capabilities.moneriumOAuth is false without a data encryption key: 
     delete env.DATA_ENCRYPTION_KEYS;
     if (key) env.DATA_ENCRYPTION_KEYS = key;
     const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
-      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String(capabilities().moneriumOAuth));`],
+      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String((await capabilities()).moneriumOAuth));`],
       { env, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
@@ -1500,8 +1538,8 @@ await check("capabilities.moneriumOAuth is false without a data encryption key: 
 await check("POST /users/:id/privacy-bundle refuses while the capability is off, and records nothing", async () => {
   const { createUserRouter } = await import("../services/api/src/routes/users.js");
   const uid = "u_bundle";
-  store.addUser({ id: uid, name: "Bundle", country: "DE", kycStatus: "approved", address: "0x0", createdAt: new Date().toISOString() } as any);
-  const app = express().use(express.json()).use("/api", createUserRouter({ requireUserSession: () => true }));
+  await store.addUser({ id: uid, name: "Bundle", country: "DE", kycStatus: "approved", address: "0x0", createdAt: new Date().toISOString() } as any);
+  const app = express().use(sendAfterCommit).use(express.json()).use("/api", createUserRouter({ requireUserSession: async () => true }));
   const server = app.listen(0);
   try {
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
@@ -1510,7 +1548,7 @@ await check("POST /users/:id/privacy-bundle refuses while the capability is off,
     });
     assert.equal(r.status, 503);
     assert.equal(((await r.json()) as any).code, "PRIVACY_BUNDLE_UNAVAILABLE");
-    assert.equal(store.findUser(uid)!.privacyBundle, undefined);
+    assert.equal((await store.findUser(uid))!.privacyBundle, undefined);
     assert.equal(((await (await fetch(`${base}/privacy-bundles`)).json()) as any).enabled, false);
   } finally {
     server.close();

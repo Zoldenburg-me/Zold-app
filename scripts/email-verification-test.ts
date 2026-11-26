@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtempSync } from "node:fs";
 import express from "express";
+import { forEachSeq } from "../services/api/src/seq.js";
 
 // ---- a fake SMTP server: accepts everything, keeps each message ----------
 const inbox: string[] = [];
@@ -68,16 +69,18 @@ process.env.SMTP_PASS = "p";
 process.env.MAIL_FROM = "Zold <no-reply@zoldhq.com>";
 
 const { store } = await import("../services/api/src/store.js");
+const { holdUntil } = await import("./_interleave.js");
 const { createEmailVerificationRouter } = await import("../services/api/src/routes/email-verification.js");
 const { emailHeldBy } = await import("../services/api/src/domain/email.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { capabilities } = await import("../services/api/src/capabilities.js");
 
-const app = express().use(express.json()).use(
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit).use(express.json()).use(
   "/api",
   createEmailVerificationRouter({
     // The session is the x-user header: who is calling is not under test here.
-    requireUserSession: (req, res, id) => (req.header("x-user") === id ? true : (res.status(401).json({ error: "no" }), false)),
+    requireUserSession: async (req, res, id) => (req.header("x-user") === id ? true : (res.status(401).json({ error: "no" }), false)),
   }),
 );
 const server = app.listen(0);
@@ -87,12 +90,12 @@ const post = async (p: string, as: string, body: unknown = {}) => {
   return { status: r.status, body: (await r.json()) as any };
 };
 
-const mk = (id: string, email: string, extra: object = {}) =>
-  store.addUser({ id, name: id, email, country: "DE", kycStatus: "pending", iban: "", address: `0x${"0".repeat(39)}${id.length}`, createdAt: new Date().toISOString(), passkey: { credentialId: id } as any, ...extra } as any);
+const mk = async (id: string, email: string, extra: object = {}) =>
+  await store.addUser({ id, name: id, email, country: "DE", kycStatus: "pending", iban: "", address: `0x${"0".repeat(39)}${id.length}`, createdAt: new Date().toISOString(), passkey: { credentialId: id } as any, ...extra } as any);
 const codeIn = (msg: string) => /code to confirm this email for Zold is (\d{6})/.exec(msg.replace(/=\r\n/g, ""))?.[1];
-const back = (id: string, ms: number) => {
-  const c = store.findUser(id)!.emailCode!;
-  store.updateUser(id, { emailCode: { ...c, sentAt: c.sentAt.map((t) => new Date(Date.parse(t) - ms).toISOString()) } });
+const back = async (id: string, ms: number) => {
+  const c = (await store.findUser(id))!.emailCode!;
+  await store.updateUser(id, { emailCode: { ...c, sentAt: c.sentAt.map((t) => new Date(Date.parse(t) - ms).toISOString()) } });
 };
 
 let failed = 0;
@@ -101,10 +104,10 @@ async function t(name: string, fn: () => Promise<void> | void) {
 }
 
 console.log("email verification");
-mk("anna", "Anna@Example.com");
-mk("squat", "anna@example.com");
+await mk("anna", "Anna@Example.com");
+await mk("squat", "anna@example.com");
 
-await t("the app is told verification is on", () => assert.equal(capabilities().emailVerification, true));
+await t("the app is told verification is on", async () => assert.equal((await capabilities()).emailVerification, true));
 
 await t("another person's session cannot ask for a code", async () => {
   assert.equal((await post("/users/anna/email/code", "squat")).status, 401);
@@ -122,9 +125,9 @@ await t("a code goes out by SMTP to the account's email, and only its hash is st
   const subject = /^Subject: (.*)$/im.exec(inbox[0])?.[1] ?? "";
   assert.ok(subject, "the message has a subject");
   assert.ok(!subject.includes(code), `the code is not in the subject: ${subject}`);
-  const stored = JSON.stringify(store.findUser("anna"));
+  const stored = JSON.stringify(await store.findUser("anna"));
   assert.ok(!stored.includes(`"${code}"`), "the code itself is never stored");
-  assert.ok(!JSON.stringify(publicUser(store.findUser("anna")!)).includes("emailCode"), "the hash is in no projection");
+  assert.ok(!JSON.stringify(await publicUser((await store.findUser("anna"))!)).includes("emailCode"), "the hash is in no projection");
 });
 
 await t("a second code within a minute is refused with the wait", async () => {
@@ -147,31 +150,31 @@ await t("five wrong tries void the code, even the right one after", async () => 
   for (let i = 0; i < 4; i++) await post("/users/anna/email/verify", "anna", { code: wrong });
   const r = await post("/users/anna/email/verify", "anna", { code });
   assert.equal(r.body.code, "EMAIL_CODE_EXPIRED");
-  assert.equal(store.findUser("anna")!.emailVerifiedAt, undefined);
+  assert.equal((await store.findUser("anna"))!.emailVerifiedAt, undefined);
 });
 
 await t("an expired code does not work", async () => {
-  back("anna", 61_000);
+  await back("anna", 61_000);
   assert.equal((await post("/users/anna/email/code", "anna")).status, 200);
   code = codeIn(inbox[inbox.length - 1])!;
-  const c = store.findUser("anna")!.emailCode!;
-  store.updateUser("anna", { emailCode: { ...c, expiresAt: new Date(Date.now() - 1).toISOString() } });
+  const c = (await store.findUser("anna"))!.emailCode!;
+  await store.updateUser("anna", { emailCode: { ...c, expiresAt: new Date(Date.now() - 1).toISOString() } });
   assert.equal((await post("/users/anna/email/verify", "anna", { code })).body.code, "EMAIL_CODE_EXPIRED");
 });
 
 await t("a failed send stores nothing and says so", async () => {
-  back("anna", 61_000);
-  const before = store.findUser("anna")!.emailCode!.hash;
+  await back("anna", 61_000);
+  const before = (await store.findUser("anna"))!.emailCode!.hash;
   smtpDown = true;
   const r = await post("/users/anna/email/code", "anna");
   smtpDown = false;
   assert.equal(r.status, 502);
   assert.equal(r.body.code, "MAIL_UNAVAILABLE");
-  assert.equal(store.findUser("anna")!.emailCode!.hash, before);
+  assert.equal((await store.findUser("anna"))!.emailCode!.hash, before);
 });
 
 await t("a refused recipient is logged by error code, never by address", async () => {
-  back("anna", 61_000);
+  await back("anna", 61_000);
   const logged: string[] = [];
   const err = console.error;
   console.error = (...a: unknown[]) => { logged.push(a.map(String).join(" ")); };
@@ -188,18 +191,37 @@ await t("a refused recipient is logged by error code, never by address", async (
   assert.ok(!JSON.stringify(r.body).toLowerCase().includes("example.com"), "nor in the answer");
 });
 
+await t("twenty wrong guesses at once: five are counted, the rest refused, and the code is void", async () => {
+  await back("anna", 61_000);
+  assert.equal((await post("/users/anna/email/code", "anna")).status, 200);
+  code = codeIn(inbox[inbox.length - 1])!;
+  const wrong = code === "000000" ? "111111" : "000000";
+  // Every guess reads the account before any of them writes.
+  const restore = holdUntil(store, "findUser", 20);
+  let answers: { status: number; body: any }[];
+  try {
+    answers = await Promise.all(Array.from({ length: 20 }, () => post("/users/anna/email/verify", "anna", { code: wrong })));
+  } finally {
+    restore();
+  }
+  const counted = answers.filter((a) => a.body.code === "EMAIL_CODE_WRONG" || /not right/.test(a.body.error ?? ""));
+  assert.equal(counted.length, 5, `${counted.length} guesses were checked against the code`);
+  assert.equal((await store.findUser("anna"))!.emailCode!.attempts, 5);
+  assert.equal((await post("/users/anna/email/verify", "anna", { code })).body.code, "EMAIL_CODE_EXPIRED", "the right code after five wrong ones no longer works");
+});
+
 await t("the right code confirms the email, once", async () => {
-  back("anna", 61_000);
+  await back("anna", 61_000);
   assert.equal((await post("/users/anna/email/code", "anna")).status, 200);
   code = codeIn(inbox[inbox.length - 1])!;
   const r = await post("/users/anna/email/verify", "anna", { code });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.ok(r.body.emailVerifiedAt);
-  assert.equal(store.findUser("anna")!.emailCode, undefined);
+  assert.equal((await store.findUser("anna"))!.emailCode, undefined);
 });
 
-await t("a confirmed email wins the recovery lookup over another account on it", () => {
-  assert.equal(store.findUserByEmail("ANNA@example.com")!.id, "anna");
+await t("a confirmed email wins the recovery lookup over another account on it", async () => {
+  assert.equal((await store.findUserByEmail("ANNA@example.com"))!.id, "anna");
 });
 
 await t("once confirmed, nobody else can confirm the same address", async () => {
@@ -209,10 +231,10 @@ await t("once confirmed, nobody else can confirm the same address", async () => 
 });
 
 await t("five sends an hour at most", async () => {
-  mk("bo", "bo@example.com");
+  await mk("bo", "bo@example.com");
   for (let i = 0; i < 5; i++) {
     assert.equal((await post("/users/bo/email/code", "bo")).status, 200);
-    back("bo", 61_000);
+    await back("bo", 61_000);
   }
   const r = await post("/users/bo/email/code", "bo");
   assert.equal(r.body.code, "EMAIL_CODE_LIMIT");
@@ -220,10 +242,10 @@ await t("five sends an hour at most", async () => {
 
 await t("the wait and the hourly cap count every account on the address, not each one alone", async () => {
   const ids = ["v1", "v2", "v3"];
-  mk("v1", "victim@example.test");
-  mk("v2", "Victim@Example.test");
-  mk("v3", " victim@example.test ");
-  const backAll = () => ids.forEach((id) => store.findUser(id)!.emailCode && back(id, 61_000));
+  await mk("v1", "victim@example.test");
+  await mk("v2", "Victim@Example.test");
+  await mk("v3", " victim@example.test ");
+  const backAll = async () => await forEachSeq(ids, async (id) => (await store.findUser(id))!.emailCode && (await back(id, 61_000)));
   const before = inbox.length;
   assert.equal((await post("/users/v1/email/code", "v1")).status, 200);
   const r2 = await post("/users/v2/email/code", "v2");
@@ -232,17 +254,17 @@ await t("the wait and the hourly cap count every account on the address, not eac
   assert.equal((await post("/users/v3/email/code", "v3")).status, 429);
   assert.equal(inbox.length, before + 1, "one mail to the address in the minute");
   for (const id of ["v2", "v3", "v1", "v2"]) {
-    backAll();
+    await backAll();
     assert.equal((await post(`/users/${id}/email/code`, id)).status, 200, `${id} after the wait`);
   }
-  backAll();
+  await backAll();
   const r6 = await post("/users/v3/email/code", "v3");
   assert.equal(r6.body.code, "EMAIL_CODE_LIMIT", "five mails an hour to one address, whichever accounts asked");
   assert.equal(inbox.length, before + 5);
 });
 
 await t("six requests at once send one mail; the rest wait", async () => {
-  mk("cy", "cy@example.com");
+  await mk("cy", "cy@example.com");
   const before = inbox.length;
   smtpDelayMs = 500;
   let rs;
@@ -251,8 +273,8 @@ await t("six requests at once send one mail; the rest wait", async () => {
   assert.deepEqual(rs.map((r) => r.status).sort(), [200, 429, 429, 429, 429, 429], JSON.stringify(rs.map((r) => r.body)));
   for (const r of rs.filter((r) => r.status === 429)) assert.equal(r.body.code, "EMAIL_CODE_WAIT");
   assert.equal(inbox.length - before, 1, "one mail");
-  assert.equal(store.findUser("cy")!.emailCode!.sentAt.length, 1, "every mail sent is counted");
-  back("cy", 61_000);
+  assert.equal((await store.findUser("cy"))!.emailCode!.sentAt.length, 1, "every mail sent is counted");
+  await back("cy", 61_000);
   assert.equal((await post("/users/cy/email/code", "cy")).status, 200, "the next minute's request goes through");
 });
 
@@ -266,23 +288,23 @@ const sendFor = async (id: string) => {
 };
 
 await t("a resend voids the code before it", async () => {
-  mk("dee", "dee@example.com");
+  await mk("dee", "dee@example.com");
   let old = await sendFor("dee");
-  back("dee", 61_000);
+  await back("dee", 61_000);
   let fresh = await sendFor("dee");
   // Two draws of a 6-digit code can coincide; draw again rather than test nothing.
-  while (fresh === old) { back("dee", 61_000); old = fresh; fresh = await sendFor("dee"); }
+  while (fresh === old) { await back("dee", 61_000); old = fresh; fresh = await sendFor("dee"); }
   const r = await post("/users/dee/email/verify", "dee", { code: old });
   assert.equal(r.status, 400);
   assert.equal(r.body.code, "EMAIL_CODE_WRONG");
-  assert.equal(store.findUser("dee")!.emailVerifiedAt, undefined);
+  assert.equal((await store.findUser("dee"))!.emailVerifiedAt, undefined);
   assert.equal((await post("/users/dee/email/verify", "dee", { code: fresh })).status, 200);
 });
 
 await t("after success the code is gone: a repeat changes nothing and no new code goes out", async () => {
-  const at = store.findUser("dee")!.emailVerifiedAt;
+  const at = (await store.findUser("dee"))!.emailVerifiedAt;
   assert.ok(at);
-  assert.equal(store.findUser("dee")!.emailCode, undefined);
+  assert.equal((await store.findUser("dee"))!.emailCode, undefined);
   const again = await post("/users/dee/email/verify", "dee", { code: "000000" });
   assert.equal(again.status, 200);
   assert.equal(again.body.emailVerifiedAt, at, "a repeat confirm rewrote the confirmation");
@@ -294,33 +316,33 @@ await t("after success the code is gone: a repeat changes nothing and no new cod
 });
 
 await t("a code sent to one address does not confirm the address the account has now", async () => {
-  mk("eli", "eli@example.com");
+  await mk("eli", "eli@example.com");
   const sent = await sendFor("eli");
-  store.updateUser("eli", { email: "someone-else@example.com" });
+  await store.updateUser("eli", { email: "someone-else@example.com" });
   const r = await post("/users/eli/email/verify", "eli", { code: sent });
   assert.equal(r.status, 400);
   assert.equal(r.body.code, "EMAIL_CODE_EXPIRED");
-  assert.equal(store.findUser("eli")!.emailVerifiedAt, undefined);
+  assert.equal((await store.findUser("eli"))!.emailVerifiedAt, undefined);
 });
 
 await t("a code is bound to the account it was sent for, not only the address", async () => {
-  mk("fay", "fay@example.com");
-  mk("fay2", "FAY@example.com");
+  await mk("fay", "fay@example.com");
+  await mk("fay2", "FAY@example.com");
   const sent = await sendFor("fay");
-  back("fay", 61_000);
+  await back("fay", 61_000);
   const theirs = await sendFor("fay2");
   if (sent !== theirs) {
     const r = await post("/users/fay2/email/verify", "fay2", { code: sent });
     assert.equal(r.body.code, "EMAIL_CODE_WRONG", "fay's code confirmed fay2");
   }
-  assert.equal(store.findUser("fay2")!.emailVerifiedAt, undefined);
+  assert.equal((await store.findUser("fay2"))!.emailVerifiedAt, undefined);
 });
 
 await t("two accounts confirming one address at once: exactly one keeps it", async () => {
-  mk("gus", "gus@example.com");
-  mk("gus2", "Gus@Example.com");
+  await mk("gus", "gus@example.com");
+  await mk("gus2", "Gus@Example.com");
   const c1 = await sendFor("gus");
-  back("gus", 61_000);
+  await back("gus", 61_000);
   const c2 = await sendFor("gus2");
   const rs = await Promise.all([
     post("/users/gus/email/verify", "gus", { code: c1 }),
@@ -328,11 +350,11 @@ await t("two accounts confirming one address at once: exactly one keeps it", asy
   ]);
   assert.deepEqual(rs.map((r) => r.status).sort(), [200, 409], JSON.stringify(rs.map((r) => r.body)));
   assert.equal(rs.find((r) => r.status === 409)!.body.code, "EMAIL_IN_USE");
-  assert.equal(store.usersByEmail("gus@example.com").filter((u) => u.emailVerifiedAt).length, 1);
+  assert.equal((await store.usersByEmail("gus@example.com")).filter((u) => u.emailVerifiedAt).length, 1);
 });
 
 await t("the same code confirmed several times at once confirms once", async () => {
-  mk("hal", "hal@example.com");
+  await mk("hal", "hal@example.com");
   const c = await sendFor("hal");
   const rs = await Promise.all(Array.from({ length: 4 }, () => post("/users/hal/email/verify", "hal", { code: c })));
   assert.deepEqual(rs.map((r) => r.status), [200, 200, 200, 200]);
@@ -341,14 +363,14 @@ await t("the same code confirmed several times at once confirms once", async () 
 });
 
 await t("wrong guesses sent at once all count: no more than five before the code dies", async () => {
-  mk("ivy", "ivy@example.com");
+  await mk("ivy", "ivy@example.com");
   const c = await sendFor("ivy");
   const wrong = c === "000000" ? "111111" : "000000";
   await Promise.all(Array.from({ length: 8 }, () => post("/users/ivy/email/verify", "ivy", { code: wrong })));
-  assert.ok(store.findUser("ivy")!.emailCode!.attempts >= 5);
+  assert.ok((await store.findUser("ivy"))!.emailCode!.attempts >= 5);
   const r = await post("/users/ivy/email/verify", "ivy", { code: c });
   assert.equal(r.body.code, "EMAIL_CODE_EXPIRED");
-  assert.equal(store.findUser("ivy")!.emailVerifiedAt, undefined);
+  assert.equal((await store.findUser("ivy"))!.emailVerifiedAt, undefined);
 });
 
 await t("signup: with verification on, only a confirmed email holds the address", () => {
@@ -381,7 +403,7 @@ await t("off: the app is told so and both routes answer 404", () => {
     const s = express().use(express.json()).use("/api", createEmailVerificationRouter({ requireUserSession: () => true })).listen(0);
     const u = "http://127.0.0.1:" + s.address().port + "/api/users/anna/email/";
     const a = await fetch(u + "code", { method: "POST" }), b = await fetch(u + "verify", { method: "POST" });
-    console.log(JSON.stringify([capabilities().emailVerification, a.status, b.status])); s.close();`);
+    console.log(JSON.stringify([(await capabilities()).emailVerification, a.status, b.status])); s.close();`);
   assert.equal(r.status, 0, r.stderr);
   assert.equal(r.stdout.trim().split("\n").pop(), JSON.stringify([false, 404, 404]));
 });

@@ -348,7 +348,8 @@ try {
   const orch = await import("../services/api/src/orchestrator.js");
   const { liquidityProvider } = await import("../services/api/src/liquidity.js");
   const { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient, usd, writeAndWait } = chain;
-  initStore();
+  const dbm = await import("../services/api/src/store/db.js");
+  await initStore();
 
   const mint = (token: `0x${string}`, to: `0x${string}`, amount: bigint) =>
     writeAndWait(deployerWallet!, { address: token, abi: abis.MockToken, functionName: "mint", args: [to, amount] });
@@ -385,9 +386,9 @@ try {
       id: `8${randomBytes(3).readUIntBE(0, 3)}`, name: "Bridge Harness", country: "DE", kycStatus: "approved", iban: "",
       address, authorizerAddress: device.address, passkeySafe: { status: "active", address }, createdAt: now,
     };
-    store.addUser(user);
+    await store.addUser(user);
     const quoteId = randomUUID();
-    store.addQuote({
+    await store.addQuote({
       id: quoteId, userId: user.id, rail: "cash", status: "OPEN", sendEur: SEND_EUR, fixedFeeEur: 1, fxRate: 1,
       receiveKes: 1000, receiveEur: 0, midRate: 1, marginBps: 0, effectiveRate: 1, lockedSwapRate: String(lockedRate),
       expiresAt: new Date(Date.now() + 60_000).toISOString(), createdAt: now,
@@ -419,8 +420,8 @@ try {
       await mint(addrs().eure, orchestratorAddress, eur.toWei(SEND_EUR * 2));
       if (over.bridgeRequest) t.bridgeRequest = over.bridgeRequest(id, address);
     }
-    store.addTransfer(t);
-    assert.ok(store.claimAuthorization(id));
+    await store.addTransfer(t);
+    assert.ok(await store.claimAuthorization(id));
     const signature = await device.signTypedData(
       chain.paymentAuthorizationTypedData({
         account: address, amountWei, to: orchestratorAddress, transferId: chain.transferIdHash(id), destination, deadline,
@@ -458,12 +459,13 @@ try {
     const depositBefore = await balance(addrs().usdc, DEPOSIT);
     const otherBefore = await balance(addrs().usdc, OTHER_DEPOSIT);
     const execution: any = kind === "batch" ? { batch: { recipient: over.recipient ?? DEPOSIT, mode: "live" } } : {};
-    await orch.executeTransfer(store.findTransfer(id)!, user, auth, execution);
+    await orch.executeTransfer((await store.findTransfer(id))!, user, auth, execution);
     // Two sweeps, as a restart would run them: neither may refund or resend.
-    store.findTransfer(id)!.updatedAt = new Date(Date.now() - 11 * 60_000).toISOString();
+    dbm.db.transfers.find((x) => x.id === id)!.updatedAt = new Date(Date.now() - 11 * 60_000).toISOString();
+    dbm.persist();
     await orch.sweepStrandedTransfers();
     await orch.sweepStrandedTransfers();
-    const end = store.findTransfer(id)!;
+    const end = (await store.findTransfer(id))!;
     const refunded = (await balance(addrs().eure, user.address)) - safeBefore;
     const steps = end.txs.map((x) => x.step);
     const deposited = usd.fromUnits((await balance(addrs().usdc, DEPOSIT)) - depositBefore);
@@ -578,10 +580,10 @@ try {
     batchTx = undefined;
     batchDelivery = { to: DEPOSIT, usdc: 10 };
     const execution: any = { batch: { recipient: DEPOSIT, mode: "live" } };
-    await orch.executeTransfer(store.findTransfer(id)!, user, auth, execution);
+    await orch.executeTransfer((await store.findTransfer(id))!, user, auth, execution);
     const safeBefore = await balance(addrs().eure, user.address);
-    await orch.executeTransfer(store.findTransfer(id)!, user, auth, execution);
-    const end = store.findTransfer(id)!;
+    await orch.executeTransfer((await store.findTransfer(id))!, user, auth, execution);
+    const end = (await store.findTransfer(id))!;
     assert.equal(bridgeCalls.length, 1, "the second execute reached Bridge");
     assert.equal(end.txs.filter((x) => x.step === orch.DEBIT_STEP.safe).length, 1, "debited twice");
     assert.equal(end.state, "MANUAL_REVIEW");
@@ -596,14 +598,20 @@ try {
     // no quote spent, no row, no prepared operation, no Bridge order.
     const { LIQUIDITY } = await import("../services/api/src/config.js");
     const { buildTransferFromQuote } = await import("../services/api/src/transfers/build.js");
-    const { pendingTransferExecutions } = await import("../services/api/src/http/pending.js");
+    // A prepared debit waits for its passkey in the store (store.putPendingExecution).
+    let preparedDebits = 0;
+    const realPutPending = store.putPendingExecution;
+    store.putPendingExecution = (kind, pid, entry) => {
+      if (kind === "transfer") preparedDebits++;
+      return realPutPending.call(store, kind, pid, entry);
+    };
     const configured = { provider: LIQUIDITY.PROVIDER, venues: [...LIQUIDITY.VENUES] };
     const recipient = { recipientName: "Recipient", recipientPhone: "+254700000000" };
     const freshQuote = async () => {
       const { id, user } = await seed("batch");
       // seed() wrote the transfer its quote became; this copy is still open.
-      const quote = { ...store.findQuote(store.findTransfer(id)!.quoteId)!, id: randomUUID(), status: "OPEN" } as any;
-      store.addQuote(quote);
+      const quote = { ...(await store.findQuote((await store.findTransfer(id))!.quoteId))!, id: randomUUID(), status: "OPEN" } as any;
+      await store.addQuote(quote);
       return { user, quote };
     };
     try {
@@ -611,17 +619,17 @@ try {
         (LIQUIDITY as any).PROVIDER = provider;
         (LIQUIDITY as any).VENUES = venues;
         const { user, quote } = await freshQuote();
-        const rowsBefore = store.transfers.filter((x) => x.userId === user.id).length;
-        const pendingBefore = pendingTransferExecutions.size;
+        const rowsBefore = (await store.list("transfers")).filter((x) => x.userId === user.id).length;
+        const pendingBefore = preparedDebits;
         bridgeCalls.length = 0;
         const r: any = await buildTransferFromQuote(quote, recipient);
         const label = `${provider} over ${venues.join(",")}`;
         assert.equal(r.ok, false, `${label}: a cash transfer was built`);
         assert.equal(r.status, 409, `${label}: ${JSON.stringify(r.body)}`);
         assert.equal(r.body.code, "VENUE_CANNOT_SETTLE", label);
-        assert.equal(store.findQuote(quote.id)!.status, "OPEN", `${label}: the quote was spent`);
-        assert.equal(store.transfers.filter((x) => x.userId === user.id).length, rowsBefore, `${label}: a row was written`);
-        assert.equal(pendingTransferExecutions.size, pendingBefore, `${label}: a debit was prepared`);
+        assert.equal((await store.findQuote(quote.id))!.status, "OPEN", `${label}: the quote was spent`);
+        assert.equal((await store.list("transfers")).filter((x) => x.userId === user.id).length, rowsBefore, `${label}: a row was written`);
+        assert.equal(preparedDebits, pendingBefore, `${label}: a debit was prepared`);
         assert.equal(bridgeCalls.length, 0, `${label}: Bridge was called`);
         ok(`a cash send on ${label} is refused before the debit: no quote spent, no row, no Bridge order`);
       }
@@ -635,6 +643,7 @@ try {
     } finally {
       (LIQUIDITY as any).PROVIDER = configured.provider;
       (LIQUIDITY as any).VENUES = configured.venues;
+      store.putPendingExecution = realPutPending;
     }
   }
 
@@ -643,16 +652,17 @@ try {
   async function row(label: string, state: string, txs: { step: string; hash: string }[], extra: Record<string, any>, expect: { state: string; refund: boolean }) {
     const { id, user } = await seed(extra.safeSwap ? "batch" : "plain");
     const old = new Date(Date.now() - 11 * 60_000).toISOString();
-    store.updateTransfer(id, { state: state as any, txs, ...extra });
-    const t = store.findTransfer(id)!;
+    await store.updateTransfer(id, { state: state as any, txs, ...extra });
+    const t = dbm.db.transfers.find((x) => x.id === id)!;
     t.updatedAt = old;
     if (t.auth) t.auth.authorizedAt = old;
+    dbm.persist();
     const safeBefore = await balance(addrs().eure, user.address);
     bridgeCalls.length = 0;
     await orch.sweepStrandedTransfers();
     await orch.sweepStrandedTransfers();
-    if (store.findTransfer(id)!.state === "FAILED") await orch.compensateTransfer(id);
-    const end = store.findTransfer(id)!;
+    if ((await store.findTransfer(id))!.state === "FAILED") await orch.compensateTransfer(id);
+    const end = (await store.findTransfer(id))!;
     const refunded = (await balance(addrs().eure, user.address)) - safeBefore > 0n;
     const detail = `${label}: ended ${end.state}, refunded ${refunded}: ${end.error}`;
     assert.equal(end.state, expect.state, detail);

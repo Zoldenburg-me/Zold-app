@@ -23,7 +23,7 @@ rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const { initStore, store } = await import("../services/api/src/store.js");
 
-initStore();
+await initStore();
 
 const now = new Date().toISOString();
 const terms = {
@@ -46,30 +46,30 @@ const transfer = {
   updatedAt: now,
 };
 
-store.addTransfer({ ...transfer, id: "t-claim", auth: { ...terms } });
+await store.addTransfer({ ...transfer, id: "t-claim", auth: { ...terms } });
 
 // 1. The race: both callers arrive before either has awaited anything.
-const first = store.claimAuthorization("t-claim");
-const second = store.claimAuthorization("t-claim");
+const first = await store.claimAuthorization("t-claim");
+const second = await store.claimAuthorization("t-claim");
 assert.equal(first, true, "the first submission claims the transfer");
 assert.equal(second, false, "a concurrent submission of the same signature is refused");
-assert.ok(store.findTransfer("t-claim")!.auth!.authorizedAt, "the claim is recorded");
+assert.ok((await store.findTransfer("t-claim"))!.auth!.authorizedAt, "the claim is recorded");
 console.log("1. concurrent authorize submissions: one claims, the other is refused");
 
 // 2. Replay after the transfer has moved on is refused too.
-store.addTransfer({ ...transfer, id: "t-debited", state: "DEBITED", auth: { ...terms } });
-assert.equal(store.claimAuthorization("t-debited"), false, "only a CREATED transfer can be claimed");
+await store.addTransfer({ ...transfer, id: "t-debited", state: "DEBITED", auth: { ...terms } });
+assert.equal(await store.claimAuthorization("t-debited"), false, "only a CREATED transfer can be claimed");
 console.log("2. a transfer past CREATED cannot be authorized again");
 
 // 3. Nothing to claim without terms, or without a transfer.
-store.addTransfer({ ...transfer, id: "t-no-terms" });
-assert.equal(store.claimAuthorization("t-no-terms"), false, "no terms means nothing was authorized");
-assert.equal(store.claimAuthorization("t-missing"), false, "unknown transfer");
+await store.addTransfer({ ...transfer, id: "t-no-terms" });
+assert.equal(await store.claimAuthorization("t-no-terms"), false, "no terms means nothing was authorized");
+assert.equal(await store.claimAuthorization("t-missing"), false, "unknown transfer");
 console.log("3. missing terms / unknown transfer are refused rather than thrown");
 
 // 4. The claim survives a restart — it lives in the store, not in memory.
-initStore();
-assert.equal(store.claimAuthorization("t-claim"), false, "a claim persisted across a reload");
+await initStore();
+assert.equal(await store.claimAuthorization("t-claim"), false, "a claim persisted across a reload");
 console.log("4. the claim is persisted, so a restart cannot re-open the window");
 
 console.log("\nAUTHORIZE CLAIM TEST PASSED — 4/4");

@@ -395,7 +395,7 @@ async function child(which: string, name: string) {
   const orch = await import("../services/api/src/orchestrator.js");
   const { abis, addrs, deployerWallet, eur, orchestratorAddress, publicClient, usd, writeAndWait } = chain;
   await stubPartners((what) => appendFileSync(process.env.SEND_LOG!, `${what}\n`));
-  initStore();
+  await initStore();
 
   const mint = (token: `0x${string}`, to: `0x${string}`, amount: bigint) =>
     writeAndWait(deployerWallet!, { address: token, abi: abis.MockToken, functionName: "mint", args: [to, amount] });
@@ -409,8 +409,8 @@ async function child(which: string, name: string) {
     t.updatedAt = old;
     if (t.auth?.authorizedAt) t.auth.authorizedAt = old;
     dbm.persist();
-    const user = store.findUser(t.userId)!;
-    const reclaimed = store.claimAuthorization(t.id);
+    const user = (await store.findUser(t.userId))!;
+    const reclaimed = await store.claimAuthorization(t.id);
     const safeBefore = await balance(addrs().eure, user.address as `0x${string}`);
     for (let i = 0; i < 2; i++) {
       await orch.sweepStrandedTransfers();
@@ -420,7 +420,7 @@ async function child(which: string, name: string) {
       const { pollRedeemOrdersOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
       await pollRedeemOrdersOnce();
     }
-    const after = store.findTransfer(t.id)!;
+    const after = (await store.findTransfer(t.id))!;
     const refundedWei = (await balance(addrs().eure, user.address as `0x${string}`)) - safeBefore;
     console.log(
       `RESULT ${JSON.stringify({
@@ -449,7 +449,7 @@ async function child(which: string, name: string) {
     passkeySafe: { status: "active", address },
     createdAt: now,
   };
-  store.addUser(user);
+  await store.addUser(user);
 
   const rail = scenario.kind === "sepa" ? "sepa" : "cash";
   const fee = rail === "sepa" ? Number(process.env.SEPA_FEE_EUR) : Number(process.env.CASH_FEE_EUR);
@@ -458,7 +458,7 @@ async function child(which: string, name: string) {
   const { liquidityProvider } = await import("../services/api/src/liquidity.js");
   if (rail === "cash") {
     const { raw } = await liquidityProvider().indicativeRate("EURE_TO_USDC");
-    store.addQuote({
+    await store.addQuote({
       id: quoteId, userId: user.id, rail, status: "OPEN", sendEur: SEND_EUR, fixedFeeEur: fee, fxRate: 1,
       receiveKes: 1000, receiveEur: 0, midRate: 1, marginBps: 0, effectiveRate: 1, lockedSwapRate: String(raw),
       expiresAt: new Date(Date.now() + 60_000).toISOString(), createdAt: now,
@@ -512,8 +512,8 @@ async function child(which: string, name: string) {
       amountIn: "1", expectedOut: "1", minOut: "0", rate: "1000000", expiresAt: new Date(Date.now() + 60_000).toISOString(),
     };
   }
-  store.addTransfer(base);
-  if (base.state === "CREATED") store.claimAuthorization(id);
+  await store.addTransfer(base);
+  if (base.state === "CREATED") await store.claimAuthorization(id);
 
   // Arm: the real persist fails on the chosen write and really exits.
   const realRename = fs.renameSync;
@@ -580,7 +580,7 @@ async function child(which: string, name: string) {
   syncBuiltinESMExports();
 
   const safeBefore = await balance(addrs().eure, address);
-  const t = store.findTransfer(id)!;
+  const t = (await store.findTransfer(id))!;
   if (scenario.kind === "refund" || scenario.kind === "reverse-refund") {
     await orch.compensateTransfer(id);
   } else if (scenario.kind === "anchor" || scenario.kind === "anchor-ready") {
@@ -597,7 +597,7 @@ async function child(which: string, name: string) {
     else await orch.executeTransfer(t, user, auth, execution);
   }
   const refundedEur = eur.fromWei((await balance(addrs().eure, address)) - safeBefore);
-  const end = store.findTransfer(id);
+  const end = await store.findTransfer(id);
   const hashed = (end?.txs ?? []).filter((x) => /^0x[0-9a-f]{64}$/i.test(x.hash)).map((x) => x.step);
   const steps = (end?.txs ?? []).map((x) => x.step);
   console.log(`NOCRASH the armed write never happened; the transfer ended ${end?.state}, refunded €${refundedEur}, usdcOut ${end?.usdcOut}, hashed [${hashed}], steps [${steps}], orderId ${JSON.stringify(end?.sepa?.orderId)}: ${end?.error}`);

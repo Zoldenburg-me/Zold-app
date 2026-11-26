@@ -35,6 +35,7 @@ import { MONERIUM, RPC_URL, moneriumSandboxEnabled } from "../services/api/src/c
 import { MoneriumClient } from "../services/api/src/adapters/monerium-client.js";
 import { initStore, store, type User } from "../services/api/src/store.js";
 import { urlForLog } from "../services/api/src/http/log-safe.js";
+import { filterSeq } from "../services/api/src/seq.js";
 import { ledgerGap, memoChecks, ordersOn, proofExit } from "./eur-proof-core.js";
 
 // The configured chain, never a hardcoded testnet: reading balances elsewhere
@@ -113,7 +114,7 @@ const stateOf = (o: any) => o?.meta?.state ?? o?.state ?? "unknown";
 
 console.log(`\nEUR corridor proof — ${urlForLog(MONERIUM.baseUrl)} (chain: ${MONERIUM.chain})\n`);
 
-initStore();
+await initStore();
 const token = await eureToken();
 console.log(`EURe on ${MONERIUM.chain}: ${token.address} (${token.decimals} dp)\n`);
 
@@ -132,7 +133,7 @@ const onMonerium = new Map<string, any>(
 );
 
 const wanted = argOf("--address");
-const users: User[] = (store.users as User[]) ?? [];
+const users: User[] = ((await store.list("users")) as User[]) ?? [];
 const candidates = users.filter((u) => u.address && onMonerium.has(getAddress(u.address)));
 const user = wanted
   ? users.find((u) => u.address.toLowerCase() === wanted.toLowerCase())
@@ -205,7 +206,7 @@ else ok(`matches ${issues.length} deposit(s) less ${done.length} processed redee
 
 /* ---------- 4. our mirror agrees ---------- */
 console.log("\n4. Our mirror records it");
-const mirrored = issues.filter((o) => store.isOrderProcessed(o.id));
+const mirrored = await filterSeq(issues, async (o) => await store.isOrderProcessed(o.id));
 if (mirrored.length === issues.length) {
   ok(`all ${issues.length} deposit(s) recorded locally`);
 } else {
@@ -224,8 +225,9 @@ if (done.length) {
   // memo stored beside the passkey's signature, by the poller's rule. One
   // with no local transfer is listed and skipped: `npm run dev` wipes the db,
   // so an older order of this account need not be in it.
+  const transfers = await store.list("transfers");
   const memos = memoChecks(done, (id) => {
-    const t = store.transfers.find((x) => x.sepa?.orderId === id);
+    const t = transfers.find((x) => x.sepa?.orderId === id);
     return t ? { memo: t.moneriumRedeem?.memo } : undefined;
   });
   for (const m of memos.matched) {

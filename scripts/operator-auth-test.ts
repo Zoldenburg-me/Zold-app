@@ -63,6 +63,8 @@ const secondJwt = await accessJwt({ email: "second@example.com" });
 
 const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
+// The live rows, for arranging state no store method writes (store/db.ts).
+const dbm = await import("../services/api/src/store/db.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
@@ -81,7 +83,7 @@ async function withSetting<T>(changes: Record<string, unknown>, fn: () => Promis
   try { return await fn(); } finally { Object.assign(o, before); }
 }
 
-initStore();
+await initStore();
 const app = express();
 app.use(express.json());
 app.use("/api/admin", createOperatorGate());
@@ -91,8 +93,8 @@ app.post("/api/admin/test/echo", (req, res) => {
   res.json({ by: operatorLabel(req), body: req.body });
 });
 app.use("/api", createAdminRouter());
-app.get("/api/users/:id/probe", (req, res) => {
-  if (!requireUserSession(req, res, req.params.id)) return;
+app.get("/api/users/:id/probe", async (req, res) => {
+  if (!(await requireUserSession(req, res, req.params.id))) return;
   res.json({ ok: true });
 });
 const server = app.listen(0, "127.0.0.1");
@@ -280,7 +282,7 @@ await check("a good enrolment creates the operator, opens a session, and uses th
   assert.match(kit.sessionToken, /^zop_/);
   assert.equal(kit.operator.email, OWNER);
   assert.ok(!existsSync(ENROLMENT_FILE), "the enrolment file is deleted");
-  assert.ok(store.auditFor(undefined, 50).some((e) => e.kind === "operator.enrolled" && e.data.operator === `operator:${kit.operator.id}`));
+  assert.ok((await store.auditFor(undefined, 50)).some((e) => e.kind === "operator.enrolled" && e.data.operator === `operator:${kit.operator.id}`));
   const me = await req("GET", "/api/admin/auth/me", undefined, kit.headers());
   assert.equal(me.body.operator.passkeys.length, 1);
 });
@@ -288,8 +290,8 @@ await check("a good enrolment creates the operator, opens a session, and uses th
 console.log("sessions");
 await check("a user session is not an operator session, and an operator session is not a user's", async () => {
   const user = { id: "u_plain", name: "Plain", email: "plain@example.com", country: "DE", kycStatus: "approved", iban: "", address: `0x${"1".repeat(40)}`, createdAt: new Date().toISOString() };
-  store.addUser(user as any);
-  const userToken = issueSession(user.id);
+  await store.addUser(user as any);
+  const userToken = await issueSession(user.id);
   assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${userToken}` })).status, 401);
   assert.equal((await req("GET", `/api/users/${user.id}/probe`, undefined, { authorization: `Bearer ${kit.sessionToken}` })).status, 401);
 });
@@ -309,7 +311,7 @@ await check("an approved change goes through, and its audit row names the operat
   const r = await kit.call("POST", "/api/admin/test/echo", { x: 1 });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.by, `operator:${kit.operator.id}`);
-  const row = store.auditFor(undefined, 50).find((e) => e.kind === "operator.request" && e.data.method === "POST" && e.data.status === 200);
+  const row = (await store.auditFor(undefined, 50)).find((e) => e.kind === "operator.request" && e.data.method === "POST" && e.data.status === 200);
   assert.equal(row?.data.operatorName, "Owner");
 });
 await check("an approval for other values or another path is refused, and none is good twice", async () => {
@@ -365,7 +367,7 @@ await check("a refused approval is audited; ten end that session and no other", 
   assert.equal(tenth.status, 401, "the tenth ends the session");
   assert.equal((await req("GET", "/api/admin/users", undefined, h)).status, 401);
   assert.equal((await kit.call("POST", "/api/admin/test/echo", { x: 8 })).status, 200, "the operator's other session still works");
-  const rows = store.auditFor(undefined, 200).filter((e) => e.kind === "operator.step_up_refused" && e.data.operator === `operator:${kit.operator.id}`);
+  const rows = (await store.auditFor(undefined, 200)).filter((e) => e.kind === "operator.step_up_refused" && e.data.operator === `operator:${kit.operator.id}`);
   assert.ok(rows.length >= 10 && rows.some((e) => e.data.sessionRevoked === true));
   assert.ok(rows.every((e) => !JSON.stringify(e).includes("x-operator-step-up")), "no header in the row");
 });
@@ -392,12 +394,12 @@ await check("a passkey is never registered twice, and an operator holds at most 
   assert.equal(full.body.code, "PASSKEY_LIMIT");
 });
 await check("every live partner read is audited, other reads once per path in ten minutes", async () => {
-  const rows = (p: string) => store.auditFor(undefined, 1000).filter((e) => e.kind === "operator.request" && e.data.path === p && e.data.operator === `operator:${kit.operator.id}`).length;
+  const rows = async (p: string) => (await store.auditFor(undefined, 1000)).filter((e) => e.kind === "operator.request" && e.data.path === p && e.data.operator === `operator:${kit.operator.id}`).length;
   for (let i = 0; i < 3; i++) await req("GET", "/api/admin/errors", undefined, kit.headers());
-  assert.equal(rows("/api/admin/errors"), 1, "a refreshed read is one row");
-  const before = store.auditFor(undefined, 1000).filter((e) => e.kind === "operator.request" && e.data.live === true).length;
+  assert.equal(await rows("/api/admin/errors"), 1, "a refreshed read is one row");
+  const before = (await store.auditFor(undefined, 1000)).filter((e) => e.kind === "operator.request" && e.data.live === true).length;
   for (let i = 0; i < 2; i++) await req("GET", "/api/admin/monerium?live=1", undefined, kit.headers());
-  const after = store.auditFor(undefined, 1000).filter((e) => e.kind === "operator.request" && e.data.live === true).length;
+  const after = (await store.auditFor(undefined, 1000)).filter((e) => e.kind === "operator.request" && e.data.live === true).length;
   assert.equal(after - before, 2, "each live read is its own row");
 });
 
@@ -433,7 +435,7 @@ await check("serves the dashboard and nothing of the user app", async () => {
 console.log("sign-in");
 await check("the passkey signs in on the admin origin and nowhere else; a stranger's passkey never does", async () => {
   const c1 = await req("POST", "/api/admin/auth/login/challenge", {});
-  assert.equal(c1.body.allowCredentials.length, store.findOperator(kit.operator.id)!.credentials.length, "the signed-in person's passkeys are offered, and only theirs");
+  assert.equal(c1.body.allowCredentials.length, (await store.findOperator(kit.operator.id))!.credentials.length, "the signed-in person's passkeys are offered, and only theirs");
   const wrongOrigin = await kit.passkey.assert(c1.body.challenge, "http://localhost:3000", "localhost");
   assert.equal((await req("POST", "/api/admin/auth/login", wrongOrigin)).status, 401);
   const stranger = await SoftPasskey.create();
@@ -453,7 +455,7 @@ await check("logging out ends the session", async () => {
 });
 await check("a disabled operator's session and passkey stop working", async () => {
   const other = await operatorKit({ base: BASE, origin: ADMIN, rpId: "localhost", dataDir, name: "Second", email: "second@example.com", accessJwt: () => secondJwt });
-  store.disableOperator(other.operator.id);
+  await store.disableOperator(other.operator.id);
   const access = { "cf-access-jwt-assertion": secondJwt };
   assert.equal((await req("GET", "/api/admin/users", undefined, other.headers())).status, 401);
   const c = await req("POST", "/api/admin/auth/login/challenge", {}, access);
@@ -472,15 +474,15 @@ await check("a session ends when idle for thirty minutes, after eight hours, or 
   ] as const) {
     const token = await signIn();
     assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${token}` })).status, 200, why);
-    change(store.findOperatorSessionByTokenHash(tokenHash(token)));
+    change(dbm.db.operatorSessions.find((x) => x.tokenHash === tokenHash(token)));
     assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${token}` })).status, 401, why);
   }
 });
 await check("a new enrolment for an operator's email adds a passkey to that operator; a disabled operator enrols nothing", async () => {
-  const before = store.findOperator(kit.operator.id)!.credentials.length;
+  const before = (await store.findOperator(kit.operator.id))!.credentials.length;
   const again = await operatorKit({ base: BASE, origin: ADMIN, rpId: "localhost", dataDir, name: "Owner", email: OWNER, accessJwt: () => goodJwt });
   assert.equal(again.operator.id, kit.operator.id);
-  assert.equal(store.findOperator(kit.operator.id)!.credentials.length, before + 1);
+  assert.equal((await store.findOperator(kit.operator.id))!.credentials.length, before + 1);
   const token = writeEnrolment(dataDir, "Second", "second@example.com");
   const access = { "cf-access-jwt-assertion": secondJwt };
   const o = await req("POST", "/api/admin/auth/enrol/challenge", { token }, access);

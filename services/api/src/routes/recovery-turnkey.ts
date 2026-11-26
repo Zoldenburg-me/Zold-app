@@ -66,7 +66,7 @@ import { wrap } from "./util.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface TurnkeyGuardianDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
   /** Turnkey, or a stand-in under test. */
   client?: () => TurnkeyGuardianClient;
   enabled?: () => boolean;
@@ -154,17 +154,17 @@ const view = (g: SocialGuardian) => ({
 
 /** The user's row for this sub-org taken off the account (the Turnkey wallet
  *  itself stays the person's; adding the same login again finds it). */
-function dropGuardian(userId: string, subOrgId: string) {
-  const safe = store.findUser(userId)!.passkeySafe!;
-  store.updateUser(userId, { passkeySafe: { ...safe, socialGuardians: (safe.socialGuardians ?? []).filter((g) => g.turnkeySubOrgId !== subOrgId) } });
+async function dropGuardian(userId: string, subOrgId: string) {
+  await store.patchUserSub(userId, "passkeySafe", (safe) => ({ ...safe!, socialGuardians: (safe!.socialGuardians ?? []).filter((g) => g.turnkeySubOrgId !== subOrgId) }));
 }
 
 /** The user's row for this sub-org changed to `patch`, written back. */
-function updateGuardian(userId: string, subOrgId: string, patch: Partial<SocialGuardian>): SocialGuardian {
-  const safe = store.findUser(userId)!.passkeySafe!;
-  const rows = (safe.socialGuardians ?? []).map((g) => (g.turnkeySubOrgId === subOrgId ? { ...g, ...patch } : g));
-  store.updateUser(userId, { passkeySafe: { ...safe, socialGuardians: rows } });
-  return rows.find((g) => g.turnkeySubOrgId === subOrgId)!;
+async function updateGuardian(userId: string, subOrgId: string, patch: Partial<SocialGuardian>): Promise<SocialGuardian> {
+  const updated = await store.patchUserSub(userId, "passkeySafe", (safe) => ({
+    ...safe!,
+    socialGuardians: (safe!.socialGuardians ?? []).map((g) => (g.turnkeySubOrgId === subOrgId ? { ...g, ...patch } : g)),
+  }));
+  return updated.passkeySafe!.socialGuardians!.find((g) => g.turnkeySubOrgId === subOrgId)!;
 }
 
 export function createTurnkeyGuardianRouter({
@@ -209,19 +209,19 @@ export function createTurnkeyGuardianRouter({
     res.status(404).json({ error: "Turnkey guardians are not available on this deployment", code: "TURNKEY_OFF" });
   });
 
-  router.get("/recovery/turnkey/users/:id/guardians", (req, res) => {
-    const user = store.findUser(req.params.id);
+  router.get("/recovery/turnkey/users/:id/guardians", async (req, res) => {
+    const user = await store.findUser(req.params.id);
     if (!user) return res.status(404).json({ error: "user not found" });
-    if (!requireUserSession(req, res, user.id)) return;
+    if (!(await requireUserSession(req, res, user.id))) return;
     res.json({ guardians: (user.passkeySafe?.socialGuardians ?? []).map(view) });
   });
 
   router.post(
     "/recovery/turnkey/users/:id/guardians",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       const safe = user.passkeySafe;
       // A planned Safe is enough: at signup the login comes before the Safe,
       // and the deployment adds the guardian (routes/auth.ts).
@@ -247,12 +247,15 @@ export function createTurnkeyGuardianRouter({
         const found = ids.length === 1 ? { subOrgId: ids[0], address: await turnkey.walletAddress(ids[0]) } : undefined;
         const { subOrgId, address } = found ?? (await turnkey.createSubOrg(buildGuardianSubOrg(login)));
 
-        const fresh = store.findUser(user.id)!;
-        const current = fresh.passkeySafe!;
-        const existing = (current.socialGuardians ?? []).find((g) => g.turnkeySubOrgId === subOrgId);
-        if (existing) return res.json({ guardian: view(existing) });
+        // Checked and added on the stored plan, in one write: another field
+        // of it written during the Turnkey calls stays.
+        let existing: SocialGuardian | undefined;
         const guardian: SocialGuardian = { kind: "self-social", address, turnkeySubOrgId: subOrgId, status: "created", createdAt: new Date().toISOString() };
-        store.updateUser(user.id, { passkeySafe: { ...current, socialGuardians: [...(current.socialGuardians ?? []), guardian] } });
+        await store.patchUserSub(user.id, "passkeySafe", (current) => {
+          existing = (current!.socialGuardians ?? []).find((g) => g.turnkeySubOrgId === subOrgId);
+          return existing ? current : { ...current!, socialGuardians: [...(current!.socialGuardians ?? []), guardian] };
+        });
+        if (existing) return res.json({ guardian: view(existing) });
         res.status(201).json({ guardian: view(guardian) });
       } catch (e) {
         sendError(res, e);
@@ -265,16 +268,16 @@ export function createTurnkeyGuardianRouter({
   router.post(
     "/recovery/turnkey/users/:id/guardians/:subOrgId/add",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       try {
         const plan = activePlan(user);
         const guardian = (user.passkeySafe!.socialGuardians ?? []).find((g) => g.turnkeySubOrgId === req.params.subOrgId);
         if (!guardian) throw new TurnkeyGuardianError("no such guardian on this account", 404, "NO_GUARDIAN");
         const state = await safeOps.readState(plan);
         if (assertCanAdd(state, guardian.address) === "listed") {
-          const active = updateGuardian(user.id, guardian.turnkeySubOrgId, { status: "active", activeAt: guardian.activeAt ?? new Date().toISOString() });
+          const active = await updateGuardian(user.id, guardian.turnkeySubOrgId, { status: "active", activeAt: guardian.activeAt ?? new Date().toISOString() });
           return res.json({ guardian: view(active) });
         }
         const txs = recoveryGuardianSetupTransactions(plan.address, state.moduleAddress, guardian.address, 1, state.moduleEnabled);
@@ -291,9 +294,9 @@ export function createTurnkeyGuardianRouter({
   router.post(
     "/recovery/turnkey/users/:id/guardians/:subOrgId/remove",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       try {
         const plan = activePlan(user);
         const guardian = (user.passkeySafe!.socialGuardians ?? []).find((g) => g.turnkeySubOrgId === req.params.subOrgId);
@@ -304,7 +307,7 @@ export function createTurnkeyGuardianRouter({
           // A prepared add for this row would otherwise land on chain later
           // with no row left to show it.
           for (const [id, o] of pendingOps) if (o.userId === user.id && o.subOrgId === guardian.turnkeySubOrgId) pendingOps.delete(id);
-          dropGuardian(user.id, guardian.turnkeySubOrgId);
+          await dropGuardian(user.id, guardian.turnkeySubOrgId);
           return res.json({ removed: true });
         }
         const prepared = await safeOps.prepare(plan, [await safeOps.revokeTx(plan, state, guardian.address)]);
@@ -318,9 +321,9 @@ export function createTurnkeyGuardianRouter({
   router.post(
     "/recovery/turnkey/users/:id/ops/:requestId",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       prune();
       const pending = pendingOps.get(req.params.requestId);
       if (!pending || pending.userId !== user.id) return res.status(404).json({ error: "request not found or expired — start again" });
@@ -343,12 +346,12 @@ export function createTurnkeyGuardianRouter({
           if (after.guardians.some((g) => sameAddress(g, pending.address))) {
             return res.status(502).json({ error: "the operation was submitted but the module still lists the guardian — check again shortly", code: "STILL_LISTED" });
           }
-          dropGuardian(user.id, pending.subOrgId);
+          await dropGuardian(user.id, pending.subOrgId);
           console.log(`RECOVERY: ${user.id} removed a Turnkey guardian (${op.userOpHash ?? op.txHash})`);
           return res.json({ removed: true, txHash: op.txHash, userOpHash: op.userOpHash });
         }
         if (assertCanAdd(await safeOps.readState(plan), pending.address) === "listed") {
-          const active = updateGuardian(user.id, pending.subOrgId, { status: "active", activeAt: new Date().toISOString() });
+          const active = await updateGuardian(user.id, pending.subOrgId, { status: "active", activeAt: new Date().toISOString() });
           return res.json({ guardian: view(active) });
         }
         const op = await safeOps.submit(plan, pending.userOperation, req.body);
@@ -360,7 +363,7 @@ export function createTurnkeyGuardianRouter({
         if (!state.guardians.some((g) => sameAddress(g, pending.address))) {
           return res.status(502).json({ error: "the operation was submitted but the module does not list the guardian yet — check again shortly", code: "NOT_LISTED" });
         }
-        const active = updateGuardian(user.id, pending.subOrgId, { status: "active", activeAt: new Date().toISOString() });
+        const active = await updateGuardian(user.id, pending.subOrgId, { status: "active", activeAt: new Date().toISOString() });
         console.log(`RECOVERY: ${user.id} added a Turnkey guardian (${op.userOpHash ?? op.txHash})`);
         res.json({ guardian: view(active), txHash: op.txHash, userOpHash: op.userOpHash });
       } catch (e) {

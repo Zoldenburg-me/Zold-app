@@ -31,17 +31,17 @@ async function check(name: string, fn: () => void | Promise<void>) {
   catch (err) { failed++; console.error(`  FAIL ${name}\n       ${(err as Error).message}`); }
 }
 
-initStore();
+await initStore();
 const now = new Date().toISOString();
-store.addUser({ id: "u_owner", name: "Olga Owner", country: "DE", kycStatus: "approved", createdAt: now } as any);
-store.addOrganisation({
+await store.addUser({ id: "u_owner", name: "Olga Owner", country: "DE", kycStatus: "approved", createdAt: now } as any);
+await store.addOrganisation({
   id: "org_b", type: "business", name: "Acme", plan: "business",
   reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, createdAt: now, updatedAt: now,
 } as any);
-store.addMember({ id: "m_b", orgId: "org_b", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
+await store.addMember({ id: "m_b", orgId: "org_b", userId: "u_owner", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
 const lastMonth = new Date();
 lastMonth.setMonth(lastMonth.getMonth() - 1);
-store.addLedgerEntries([{
+await store.addLedgerEntries([{
   id: "le_1", orgId: "org_b", source: { kind: "wallet", walletId: "iw_a" }, chainId: 8453,
   txHash: `0x${"1".padStart(64, "0")}`, logIndex: 0, direction: "in", asset: "USDC", amount: "10",
   fiatValue: "9", fiatCurrency: "EUR", fiatRate: "0.9", counterparty: { address: `0x${"dd".repeat(20)}` },

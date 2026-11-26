@@ -55,25 +55,25 @@ const check = (name: string, fn: () => void | Promise<void>) =>
     .then(() => { passed++; console.log(`  ok  ${name}`); })
     .catch((err) => { console.error(`FAIL  ${name}\n      ${(err as Error).stack ?? err}`); process.exitCode = 1; });
 
-initStore();
+await initStore();
 const NOW = new Date().toISOString();
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" } as const;
-const addOrg = (id: string, plan: string) =>
-  store.addOrganisation({
+const addOrg = async (id: string, plan: string) =>
+  await store.addOrganisation({
     id, type: "business", name: "Zoldenburg", legalName: "Zoldenburg UG (haftungsbeschränkt)", plan, reporting,
     address: { line1: "Hauptstraße 1", postalCode: "93047", city: "Regensburg", country: "DE" },
     invoicing: { vatId: "DE123456789" }, verifications: {}, createdAt: NOW, updatedAt: NOW,
   } as any);
-addOrg("org_1", "business");
-addOrg("org_free", "starter");
+await addOrg("org_1", "business");
+await addOrg("org_free", "starter");
 for (const id of ["u_owner", "u_viewer", "u_outsider"]) {
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: NOW } as any);
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", createdAt: NOW } as any);
 }
-const member = (id: string, orgId: string, userId: string, role: string) =>
-  store.addMember({ id, orgId, userId, email: "", role, status: "active", invitedAt: NOW, acceptedAt: NOW } as any);
-member("m_owner", "org_1", "u_owner", "owner");
-member("m_viewer", "org_1", "u_viewer", "viewer");
-member("m_free", "org_free", "u_owner", "owner");
+const member = async (id: string, orgId: string, userId: string, role: string) =>
+  await store.addMember({ id, orgId, userId, email: "", role, status: "active", invitedAt: NOW, acceptedAt: NOW } as any);
+await member("m_owner", "org_1", "u_owner", "owner");
+await member("m_viewer", "org_1", "u_viewer", "viewer");
+await member("m_free", "org_free", "u_owner", "owner");
 
 const ARBITRUM = 42161;
 const WALLET_A = `0x${"aa".repeat(20)}` as `0x${string}`;
@@ -95,15 +95,15 @@ const COLD = `0x${"c1".repeat(20)}` as `0x${string}`;
 const LOSS = `0x${"10".repeat(20)}` as `0x${string}`;
 const FX = `0x${"f0".repeat(20)}` as `0x${string}`;
 
-const wallet = (id: string, address: `0x${string}`, proven: boolean) =>
-  store.addImportedWallet({
+const wallet = async (id: string, address: `0x${string}`, proven: boolean) =>
+  await store.addImportedWallet({
     id, orgId: "org_1", address, chainId: ARBITRUM, label: id, kind: "safe", custody: "external",
     sync: { status: "synced" }, createdAt: NOW,
     ...(proven ? { ownership: { status: "proven", method: "eip1271", message: "m", signature: "0x", provenAt: NOW, checkedAt: NOW } } : {}),
   } as any);
-wallet("iw_a", WALLET_A, true);
-wallet("iw_b", WALLET_B, false);
-store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", address: ZOLD_ACCOUNT, createdAt: NOW, updatedAt: NOW } as any);
+await wallet("iw_a", WALLET_A, true);
+await wallet("iw_b", WALLET_B, false);
+await store.addAccount({ id: "acc_1", orgId: "org_1", currency: "EUR", label: "EUR", status: "active", provider: "monerium", address: ZOLD_ACCOUNT, createdAt: NOW, updatedAt: NOW } as any);
 
 let n = 0;
 /** A row as wallet sync writes it. `value` undefined books it unvalued. */
@@ -127,7 +127,7 @@ const row = (id: string, o: {
   };
 };
 
-store.addLedgerEntries([
+await store.addLedgerEntries([
   row("a1", { dir: "in", token: ARB, symbol: "ARB", amount: "100", value: "50.00", at: "2026-01-10T10:00:00.000Z" }),
   row("a2", { dir: "in", token: ARB, symbol: "ARB", amount: "100", value: "80.00", at: "2026-02-10T10:00:00.000Z" }),
   row("d1", { dir: "out", token: ARB, symbol: "ARB", amount: "150", value: "150.00", at: "2026-03-05T10:00:00.000Z", to: DEX }),
@@ -409,7 +409,7 @@ await check("when the feed still has no price, the row stays unvalued and the an
   const r = await call("POST", "/org_1/ledger/op_in/revalue", {});
   assert.equal(r.status, 422, JSON.stringify(r.body));
   assert.match(r.body.error, /no price/);
-  const e = store.ledgerOf("org_1").find((x) => x.id === "op_in")!;
+  const e = (await store.ledgerOf("org_1")).find((x) => x.id === "op_in")!;
   assert.equal(e.fiatValue, undefined);
   assert.ok(e.tags.includes("needs-valuation"));
 });
@@ -418,7 +418,7 @@ await check("a feed outage is a 503 and changes nothing", async () => {
   feed = { status: 503, body: {} };
   const r = await call("POST", "/org_1/ledger/op_in/revalue", {});
   assert.equal(r.status, 503, JSON.stringify(r.body));
-  assert.equal(store.ledgerOf("org_1").find((x) => x.id === "op_in")!.fiatValue, undefined);
+  assert.equal((await store.ledgerOf("org_1")).find((x) => x.id === "op_in")!.fiatValue, undefined);
 });
 
 await check("a retry asks the feed again for the row's block time, and records the value with its source; a price in the request is ignored", async () => {
@@ -427,7 +427,7 @@ await check("a retry asks the feed again for the row's block time, and records t
   const r = await call("POST", "/org_1/ledger/op_in/revalue", { fiatValue: "999.00", price: 99 });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.ok(feedCalls > before, "a refusal cached earlier is not the answer to a retry");
-  const e = store.ledgerOf("org_1").find((x) => x.id === "op_in")!;
+  const e = (await store.ledgerOf("org_1")).find((x) => x.id === "op_in")!;
   assert.equal(e.fiatValue, "80.00", "40 OP at 2.5 USD, at 1.25 USD per EUR");
   assert.equal(e.fiatCurrency, "EUR");
   assert.equal(e.asset, "OP");
@@ -456,8 +456,8 @@ await check("only an unvalued wallet row of a listed token can be revalued", asy
 });
 
 await check("a row an issued invoice holds is never revalued", async () => {
-  store.addLedgerEntries([row("held", { dir: "in", token: OP, symbol: "OP", amount: "1", at: "2026-07-20T10:00:00.000Z" })]);
-  store.addInvoice({
+  await store.addLedgerEntries([row("held", { dir: "in", token: OP, symbol: "OP", amount: "1", at: "2026-07-20T10:00:00.000Z" })]);
+  await store.addInvoice({
     id: "inv_held", direction: "outgoing", orgId: "org_1", linkTokenHash: "x", state: "SUBMITTED", lines: [], currency: "EUR", total: "0.00",
     createdAt: NOW, updatedAt: NOW,
     settlements: [{ method: "wallet-receipt", ref: "ledger:held", ledgerEntryId: "held", txHash: "0x1", asset: "OP", receivedAmount: "1", amountEur: 1, at: NOW }],
@@ -465,12 +465,12 @@ await check("a row an issued invoice holds is never revalued", async () => {
   const r = await call("POST", "/org_1/ledger/held/revalue", {});
   assert.equal(r.status, 409, JSON.stringify(r.body));
   assert.match(r.body.error, /invoice/i);
-  assert.equal(store.ledgerOf("org_1").find((x) => x.id === "held")!.fiatValue, undefined);
+  assert.equal((await store.ledgerOf("org_1")).find((x) => x.id === "held")!.fiatValue, undefined);
 });
 
 await check("a row on an issued invoice's lines, not yet settled, is not revalued either", async () => {
-  store.addLedgerEntries([row("held2", { dir: "in", token: OP, symbol: "OP", amount: "1", at: "2026-07-22T10:00:00.000Z" })]);
-  store.addInvoice({
+  await store.addLedgerEntries([row("held2", { dir: "in", token: OP, symbol: "OP", amount: "1", at: "2026-07-22T10:00:00.000Z" })]);
+  await store.addInvoice({
     id: "inv_held2", direction: "outgoing", orgId: "org_1", linkTokenHash: "y", state: "SUBMITTED", currency: "EUR", total: "0.00",
     createdAt: NOW, updatedAt: NOW, settlements: [],
     lines: [{ description: "x", quantity: "1", unitPrice: "0.00", amount: "0.00", receipt: { ledgerEntryId: "held2", at: NOW, asset: "OP", amount: "1", txHash: "0x2", eurCents: 0 } }],
@@ -478,7 +478,7 @@ await check("a row on an issued invoice's lines, not yet settled, is not revalue
   feed = { status: 200, body: opPrice(2.5) };
   const r = await call("POST", "/org_1/ledger/held2/revalue", {});
   assert.equal(r.status, 409, JSON.stringify(r.body));
-  assert.equal(store.ledgerOf("org_1").find((x) => x.id === "held2")!.fiatValue, undefined);
+  assert.equal((await store.ledgerOf("org_1")).find((x) => x.id === "held2")!.fiatValue, undefined);
 });
 
 await check("retrying every unvalued row reports each one, valued or not", async () => {
@@ -490,7 +490,7 @@ await check("retrying every unvalued row reports each one, valued or not", async
   assert.equal(byId.held.status, "skipped");
   assert.equal(byId.held2.status, "skipped");
   assert.ok(!("op_in" in byId), "a valued row is not retried");
-  assert.equal(store.ledgerOf("org_1").find((x) => x.id === "usdc_out")!.fiatValue, "4.00");
+  assert.equal((await store.ledgerOf("org_1")).find((x) => x.id === "usdc_out")!.fiatValue, "4.00");
 });
 
 await check("after the retry the unvalued sale has a measured gain", async () => {
@@ -500,25 +500,25 @@ await check("after the retry the unvalued sale has a measured gain", async () =>
 });
 
 await check("a note a person wrote on the row survives its revaluation; sync's own note is replaced", async () => {
-  store.addLedgerEntries([row("noted", { dir: "in", token: OP, symbol: "OP", amount: "2", at: "2026-07-21T10:00:00.000Z" })]);
-  store.updateLedgerEntry("noted", { note: "March retainer, see contract" });
+  await store.addLedgerEntries([row("noted", { dir: "in", token: OP, symbol: "OP", amount: "2", at: "2026-07-21T10:00:00.000Z" })]);
+  await store.updateLedgerEntry("noted", { note: "March retainer, see contract" });
   feed = { status: 200, body: opPrice(2.5) };
   assert.equal((await call("POST", "/org_1/ledger/noted/revalue", {})).status, 200);
-  const e = store.ledgerOf("org_1").find((x) => x.id === "noted")!;
+  const e = (await store.ledgerOf("org_1")).find((x) => x.id === "noted")!;
   assert.equal(e.note, "March retainer, see contract");
   assert.match(e.valuation!.source, /DefiLlama/);
 });
 
 await check("a tag edit cannot send a valued row back to the feed", async () => {
-  const valued = store.ledgerOf("org_1").find((x) => x.id === "a1")!;
-  store.updateLedgerEntry("a1", { tags: [...valued.tags, "needs-valuation"] });
+  const valued = (await store.ledgerOf("org_1")).find((x) => x.id === "a1")!;
+  await store.updateLedgerEntry("a1", { tags: [...valued.tags, "needs-valuation"] });
   assert.equal((await call("POST", "/org_1/ledger/a1/revalue", {})).status, 409);
-  assert.equal(store.ledgerOf("org_1").find((x) => x.id === "a1")!.fiatValue, "50.00");
+  assert.equal((await store.ledgerOf("org_1")).find((x) => x.id === "a1")!.fiatValue, "50.00");
 });
 
 await check("retrying every row pages in order: rows the feed cannot price do not hold back the rest", async () => {
   feed = { status: 200, body: { coins: {} } };
-  store.addLedgerEntries(Array.from({ length: 12 }, (_, i) =>
+  await store.addLedgerEntries(Array.from({ length: 12 }, (_, i) =>
     row(`page_${String(i).padStart(2, "0")}`, { dir: "in", token: OP, symbol: "OP", amount: "1", at: `2026-09-${String(i + 1).padStart(2, "0")}T10:00:00.000Z` })));
   const first = await call("POST", "/org_1/ledger/revalue", {});
   assert.equal(first.body.results.length, 10);

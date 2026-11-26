@@ -28,6 +28,10 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-own
 process.env.TRANSF_CHAIN_ID = "31337";
 
 const { initStore, store } = await import("../services/api/src/store.js");
+
+// The live rows, for arranging state no store method writes (store/db.ts).
+
+const dbm = await import("../services/api/src/store/db.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createBooksLineRouter } = await import("../services/api/src/routes/books-line.js");
@@ -44,41 +48,41 @@ const check = (name: string, fn: () => void | Promise<void>) =>
     .then(() => { passed++; console.log(`  ok  ${name}`); })
     .catch((err) => { console.error(`FAIL  ${name}\n      ${(err as Error).stack ?? err}`); process.exitCode = 1; });
 
-initStore();
+await initStore();
 const NOW = "2026-10-26T10:00:00.000Z";
 const reporting = { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" };
 const safe = (b: string) => `0x${b.repeat(20)}`;
-const addUser = (id: string, address = safe("0f")) =>
-  store.addUser({ id, name: id, country: "DE", kycStatus: "approved", address, createdAt: "2026-01-01T00:00:00.000Z" } as any);
-const member = (orgId: string, userId: string, role: string) =>
-  store.addMember({ id: `m_${orgId}_${userId}`, orgId, userId, role, status: "active", createdAt: NOW } as any);
-const payout = (id: string, userId: string, sendEur: number, over: any = {}) =>
-  store.addTransfer({
+const addUser = async (id: string, address = safe("0f")) =>
+  await store.addUser({ id, name: id, country: "DE", kycStatus: "approved", address, createdAt: "2026-01-01T00:00:00.000Z" } as any);
+const member = async (orgId: string, userId: string, role: string) =>
+  await store.addMember({ id: `m_${orgId}_${userId}`, orgId, userId, role, status: "active", createdAt: NOW } as any);
+const payout = async (id: string, userId: string, sendEur: number, over: any = {}) =>
+  await store.addTransfer({
     id, userId, state: "PAID", rail: "sepa", sendEur, receiveEur: sendEur, recipientName: "Me at my bank", recipientIban: "DE89370400440532013000",
     reference: "own", txs: [], createdAt: NOW, updatedAt: NOW, ...over,
   } as any);
-const issue = (orderId: string, userId: string, amountEur: number) =>
-  store.recordMoneriumIssue({ orderId, userId, amountEur, counterpartyName: "Me at my bank", processedAt: NOW, recordedAt: NOW } as any);
+const issue = async (orderId: string, userId: string, amountEur: number) =>
+  await store.recordMoneriumIssue({ orderId, userId, amountEur, counterpartyName: "Me at my bank", processedAt: NOW, recordedAt: NOW } as any);
 
-addUser("u_me", safe("aa"));
-store.addOrganisation({ id: "org_me", type: "personal", name: "Me", reporting, createdAt: NOW, updatedAt: NOW } as any);
-member("org_me", "u_me", "owner");
-store.addAccount({ id: "acc_me", orgId: "org_me", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("aa"), backingUserId: "u_me", createdAt: NOW } as any);
-issue("ord_in", "u_me", 95);
-payout("t_out", "u_me", 1000);
-writeStatementLinesFor(store.findUser("u_me")!);
+await addUser("u_me", safe("aa"));
+await store.addOrganisation({ id: "org_me", type: "personal", name: "Me", reporting, createdAt: NOW, updatedAt: NOW } as any);
+await member("org_me", "u_me", "owner");
+await store.addAccount({ id: "acc_me", orgId: "org_me", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("aa"), backingUserId: "u_me", createdAt: NOW } as any);
+await issue("ord_in", "u_me", 95);
+await payout("t_out", "u_me", 1000);
+await writeStatementLinesFor((await store.findUser("u_me"))!);
 
-addUser("u_boss", safe("bb"));
-for (const u of ["u_viewer", "u_payer", "u_accountant", "u_outsider"]) addUser(u, safe(u.charCodeAt(2).toString(16).padStart(2, "0")));
-store.addOrganisation({ id: "org_co", type: "business", name: "Co", legalName: "Co UG", plan: "business", reporting, address: { line1: "A", postalCode: "1", city: "R", country: "DE" }, invoicing: {}, verifications: {}, createdAt: NOW, updatedAt: NOW } as any);
-member("org_co", "u_boss", "owner");
-member("org_co", "u_viewer", "viewer");
-member("org_co", "u_payer", "payer");
-member("org_co", "u_accountant", "accountant");
-store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("bb"), backingUserId: "u_boss", createdAt: NOW } as any);
-payout("t_co", "u_boss", 400);
-issue("ord_co", "u_boss", 70);
-writeStatementLinesFor(store.findUser("u_boss")!);
+await addUser("u_boss", safe("bb"));
+for (const u of ["u_viewer", "u_payer", "u_accountant", "u_outsider"]) await addUser(u, safe(u.charCodeAt(2).toString(16).padStart(2, "0")));
+await store.addOrganisation({ id: "org_co", type: "business", name: "Co", legalName: "Co UG", plan: "business", reporting, address: { line1: "A", postalCode: "1", city: "R", country: "DE" }, invoicing: {}, verifications: {}, createdAt: NOW, updatedAt: NOW } as any);
+await member("org_co", "u_boss", "owner");
+await member("org_co", "u_viewer", "viewer");
+await member("org_co", "u_payer", "payer");
+await member("org_co", "u_accountant", "accountant");
+await store.addAccount({ id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("bb"), backingUserId: "u_boss", createdAt: NOW } as any);
+await payout("t_co", "u_boss", 400);
+await issue("ord_co", "u_boss", 70);
+await writeStatementLinesFor((await store.findUser("u_boss"))!);
 
 const app = express();
 app.use(express.json());
@@ -137,7 +141,7 @@ await check("a SEPA credit and a SEPA payout on a personal account land in Reven
 console.log("\nThe mark");
 
 await check("marking the credit moves it out of the statement's category, Revenue and both exports; the payout stays", async () => {
-  const before = store.ledgerOf("org_me").find((e: any) => e.id === IN)!;
+  const before = (await store.ledgerOf("org_me")).find((e: any) => e.id === IN)!;
   const r = await own("org_me", IN, true);
   assert.equal(r.status, 200);
   assert.equal(r.body.line.ownTransfer, true);
@@ -158,11 +162,11 @@ await check("marking the credit moves it out of the statement's category, Revenu
 });
 
 await check("the mark survives the writer and a rules re-run, and marking twice is one mark", async () => {
-  writeStatementLinesFor(store.findUser("u_me")!);
+  await writeStatementLinesFor((await store.findUser("u_me"))!);
   assert.equal((await call("POST", "/orgs/org_me/bookkeeping/statement/rebuild", {})).status, 200);
   assert.equal((await line(IN)).ownTransfer, true);
   await own("org_me", IN, true);
-  assert.equal(store.ledgerOf("org_me").find((e: any) => e.id === IN)!.tags.filter((t: string) => t === "internal").length, 1);
+  assert.equal((await store.ledgerOf("org_me")).find((e: any) => e.id === IN)!.tags.filter((t: string) => t === "internal").length, 1);
   assert.equal((await line(IN)).accountCode, undefined);
 });
 
@@ -243,7 +247,7 @@ await check("PATCH cannot set or clear the mark on a statement line, so it canno
 });
 
 await check("a wallet row's internal tag is the sync's: it keeps its category, and PATCH treats it as before", async () => {
-  store.addLedgerEntries([{ id: "w_int", orgId: "org_me", source: { kind: "wallet", walletId: "w" }, direction: "out", asset: "OP", amount: "1", accountCode: "1100", tags: ["internal"], at: NOW, createdAt: NOW } as any]);
+  await store.addLedgerEntries([{ id: "w_int", orgId: "org_me", source: { kind: "wallet", walletId: "w" }, direction: "out", asset: "OP", amount: "1", accountCode: "1100", tags: ["internal"], at: NOW, createdAt: NOW } as any]);
   const entries = (await call("GET", "/orgs/org_me/ledger")).body.entries as any[];
   assert.equal(entries.find((e) => e.id === "w_int").accountCode, "1100");
   assert.ok(row(await ledgerCsv(), "OP").includes("1100"));
@@ -251,7 +255,7 @@ await check("a wallet row's internal tag is the sync's: it keeps its category, a
 });
 
 await check("a mark made before an invoice match does not stand: the writer drops it, for a bank credit and a crypto receipt", async () => {
-  const base = store.ledgerOf("org_me").find((e: any) => e.id === IN)!;
+  const base = (await store.ledgerOf("org_me")).find((e: any) => e.id === IN)!;
   for (const event of ["sepa_in", "crypto_held"]) {
     const facts = { ...base.statement!, event, key: `k:${event}` };
     const marked = { ...base, tags: ["sepa", "internal"], statement: facts } as any;
@@ -271,15 +275,15 @@ await check("a mark made before an invoice match does not stand: the writer drop
 await check("only true or false; a line of another org, or a wallet row, is no such line", async () => {
   assert.equal((await call("PUT", `/orgs/org_me/ledger/${IN}/own-transfer`, { own: "yes" })).status, 400);
   assert.equal((await own("org_me", lineId("org_co", "transfer:t_co:payout"), true)).status, 404);
-  store.addLedgerEntries([{ id: "w1", orgId: "org_me", source: { kind: "wallet", walletId: "w" }, direction: "in", asset: "XW", amount: "1", tags: [], at: NOW, createdAt: NOW } as any]);
+  await store.addLedgerEntries([{ id: "w1", orgId: "org_me", source: { kind: "wallet", walletId: "w" }, direction: "in", asset: "XW", amount: "1", tags: [], at: NOW, createdAt: NOW } as any]);
   assert.equal((await own("org_me", "w1", true)).status, 404, "tagging a wallet row would change its cost basis");
 });
 
 await check("a fee, a line settling an invoice and a reversal are refused; undo always works", async () => {
   const fee = "feeline";
-  const base = store.ledgerOf("org_me").find((e: any) => e.id === OUT)!;
+  const base = (await store.ledgerOf("org_me")).find((e: any) => e.id === OUT)!;
   const facts = (over: any) => ({ ...base.statement!, ...over });
-  store.addLedgerEntries([
+  await store.addLedgerEntries([
     { ...base, id: fee, tags: [], statement: facts({ key: "transfer:t_out:fee" }) },
     { ...base, id: "rev", tags: [], statement: facts({ key: "transfer:t_out:refund", event: "sepa_out_reversal" }) },
     { ...base, id: "swp", tags: [], statement: facts({ key: "sweep:s", event: "sweep" }) },
@@ -304,35 +308,35 @@ await check("a payment finds its line, in the org its Safe books under, with the
   assert.equal((await look("ord_in")).body.line.ownTransfer, true);
   await own("org_me", IN, false);
   assert.equal((await look("nope")).body.line, null, "no line yet: the sheet shows no action");
-  const was = structuredClone(store.ledgerOf("org_me").find((e: any) => e.id === OUT)!);
-  store.updateLedgerEntry(OUT, { tags: [...was.tags, "internal"], statement: { ...was.statement!, links: { ...was.statement!.links, invoiceId: "i9" } } });
+  const was = structuredClone((await store.ledgerOf("org_me")).find((e: any) => e.id === OUT)!);
+  await store.updateLedgerEntry(OUT, { tags: [...was.tags, "internal"], statement: { ...was.statement!, links: { ...was.statement!.links, invoiceId: "i9" } } });
   assert.equal((await look("t_out")).body.line.ownTransfer, true, "a mark that can no longer be made can still be undone");
-  store.updateLedgerEntry(OUT, { tags: was.tags, statement: was.statement });
+  await store.updateLedgerEntry(OUT, { tags: was.tags, statement: was.statement });
   assert.equal((await look("t_out", "u_boss")).status, 403, "someone else's payments");
   assert.equal((await look("t_co", "u_boss", "u_boss")).body.line.orgId, "org_co");
 });
 
 await check("no line for a member who may not categorise, or for another person's payment", async () => {
-  store.updateMember("m_org_co_u_boss", { role: "viewer" } as any);
+  await store.updateMember("m_org_co_u_boss", { role: "viewer" } as any);
   assert.equal((await call("GET", "/users/u_boss/books-line/t_co", undefined, "u_boss")).body.line, null);
-  store.updateMember("m_org_co_u_boss", { role: "owner" } as any);
+  await store.updateMember("m_org_co_u_boss", { role: "owner" } as any);
   assert.equal((await call("GET", "/users/u_me/books-line/t_co")).body.line, null);
 });
 
 await check("a crypto send finds its line once SENT, on the wallet payment's own sheet", async () => {
-  addUser("u_cs", safe("cc"));
-  store.addOrganisation({ id: "org_cs", type: "personal", name: "Cs", reporting, createdAt: NOW, updatedAt: NOW } as any);
-  member("org_cs", "u_cs", "owner");
-  store.addAccount({ id: "acc_cs", orgId: "org_cs", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("cc"), backingUserId: "u_cs", createdAt: NOW } as any);
+  await addUser("u_cs", safe("cc"));
+  await store.addOrganisation({ id: "org_cs", type: "personal", name: "Cs", reporting, createdAt: NOW, updatedAt: NOW } as any);
+  await member("org_cs", "u_cs", "owner");
+  await store.addAccount({ id: "acc_cs", orgId: "org_cs", currency: "EUR", label: "EUR", status: "active", provider: "monerium", identifier: {}, address: safe("cc"), backingUserId: "u_cs", createdAt: NOW } as any);
   // shortcut: pushed straight into the store; the send path itself is crypto-send's test.
   const send = { id: "cs_1", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SUBMITTED", createdAt: NOW, updatedAt: NOW } as any;
-  store.cryptoSends.push(send);
-  writeStatementLinesFor(store.findUser("u_cs")!);
+  dbm.db.cryptoSends.push(send);
+  await writeStatementLinesFor((await store.findUser("u_cs"))!);
   const look = () => call("GET", "/users/u_cs/books-line/cs_1", undefined, "u_cs");
   assert.equal((await look()).body.line, null, "a send not yet confirmed has no line");
   send.state = "SENT";
   send.txHash = `0x${"e".repeat(64)}`;
-  writeStatementLinesFor(store.findUser("u_cs")!);
+  await writeStatementLinesFor((await store.findUser("u_cs"))!);
   const CS = lineId("org_cs", "cryptosend:cs_1");
   assert.deepEqual((await look()).body, { line: { orgId: "org_cs", lineId: CS, ownTransfer: false } });
   assert.equal((await own("org_cs", CS, true, "u_cs")).status, 200);
@@ -341,49 +345,49 @@ await check("a crypto send finds its line once SENT, on the wallet payment's own
 });
 
 await check("a send confirmed before the bookkeeping sweep ran still finds its line: the lookup writes it", async () => {
-  store.cryptoSends.push({ id: "cs_new", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "5", capEur: 5, state: "SENT", txHash: `0x${"9".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
-  assert.equal(store.ledgerOf("org_cs").some((e: any) => e.id === lineId("org_cs", "cryptosend:cs_new")), false, "no sweep has run");
+  dbm.db.cryptoSends.push({ id: "cs_new", userId: "u_cs", to: safe("dd"), token: "EURE", amount: "5", capEur: 5, state: "SENT", txHash: `0x${"9".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  assert.equal((await store.ledgerOf("org_cs")).some((e: any) => e.id === lineId("org_cs", "cryptosend:cs_new")), false, "no sweep has run");
   const r = await call("GET", "/users/u_cs/books-line/cs_new", undefined, "u_cs");
   assert.deepEqual(r.body, { line: { orgId: "org_cs", lineId: lineId("org_cs", "cryptosend:cs_new"), ownTransfer: false } });
 });
 
 await check("a company send has no line on the sender's own sheet", async () => {
-  store.cryptoSends.push({ id: "cs_co", userId: "u_cs", orgId: "org_co", safeOpId: "op_1", to: safe("dd"), token: "EURE", amount: "7", capEur: 7, state: "SENT", createdAt: NOW, updatedAt: NOW } as any);
+  dbm.db.cryptoSends.push({ id: "cs_co", userId: "u_cs", orgId: "org_co", safeOpId: "op_1", to: safe("dd"), token: "EURE", amount: "7", capEur: 7, state: "SENT", createdAt: NOW, updatedAt: NOW } as any);
   assert.equal((await call("GET", "/users/u_cs/books-line/cs_co", undefined, "u_cs")).body.line, null);
 });
 
 await check("a wallet send that pays a send link is an invoice payment: no mark, and an earlier mark is cleared", async () => {
-  const sent = (id: string) => store.cryptoSends.push({ id, userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SENT", txHash: `0x${id.length.toString(16).repeat(64).slice(0, 64)}`, createdAt: NOW, updatedAt: NOW } as any);
-  const pays = (invId: string, sendId: string) =>
-    store.addInvoice({ id: invId, orgId: "org_cs", linkTokenHash: invId, state: "PAYING", total: "25.00", payment: { cryptoSendId: sendId }, createdAt: NOW, updatedAt: NOW } as any);
-  sent("cs_inv");
-  sent("cs_was");
-  writeStatementLinesFor(store.findUser("u_cs")!);
+  const sent = async (id: string) => dbm.db.cryptoSends.push({ id, userId: "u_cs", to: safe("dd"), token: "EURE", amount: "25", capEur: 25, state: "SENT", txHash: `0x${id.length.toString(16).repeat(64).slice(0, 64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  const pays = async (invId: string, sendId: string) =>
+    await store.addInvoice({ id: invId, orgId: "org_cs", linkTokenHash: invId, state: "PAYING", total: "25.00", payment: { cryptoSendId: sendId }, createdAt: NOW, updatedAt: NOW } as any);
+  await sent("cs_inv");
+  await sent("cs_was");
+  await writeStatementLinesFor((await store.findUser("u_cs"))!);
   const INV = lineId("org_cs", "cryptosend:cs_inv");
   const WAS = lineId("org_cs", "cryptosend:cs_was");
   assert.equal((await own("org_cs", WAS, true, "u_cs")).status, 200);
   // The link is recorded after the line was written; no sweep has run since.
-  pays("inv_a", "cs_inv");
+  await pays("inv_a", "cs_inv");
   assert.equal((await own("org_cs", INV, true, "u_cs")).status, 409, "the mark endpoint asks the invoice, not only the line");
   assert.equal((await call("GET", "/users/u_cs/books-line/cs_inv", undefined, "u_cs")).body.line, null);
-  pays("inv_b", "cs_was");
-  writeStatementLinesFor(store.findUser("u_cs")!);
-  const was = store.ledgerOf("org_cs").find((e: any) => e.id === WAS)!;
+  await pays("inv_b", "cs_was");
+  await writeStatementLinesFor((await store.findUser("u_cs"))!);
+  const was = (await store.ledgerOf("org_cs")).find((e: any) => e.id === WAS)!;
   assert.equal(was.statement!.links.invoiceId, "inv_b", "the line carries the invoice it pays");
   assert.equal(was.tags.includes("internal"), false, "the mark made before the link is dropped");
-  assert.equal(store.ledgerOf("org_cs").find((e: any) => e.id === INV)!.statement!.links.invoiceId, "inv_a");
+  assert.equal((await store.ledgerOf("org_cs")).find((e: any) => e.id === INV)!.statement!.links.invoiceId, "inv_a");
 });
 
 await check("a personal send that pays another org's send link loses an earlier mark too, without that org's invoice on the line", async () => {
-  store.cryptoSends.push({ id: "cs_xorg", userId: "u_cs", to: safe("de"), token: "EURE", amount: "30", capEur: 30, state: "SENT", txHash: `0x${"7".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
-  writeStatementLinesFor(store.findUser("u_cs")!);
+  dbm.db.cryptoSends.push({ id: "cs_xorg", userId: "u_cs", to: safe("de"), token: "EURE", amount: "30", capEur: 30, state: "SENT", txHash: `0x${"7".repeat(64)}`, createdAt: NOW, updatedAt: NOW } as any);
+  await writeStatementLinesFor((await store.findUser("u_cs"))!);
   const LINE = lineId("org_cs", "cryptosend:cs_xorg");
   assert.equal((await own("org_cs", LINE, true, "u_cs")).status, 200, "marked before the link was tied");
   // u_cs pays another person's send link (send links exist only in personal orgs) from their own Safe.
-  store.addOrganisation({ id: "org_xorg", type: "personal", name: "Other", reporting, createdAt: NOW, updatedAt: NOW } as any);
-  store.addInvoice({ id: "inv_xorg", orgId: "org_xorg", linkTokenHash: "inv_xorg", state: "PAYING", total: "30.00", payment: { cryptoSendId: "cs_xorg" }, createdAt: NOW, updatedAt: NOW } as any);
-  writeStatementLinesFor(store.findUser("u_cs")!);
-  const line = store.ledgerOf("org_cs").find((e: any) => e.id === LINE)!;
+  await store.addOrganisation({ id: "org_xorg", type: "personal", name: "Other", reporting, createdAt: NOW, updatedAt: NOW } as any);
+  await store.addInvoice({ id: "inv_xorg", orgId: "org_xorg", linkTokenHash: "inv_xorg", state: "PAYING", total: "30.00", payment: { cryptoSendId: "cs_xorg" }, createdAt: NOW, updatedAt: NOW } as any);
+  await writeStatementLinesFor((await store.findUser("u_cs"))!);
+  const line = (await store.ledgerOf("org_cs")).find((e: any) => e.id === LINE)!;
   assert.equal(line.tags.includes("internal"), false, "the writer drops the mark, as the PUT would refuse it");
   assert.equal(line.statement!.links.invoiceId, undefined, "another org's invoice is not named in these books");
   assert.equal((await own("org_cs", LINE, true, "u_cs")).status, 409);
@@ -392,16 +396,16 @@ await check("a personal send that pays another org's send link loses an earlier 
 console.log("\nBelege");
 
 await check("an issued Beleg is never touched: it still verifies, is not revoked, and keeps the booking it froze", async () => {
-  const entry = store.ledgerOf("org_me").find((e: any) => e.id === OUT)!;
+  const entry = (await store.ledgerOf("org_me")).find((e: any) => e.id === OUT)!;
   const { doc } = await issueBelegForLine(entry);
   const frozen = JSON.stringify(doc.snapshot);
   await own("org_me", OUT, true);
-  const after = store.ledgerOf("org_me").find((e: any) => e.id === OUT)!;
-  const stored = store.findDocumentByCode(doc.code)!;
+  const after = (await store.ledgerOf("org_me")).find((e: any) => e.id === OUT)!;
+  const stored = (await store.findDocumentByCode(doc.code))!;
   assert.equal(JSON.stringify(stored.snapshot), frozen);
   assert.equal(stored.revokedAt, undefined);
   assert.equal(after.statement!.documentCode, doc.code);
-  const verdict = belegStillAgrees(stored.snapshot as any, { entry: after, transfer: store.findTransfer("t_out")! });
+  const verdict = belegStillAgrees(stored.snapshot as any, { entry: after, transfer: (await store.findTransfer("t_out"))! });
   assert.equal(verdict.ok, true, verdict.detail);
   assert.equal((stored.snapshot as any).line.accountCode, "6200");
   assert.equal((await lexware()).includes(`Beleg ${doc.code}`), true);
@@ -410,7 +414,7 @@ await check("an issued Beleg is never touched: it still verifies, is not revoked
 
 await check("a Beleg issued on a marked line carries no income or expense code and says what it is", async () => {
   await own("org_me", IN, true);
-  const { doc } = await issueBelegForLine(store.ledgerOf("org_me").find((e: any) => e.id === IN)!);
+  const { doc } = await issueBelegForLine((await store.ledgerOf("org_me")).find((e: any) => e.id === IN)!);
   const s = doc.snapshot as any;
   assert.equal(s.line.accountCode, undefined);
   assert.equal(s.line.ownTransfer, true);
@@ -418,29 +422,29 @@ await check("a Beleg issued on a marked line carries no income or expense code a
 });
 
 await check("a Beleg that says own transfer fails verification once the books stop saying so: on undo, and when an invoice match drops the mark", async () => {
-  const agrees = (doc: any, e: any) => belegStillAgrees(store.findDocumentByCode(doc.code)!.snapshot as any, { entry: e, issueOrder: store.moneriumIssueOrders.find((o: any) => o.orderId === "ord_in") });
-  const now = () => store.ledgerOf("org_me").find((e: any) => e.id === IN)!;
-  const cleared = structuredClone(now());
-  store.updateLedgerEntry(IN, { statement: { ...cleared.statement!, documentCode: undefined } });
+  const agrees = async (doc: any, e: any) => belegStillAgrees((await store.findDocumentByCode(doc.code))!.snapshot as any, { entry: e, issueOrder: (await store.list("moneriumIssueOrders")).find((o: any) => o.orderId === "ord_in") });
+  const now = async () => (await store.ledgerOf("org_me")).find((e: any) => e.id === IN)!;
+  const cleared = structuredClone(await now());
+  await store.updateLedgerEntry(IN, { statement: { ...cleared.statement!, documentCode: undefined } });
   await own("org_me", IN, true);
-  const { doc } = await issueBelegForLine(now());
-  assert.equal(agrees(doc, now()).ok, true, "still marked");
+  const { doc } = await issueBelegForLine(await now());
+  assert.equal((await agrees(doc, await now())).ok, true, "still marked");
   await own("org_me", IN, false);
-  const undone = agrees(doc, now());
+  const undone = await agrees(doc, await now());
   assert.equal(undone.ok, false, "undo");
   assert.match(undone.detail, /no longer marked/);
   await own("org_me", IN, true);
-  assert.equal(agrees(doc, now()).ok, true, "marked again, so the document is true again");
-  const linked = { ...now(), tags: now().tags.filter((t: string) => t !== "internal"), statement: { ...now().statement!, links: { ...now().statement!.links, invoiceId: "i1" } } };
-  const { toUpdate } = mergeStatementLines([now()], [linked]);
-  store.updateLedgerEntry(IN, toUpdate[0].patch);
-  assert.equal(agrees(doc, now()).ok, false, "the writer dropped the mark");
-  store.updateDocument(doc.id, { revokedAt: NOW });
-  store.updateLedgerEntry(IN, { statement: { ...now().statement!, links: cleared.statement!.links } });
-  const again = await issueBelegForLine(now());
+  assert.equal((await agrees(doc, await now())).ok, true, "marked again, so the document is true again");
+  const linked = { ...(await now()), tags: (await now()).tags.filter((t: string) => t !== "internal"), statement: { ...(await now()).statement!, links: { ...(await now()).statement!.links, invoiceId: "i1" } } };
+  const { toUpdate } = mergeStatementLines([await now()], [linked]);
+  await store.updateLedgerEntry(IN, toUpdate[0].patch);
+  assert.equal((await agrees(doc, await now())).ok, false, "the writer dropped the mark");
+  await store.updateDocument(doc.id, { revokedAt: NOW });
+  await store.updateLedgerEntry(IN, { statement: { ...(await now()).statement!, links: cleared.statement!.links } });
+  const again = await issueBelegForLine(await now());
   assert.equal(again.issued, true, "revoking lets a new one be issued");
   assert.equal((again.doc.snapshot as any).line.ownTransfer, undefined);
-  assert.equal(agrees(again.doc, now()).ok, true);
+  assert.equal((await agrees(again.doc, await now())).ok, true);
 });
 
 console.log("\nThe screens");

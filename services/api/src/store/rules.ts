@@ -5,13 +5,14 @@
  * as the method body did; the backend reads and writes the row around it.
  */
 import { nextProfileHistory } from "../domain/monerium-identity.js";
+import { settlementRef } from "../domain/invoices.js";
 import { orgEntity } from "../domain/org-entity.js";
 import { copyOrgSafePlan, isOrgSafePlan } from "../domain/org-safe-plan.js";
-import type { Account, LedgerEntry, Organisation, OrgSafePlan } from "../domain/types.js";
+import type { Account, DraftActivity, DraftPayment, Invoice, LedgerEntry, Member, Organisation, OrgSafePlan } from "../domain/types.js";
 import { auditEntry, type AuditEntry } from "../audit.js";
 import { matchesPayoutEvidence } from "../transfers/review-evidence.js";
 import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./types.js";
-import type { ConversionSweep, CryptoDeposit, ReviewResolutionState, Transfer, User } from "./types.js";
+import type { ConversionSweep, CryptoDeposit, PaymentRequest, Quote, ReviewResolutionState, Transfer, User } from "./types.js";
 
 /** Bounds of an operator's review-resolution note. */
 export const REVIEW_NOTE_MIN = 20;
@@ -59,15 +60,40 @@ export function followIban(a: Account, userId: string, userIban: string | undefi
   return true;
 }
 
+/** An OPEN quote whose `expiresAt` is still ahead: the one a transfer may consume. */
+export function quoteConsumable(q: Quote, now: number): boolean {
+  return (q.status ?? "OPEN") === "OPEN" && Date.parse(q.expiresAt) > now;
+}
+
 /**
  * The patch that records a verified assertion's signCount, only while
  * `credentialId` is still the account's passkey: a recovery can replace the
- * passkey while an assertion is being verified. Undefined when it was
- * replaced; the caller refuses the assertion. The one signCount write.
+ * passkey while an assertion is being verified. And only while the count
+ * advances on the stored row (§2, passkey sign count): webauthn.ts compares
+ * with the count it read before an await, so two assertions verified in
+ * parallel would otherwise both pass, and the lower one would write the
+ * counter back. Once a count is stored, the new one must exceed it, as
+ * webauthn.ts requires. Undefined when the passkey was replaced or the count
+ * did not advance; the caller refuses the assertion. The one signCount write.
  */
 export function passkeyUsePatch(u: User | undefined, credentialId: string, signCount: number): Partial<User> | undefined {
   if (!u?.passkey || u.passkey.credentialId !== credentialId) return undefined;
+  const stored = u.passkey.signCount ?? 0;
+  if (stored > 0 && signCount <= stored) return undefined;
   return { passkey: { ...u.passkey, signCount } };
+}
+
+/**
+ * One guess at the email code, counted on the stored row before it is
+ * compared: parallel guesses each see the ones before. Undefined when there
+ * is no code for the account's address, it expired, or its guesses are
+ * used up; the caller refuses the guess.
+ */
+export function emailCodeAttemptPatch(u: User | undefined, max: number, now: number): Partial<User> | undefined {
+  const c = u?.emailCode;
+  if (!c || !u.email || c.email.trim().toLowerCase() !== u.email.trim().toLowerCase()) return undefined;
+  if (now > Date.parse(c.expiresAt) || c.attempts >= max) return undefined;
+  return { emailCode: { ...c, attempts: c.attempts + 1 } };
 }
 
 /**
@@ -271,4 +297,84 @@ export function applyReplacedOrgSafePlan(o: Organisation | undefined, orgId: str
 export function sessionDead(s: { revokedAt?: string; expiresAt: string }, retainMs: number, now = Date.now()): boolean {
   const dead = s.revokedAt ? Date.parse(s.revokedAt) : Date.parse(s.expiresAt);
   return Number.isFinite(dead) && dead < now - retainMs;
+}
+
+/**
+ * A transfer's step log only grows. A patch carrying `txs` is the caller's
+ * view of it, read before an await: every stored step is kept, in order, and
+ * the caller's steps the row does not hold yet (counted with multiplicity,
+ * by step and hash) are appended. A step both hold keeps the fields either
+ * gave it (the caller may have added `outputLogIndexes`; a stale copy without
+ * them removes nothing). An executor's and a compensator's steps written from
+ * two stale copies both survive (§2 rule 2).
+ */
+export function mergeTransferSteps(stored: Transfer["txs"], given: Transfer["txs"]): Transfer["txs"] {
+  const key = (x: Transfer["txs"][number]) => `${x.step}\u0000${x.hash}`;
+  const slots = new Map<string, number[]>();
+  stored.forEach((x, i) => slots.set(key(x), [...(slots.get(key(x)) ?? []), i]));
+  const out = [...stored];
+  for (const x of given) {
+    const i = slots.get(key(x))?.shift();
+    if (i === undefined) out.push(x);
+    else out[i] = { ...out[i], ...x };
+  }
+  return out;
+}
+
+/** What may be patched into a transfer, with `txs` merged into the row's. */
+export function transferPatchOnRow(t: Transfer, patch: Partial<Transfer>): Partial<Transfer> {
+  const guarded = guardTransferPatch(t, patch);
+  return guarded.txs ? { ...guarded, txs: mergeTransferSteps(t.txs, guarded.txs) } : guarded;
+}
+
+/** The conditions a conditional draft write checks on the stored row. */
+export type DraftCondition = {
+  /** The states the draft may be in. */
+  from: readonly DraftPayment["state"][];
+  /** Refused when the draft was written at all since the caller read it. */
+  expectedUpdatedAt?: string;
+  /** Refused when someone else became the drafter (four eyes). */
+  drafter?: string;
+  /** Appended to the stored activity, never written over it. */
+  activity?: DraftActivity;
+};
+
+/** The draft patch to write, or null when a condition no longer holds. */
+export function draftPatchOnRow(d: DraftPayment, patch: Partial<DraftPayment>, c: DraftCondition): Partial<DraftPayment> | null {
+  if (!c.from.includes(d.state)) return null;
+  if (c.expectedUpdatedAt !== undefined && d.updatedAt !== c.expectedUpdatedAt) return null;
+  if (c.drafter !== undefined && d.createdByMemberId !== c.drafter) return null;
+  return c.activity ? { ...patch, activity: [...d.activity, c.activity] } : patch;
+}
+
+/** A draft's activity is appended to on the stored row, never replaced. */
+export function refuseActivityPatch(patch: Partial<DraftPayment>) {
+  if ("activity" in patch) throw new Error("a draft's activity is appended through appendDraftActivity or updateDraftFrom");
+}
+
+/**
+ * Cancel an open request that nothing has paid; a payment recorded meanwhile
+ * keeps it. A Shopify order cancel leaves a request past its expiry EXPIRED
+ * (`evenIfExpired` false); the payee's own cancel takes a stored OPEN one.
+ */
+export function cancelUnpaidOnRow(r: PaymentRequest, now: Date, evenIfExpired = false): Partial<PaymentRequest> | null {
+  if (r.state !== "OPEN" || r.payments.length > 0) return null;
+  if (!evenIfExpired && Date.parse(r.expiresAt) <= now.getTime()) return null;
+  return { state: "CANCELLED", cancelledAt: now.toISOString() };
+}
+
+/** An invite spent once, by one user, while it is still the row's invite. */
+export function acceptInviteOnRow(m: Member, tokenHash: string, userId: string, others: Member[], at: string): Partial<Member> | null {
+  if (m.status !== "invited" || m.invite?.tokenHash !== tokenHash) return null;
+  if (others.some((x) => x.id !== m.id && x.userId === userId && x.status !== "deactivated")) return null;
+  return { userId, status: "active", acceptedAt: at, invite: undefined };
+}
+
+/**
+ * An invoice settlement, computed from the stored row: recorded once per ref,
+ * or, with `replace`, rewritten under its ref (a converted deposit).
+ */
+export function settlementOnRow(i: Invoice, ref: string, update: (i: Invoice) => Partial<Invoice>, replace = false): Partial<Invoice> | null {
+  if (!replace && (i.settlements ?? []).some((s) => settlementRef(s) === ref)) return null;
+  return update(i);
 }
