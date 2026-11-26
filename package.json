@@ -155,6 +155,8 @@
     "desktop:send:test": "tsx scripts/desktop-send-ui-test.ts",
     "security:test": "tsx scripts/security-hardening-test.ts",
     "persist-failure:test": "tsx scripts/persist-failure-test.ts",
+    "store-backend:test": "tsx scripts/store-backend-test.ts",
+    "check:pg": "tsx scripts/store-pg-test.ts",
     "send-record-crash:test": "tsx scripts/send-record-crash-test.ts",
     "bridge:harness:test": "tsx scripts/bridge-harness-test.ts",
     "reencrypt": "tsx scripts/reencrypt-fields.ts",
@@ -204,11 +206,13 @@
     "preview:bookkeeping": "tsx scripts/preview-bookkeeping.ts"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.4.6",
     "@turnkey/indexed-db-stamper": "1.3.11",
     "@turnkey/webauthn-stamper": "0.6.0",
     "@types/express": "^4.17.25",
     "@types/node": "^22.20.1",
     "@types/nodemailer": "^8.0.2",
+    "@types/pg": "8.23.1",
     "esbuild": "0.28.1",
     "hardhat": "^3.11.1",
     "jsqr": "^1.4.0",
@@ -224,6 +228,7 @@
     "express": "^4.19.0",
     "lz-string": "1.5.0",
     "nodemailer": "^10.1.4",
+    "pg": "8.23.1",
     "safe-recovery-service-sdk": "^0.0.4",
     "viem": "^2.21.0"
   },

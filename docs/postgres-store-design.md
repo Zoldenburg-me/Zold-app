@@ -59,14 +59,18 @@ Every table is:
 ```sql
 CREATE TABLE <name> (
   id   text PRIMARY KEY,
-  doc  jsonb NOT NULL,
+  doc  json NOT NULL,
   -- typed key columns, each GENERATED ALWAYS AS (…) STORED from doc
   ...
 );
 ```
 
 The row shape in `store/types.ts` and `domain/types.ts` stays the source of
-truth. `doc` holds the whole row as the JSON backend has it. Every column we
+truth. `doc` holds the whole row as the JSON backend has it, as `json`,
+not `jsonb`: `jsonb` reorders object keys, and callers compare rows with
+`JSON.stringify` (`mergeStatementLines`, `bookkeeping/statement.ts:583`,
+`:588`), so a row read back from `jsonb` would look changed. `json` keeps the
+text as written; the `->`/`->>` operators work on it. Every column we
 look up, join or constrain on is a **stored generated column** over `doc`
 (Postgres 12+), for example
 `state text GENERATED ALWAYS AS (doc->>'state') STORED` or
@@ -83,6 +87,14 @@ Why this shape for slice 1:
   to move a final state backwards, `store.ts:525-540`) do not have to be
   rewritten in SQL to stay correct.
 - Unique constraints and indexes work on generated columns.
+
+Two more columns on every row table: `seq bigint GENERATED ALWAYS AS
+IDENTITY`, the row's position in the JSON array, so a method that returns
+"the first match" reads `ORDER BY seq` and gets the row the JSON backend
+would; and no generated timestamp column. A cast to `timestamptz` depends on
+the session's time zone, so Postgres refuses it in a generated column; the
+key columns hold the ISO text (`expires_at text`), and a query that compares
+with `now()` casts in its `WHERE`.
 
 What moves to real columns later (not in #166): amounts on `transfers`,
 `cryptoSends` and `ledger` as `numeric`, so reports can sum in SQL; `txs`
@@ -108,7 +120,7 @@ move byte for byte. "Credential" means a hash or code that grants access
 | transfers (55) | **quote_id** (one transfer per quote; the consumption key, §2) | user_id, state, created_at | user_id → users, quote_id → quotes | reference text, payee IBAN | update; never deleted |
 | sessions (56) | token_hash (:819) | user_id, expires_at | user_id → users | credential | update; **pruned** (`db.ts:239-245`) |
 | operators (58) | lower(email) (:849, :862) | — | — | — | update |
-| operator_credentials (new, from `operators[].credentials`) | credential_id (:870 checks this across all operators) | operator_id | operator_id → operators | — | update |
+| operator_credentials (new: the key of `operators[].credentials`, which stay in the operator's `doc`; written in the same transaction as every operator write) | credential_id (:870 checks this across all operators) | operator_id | operator_id → operators | — | update |
 | operatorSessions (59) | token_hash (:904) | operator_id | operator_id → operators | credential | update; **pruned** (:896-900) |
 | serviceCredentials (61) | — | service (:207) | — | credential hash | update |
 | receiptShares (63) | slug (:648); transfer_id WHERE revoked_at IS NULL (one live share, :637-646) | transfer_id | transfer_id → transfers | credential | update |
@@ -143,9 +155,19 @@ Rules for the table above:
 - A unique index goes in only where the importer finds no duplicate in the
   live data. Where it finds one, the index is plain, the importer reports the
   rows, and the duplicate is a finding for the lead, not something the
-  migration repairs.
+  migration repairs. `0001_init.sql` (S1) has the unique keys today's store
+  methods already rely on (credential ids, token hashes, slugs, codes,
+  handles, `shop`, the dedupe ids, the crypto-deposit key, one live receipt
+  share, one live membership, `(org_id, code)` on the chart, the statement
+  key); S5's report is read before 0001 is first applied to a deployment.
+  The keys today's code does not enforce come with the slice whose §2 row
+  adds them, as plain indexes until then: `transfers.quote_id` and one
+  `GRACE_PERIOD` recovery per user (S3), `lower(address)` on accounts (S3;
+  `accountsAtAddress` reports two accounts at one address as unbookable
+  today, `bookkeeping/money-in.ts:42`), and `(org_id, number)` on invoices
+  (S2).
 - Foreign keys are `ON DELETE RESTRICT`. The same rule: added only where the
-  importer finds no orphan.
+  importer finds no orphan, so none is in 0001; they come with S5.
 - **The `table` in a sealed field's AAD stays the collection name**
   (`shopifyConnections`, not `shopify_connections`), and `rowId` stays the
   row's `id`. Changing either makes every sealed value unopenable. The SQL
@@ -156,7 +178,9 @@ Rules for the table above:
 
 New tables: `schema_migrations`, `outbox` (§5), `ledger_history` (§5),
 `cap_holds` (§2), `pending_executions` (§2), and
-`payment_handles(handle_lc text PRIMARY KEY, owner_kind text, owner_id text)`.
+`payment_handles(handle_lc text PRIMARY KEY, owner_kind text, owner_id text)`. `0001_init.sql` creates
+`payment_handles`, the migration runner `schema_migrations`; the other four
+come with the slice that writes them (S3, S4).
 A user's and an organisation's payment pages share one namespace
 (`routes/business/org-payment-page.ts:79-91`), and `/pay/:handle` tries the
 user first (`routes/payment-page.ts:233-239`), so two per-table unique
@@ -248,8 +272,8 @@ Five rules cover most of it:
    for `passkeySafe` / `monerium`, `patchOrgSub(id, key, fn)` for
    `invoicing` / `integrations`, `appendDraftActivity(id, entry)`,
    `recordPaymentRequestPayment` and `settleInvoice` (table below). `fn`
-   receives the locked current value and returns the new one; in SQL that is
-   `jsonb_set` or `||` on the locked row. S2 adds a grep gate to
+   receives the locked current value and returns the new one, in JavaScript
+   on the locked row (a `jsonb_set` would reorder the keys, §1.1). S2 adds a grep gate to
    `scripts/check.ts` that refuses, outside `store.ts` and `store/`, a patch
    built from these spreads and pushes: `...user.passkeySafe` (9 today),
    `...user.monerium` (4), `...t.sepa`, `...ctx.org.invoicing` (1),
@@ -317,7 +341,7 @@ in parallel on Postgres 17 in `check:pg`.
 | Invoice `/pay` twice | `assertPayable(syncInvoicePayment(invoice))` then the draft insert (`routes/business/invoices.ts:178`→`:257`→`:268`), synchronous today | One store method, `startInvoicePayment(invoiceId, draft)`: conditional `SUBMITTED`→`PAYING` and the draft insert in one transaction | Two parallel `/pay` on one invoice: one draft, one 409 | S2 |
 | Supplier pay-to submit | State check then `payTo` write (`routes/business/invoice-links.ts:179`→`:212`/`:254`), synchronous after the `load` await at `:177` | Rule 3: `WHERE state='LINK_CREATED'` on the write | Two submits with different `payTo`: the first stands, the second answers 409 | S2 |
 | Payment-request expiry sweep | Filters `OPEN` once (`routes/payment-requests.ts:743`), awaits `hook(r)` (`:768`) inside the loop, writes `EXPIRED` without re-checking (`:746`). Open today | Rule 3: `EXPIRED` only `WHERE state='OPEN'` | A payment recorded while the sweep is mid-loop: the request stays `PAID` | S2 |
-| Shopify cancel | `payments.length === 0` on the row read, then cancel (`routes/shopify.ts:685`→`:686`), synchronous today | One store method: cancel `WHERE state='OPEN' AND expires_at > now() AND jsonb_array_length(doc->'payments') = 0` on the locked row, the same test as `effectiveState(existing) === 'OPEN'` (`payment-requests.ts:573-576`) today, so a request already past its expiry stays expired | A payment recorded in parallel with a Shopify cancel: one of them; never a cancelled request with a payment. A cancel for a request past `expiresAt`: it stays `EXPIRED` | S2 |
+| Shopify cancel | `payments.length === 0` on the row read, then cancel (`routes/shopify.ts:685`→`:686`), synchronous today | One store method: cancel `WHERE state='OPEN' AND expires_at > now() AND json_array_length(doc->'payments') = 0` on the locked row, the same test as `effectiveState(existing) === 'OPEN'` (`payment-requests.ts:573-576`) today, so a request already past its expiry stays expired | A payment recorded in parallel with a Shopify cancel: one of them; never a cancelled request with a payment. A cancel for a request past `expiresAt`: it stays `EXPIRED` | S2 |
 | One deposit matched twice | A deposit is attributed to a request (`attributeDepositToRequest`, `payment-requests.ts:593`→`:620`) or linked to an invoice (`routes/crypto-deposits.ts:141`→`:175`), synchronous today | The deposit row gets a `settledTo` field (generated column `settled_to`), set by the one store method that records the deposit's money on a target (a request payment or an invoice settlement) `WHERE settled_to IS NULL`, in the same transaction as that payment or settlement; no row back means the money is already recorded elsewhere, and the caller refuses. The invoice link itself (`invoiceId`) stays changeable, or droppable, until then, as today (`routes/crypto-deposits.ts:137-150` refuses a move only once a settlement carries `deposit:<id>`); the move is refused `WHERE settled_to IS NOT NULL` | One deposit attributed by the scanner and settled on an invoice in parallel: one target. An unsettled link moved to another invoice: allowed |
 | Deposit conversion and partials | Guarded by deleting the pending entry and `convertingDeposits` (`routes/crypto-deposits.ts:288`, `:295`), both in memory, before the submit (`:299`→`:358`); `settleConvertedDeposit` reads `deposit.partials` after awaits (`adapters/crypto-deposits.ts:414-480`) | Rule 5: a `CONVERTING` reserve on the deposit row before the submit; partials appended with rule 2 | Two conversions of one deposit: one submits. Two partials settling in parallel: both kept | S3 |
 | Last owner | Count of owners then the role change or deactivation (`routes/orgs.ts:606`→`:616`), synchronous today | Rule 4: the method locks the `organisations` row, counts active owners inside the lock, then writes | Two owners each demoting the other in parallel: one succeeds, one answers 409; one owner remains | S2 |
@@ -448,16 +472,23 @@ Mechanical order for S2 (each step leaves `npm run check` green):
   to start (§7).
 - **Driver:** `pg` (node-postgres, MIT, 8.x). Small, plain, a pool and
   parameterised queries; nothing else is needed.
-- **Offline suites on PGlite.** `@electric-sql/pglite` 0.6.0, Apache-2.0,
-  about 27 MB unpacked (WASM Postgres, in process, no server, no network; version and size are re-checked in S1). It
-  runs one connection and serialises queries, so it cannot show a race. It is
-  right for "does every query, constraint and migration work" and wrong for
-  "does the lock hold". It goes in `devDependencies` only; production never
-  loads it. `npm run check` runs the store suites twice, JSON and PGlite, and
-  stays offline. S1 confirms that its Postgres major is 17 and that every
-  feature we use (generated columns, partial unique indexes, advisory locks,
-  triggers) behaves as on the server; anything that does not runs only in the
-  Postgres 17 suite.
+- **Offline suites on PGlite.** `@electric-sql/pglite` 0.4.6, Apache-2.0,
+  25.6 MB unpacked (WASM Postgres, in process, no server, no network). It
+  is pinned to the 0.4 line because that is the last one on Postgres 17
+  (17.5): 0.5.x runs Postgres 18 and 0.6.0 runs Postgres 19
+  (`SELECT version()`, checked in S1), and the offline suite should run the
+  production major. It runs one connection and serialises queries, so it
+  cannot show a race. It is right for "does every query, constraint and
+  migration work" and wrong for "does the lock hold". It goes in
+  `devDependencies` only and the backend adapts it by shape
+  (`store/pg/sql.ts`), so production never loads it. `npm run check` runs
+  the store suite (`scripts/_store-suite.ts`) twice, JSON and PGlite, and
+  stays offline. Checked in S1 (`scripts/store-backend-test.ts`):
+  generated columns, partial unique indexes, triggers, `FOR UPDATE` and
+  advisory locks behave as on the server; a second holder of an advisory
+  lock cannot be shown on one connection, so that case runs only in the
+  Postgres 17 suite. PGlite's `query` takes one statement, so a migration
+  file goes through `exec`.
 - **Concurrency suites on Postgres 17.** A separate `npm run check:pg`, given
   `TEST_DATABASE_URL`, creates a throwaway database per run and runs §2's
   tests with real parallel connections. It runs on the local

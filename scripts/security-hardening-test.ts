@@ -684,11 +684,11 @@ console.log("a passkey replaced by recovery while an approval is being verified"
   });
   subtle.verify = realVerify;
 
-  await check("every passkey signCount write goes through store.recordPasskeyUse", async () => {
+  await check("every passkey signCount write goes through store.recordPasskeyUse (its patch is built in store/rules.ts)", async () => {
     const { readdirSync, readFileSync } = await import("node:fs");
     const src = new URL("../services/api/src/", import.meta.url);
     const offenders = (readdirSync(src, { recursive: true }) as string[])
-      .filter((f) => f.endsWith(".ts") && f !== "store.ts")
+      .filter((f) => f.endsWith(".ts") && f !== "store.ts" && f !== path.join("store", "rules.ts"))
       .filter((f) => /passkey:\s*\{\s*\.\.\.[\w.]+,\s*signCount\s*\}/.test(readFileSync(new URL(f, src), "utf8")));
     assert.deepEqual(offenders, []);
   });

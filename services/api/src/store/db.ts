@@ -15,6 +15,7 @@ import { randomUUID } from "node:crypto";
 import { IS_PRODUCTION, ROOT } from "../config.js";
 import { DEFAULT_CHART, DEFAULT_RULES } from "../domain/coa.js";
 import { defaultLabel, initialStatusFor } from "../domain/accounts.js";
+import { sessionDead } from "./rules.js";
 import type {
   Account,
   AccountRule,
@@ -240,11 +241,7 @@ export function loadStoreReadOnly(): string {
  * full re-serialisation of the file on write.
  */
 export function pruneSessions(retainMs = 24 * 60 * 60 * 1000) {
-  const cutoff = Date.now() - retainMs;
-  db.sessions = db.sessions.filter((s) => {
-    const dead = s.revokedAt ? Date.parse(s.revokedAt) : Date.parse(s.expiresAt);
-    return !(Number.isFinite(dead) && dead < cutoff);
-  });
+  db.sessions = db.sessions.filter((s) => !sessionDead(s, retainMs));
 }
 
 /**
@@ -416,8 +413,15 @@ function migrateUsersToOrganisations() {
 /** The default chart and rules, so smart categorisation works on day one. */
 export function seedChartOfAccounts(orgId: string, at = new Date().toISOString()) {
   if (db.chartAccounts.some((c) => c.orgId === orgId)) return;
-  for (const a of DEFAULT_CHART) {
-    db.chartAccounts.push({
+  const seed = defaultChartRows(orgId, at);
+  db.chartAccounts.push(...seed.chart);
+  db.accountRules.push(...seed.rules);
+}
+
+/** The rows seedChartOfAccounts adds for an org that has no chart yet. */
+export function defaultChartRows(orgId: string, at: string): { chart: ChartAccount[]; rules: AccountRule[] } {
+  return {
+    chart: DEFAULT_CHART.map((a) => ({
       id: `coa_${randomUUID()}`,
       orgId,
       code: a.code,
@@ -425,19 +429,17 @@ export function seedChartOfAccounts(orgId: string, at = new Date().toISOString()
       type: a.type,
       archived: false,
       createdAt: at,
-    });
-  }
-  for (const r of DEFAULT_RULES) {
-    db.accountRules.push({
+    })),
+    rules: DEFAULT_RULES.map((r) => ({
       id: `rule_${randomUUID()}`,
       orgId,
-      scope: "default",
+      scope: "default" as const,
       match: { txType: r.txType },
       direction: r.direction,
       accountCode: r.accountCode,
       createdAt: at,
-    });
-  }
+    })),
+  };
 }
 
 /* Every write rewrites the whole file, synchronously, and syncs it, so the state
