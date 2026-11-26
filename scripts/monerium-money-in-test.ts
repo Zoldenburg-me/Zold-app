@@ -709,23 +709,56 @@ console.log("\nRedeem orders against the persisted transfer");
 const PAYEE_IBAN = "DE89370400440532013000";
 let tn = 0;
 /** A SEPA transfer whose redeem was placed: what executeSepaTransfer leaves. */
-function placedRedeem(amount = "20.00", state = "PAYOUT_SUBMITTED") {
+function placedRedeem(amount = "20.00", state = "PAYOUT_SUBMITTED", memoFor: (id: string) => string = (id) => paymentMemo(id, `RE-${tn}`)) {
   const id = `t_redeem_${++tn}`;
   const orderId = `ord-redeem-${tn}`;
+  const memo = memoFor(id);
   store.addTransfer({
     id, userId: "u_owner", rail: "sepa", state, sendEur: Number(amount), receiveEur: Number(amount),
     recipientName: "Supplier GmbH", recipientIban: PAYEE_IBAN, reference: `RE-${tn}`, txs: [{ step: "monerium.redeem.placed", hash: orderId }],
-    moneriumRedeem: { amount, iban: PAYEE_IBAN, issuedAt: now, message: `Send EUR ${amount} to ${PAYEE_IBAN} at ${now}` },
+    moneriumRedeem: { amount, iban: PAYEE_IBAN, issuedAt: now, message: `Send EUR ${amount} to ${PAYEE_IBAN} at ${now}`, memo },
     sepa: { mode: "sandbox", orderId, state: "placed" }, createdAt: now, updatedAt: now,
   } as any);
   orders.set(orderId, {
     id: orderId, kind: "redeem", address: addr("a"), chain: "base", currency: "eur", amount,
     counterpart: { identifier: { standard: "iban", iban: PAYEE_IBAN }, details: { firstName: "Supplier", lastName: "GmbH" } },
-    meta: { state: "processed", placedAt: now, processedAt: now }, memo: paymentMemo(id, `RE-${tn}`),
+    meta: { state: "processed", placedAt: now, processedAt: now }, memo,
   });
   return { id, orderId };
 }
 const stateOf = (id: string) => store.findTransfer(id)!.state;
+
+await check("an older transfer that signed the full-id memo is PAID when Monerium echoes that memo", async () => {
+  // Older releases wrote the whole transfer id when the reference was blank;
+  // paymentMemo now writes eight characters. The stored memo is what was signed.
+  const { id } = placedRedeem("20.00", "PAYOUT_SUBMITTED", (tid) => `Powered by Zold ${tid}`);
+  assert.notEqual(store.findTransfer(id)!.moneriumRedeem!.memo, paymentMemo(id, store.findTransfer(id)!.reference));
+  await pollRedeemOrdersOnce();
+  assert.equal(stateOf(id), "PAID");
+});
+
+await check("a processed redeem whose answer carries no memo, or another transfer's, goes to review, never PAID", async () => {
+  const realWarn = console.warn;
+  console.warn = () => {};
+  try {
+    for (const [what, change, why] of [
+      ["no memo", (o: any) => { delete o.memo; }, /carries none/],
+      ["empty memo", (o: any) => { o.memo = ""; }, /carries none/],
+      ["another transfer's memo", (o: any) => { o.memo = paymentMemo("t_other_transfer", `RE-${tn}`); }, /payment memo/],
+    ] as const) {
+      const { id, orderId } = placedRedeem();
+      change(orders.get(orderId));
+      await pollRedeemOrdersOnce();
+      const t = store.findTransfer(id)!;
+      assert.equal(t.state, "MANUAL_REVIEW", what);
+      assert.match(t.error ?? "", why, what);
+      assert.equal(t.sepa!.state, "mismatch", `${what}: no payout evidence`);
+      assert.deepEqual(payoutEvidence(t), [], what);
+    }
+  } finally {
+    console.warn = realWarn;
+  }
+});
 
 await check("a processed redeem that matches the transfer is PAID once, by two pollers at once and after a restart", async () => {
   const { id } = placedRedeem();

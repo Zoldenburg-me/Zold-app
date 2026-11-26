@@ -24,11 +24,11 @@ import { auditEntry } from "../audit.js";
 import { HARNESS } from "../config.js";
 import { abis, addrs, deployerWallet, eur, writeAndWait } from "../chain.js";
 import { keccak256, toHex } from "viem";
-import { moneriumAmountString, moneriumRedeemMessage, normalizeIban, paymentMemo } from "../sepa.js";
+import { moneriumAmountString, moneriumRedeemMessage, normalizeIban } from "../sepa.js";
 import { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } from "../routes/payment-requests.js";
 import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js";
 import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
-import { moneriumAmountEur, moneriumOrderProcessed, redeemOrderDiffers } from "../domain/monerium-order.js";
+import { moneriumAmountEur, moneriumOrderProcessed, redeemMemoDiffers, redeemOrderDiffers } from "../domain/monerium-order.js";
 import { can } from "../domain/segments.js";
 
 /**
@@ -742,8 +742,7 @@ function terminalRedeemMismatch(t: Transfer, order: MoneriumOrder, user: User | 
   const differs = redeemOrderDiffers(order, t.moneriumRedeem, user?.address ?? "");
   if (differs) return differs;
   if (order.chain !== MONERIUM.chain) return "chain";
-  if (order.memo !== paymentMemo(t.id, t.reference)) return "payment memo";
-  return undefined;
+  return redeemMemoDiffers(order, t.moneriumRedeem.memo);
 }
 
 export async function pollRedeemOrdersOnce(): Promise<void> {

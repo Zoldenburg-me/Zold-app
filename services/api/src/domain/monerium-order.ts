@@ -32,3 +32,15 @@ export function redeemOrderDiffers(order: any, signed: { amount: string; iban: s
   if (typeof iban !== "string" || normalizeIban(iban) !== normalizeIban(signed.iban)) return "recipient IBAN";
   return undefined;
 }
+
+/** Why a redeem order's memo is not the memo the transfer signed, or
+ *  undefined when it is. Compared with the stored memo, never a regenerated
+ *  one: an older transfer signed the full-id memo, and paymentMemo now makes a
+ *  short-id one. An order that carries no memo proves nothing either way, so it
+ *  is a mismatch (review), never PAID. */
+export function redeemMemoDiffers(order: any, signedMemo: string | undefined): string | undefined {
+  if (!signedMemo) return "payment memo (the transfer signed none)";
+  if (typeof order?.memo !== "string" || order.memo === "") return "payment memo (Monerium's answer carries none)";
+  if (order.memo !== signedMemo) return "payment memo";
+  return undefined;
+}

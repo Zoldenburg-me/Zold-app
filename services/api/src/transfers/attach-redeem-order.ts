@@ -15,8 +15,7 @@ import { MONERIUM } from "../config.js";
 import { store, type Transfer, type User } from "../store.js";
 import { isMoneriumOrderId, MoneriumAccessError, MoneriumApiError, moneriumFailureReason, type MoneriumOrder } from "../adapters/monerium-client.js";
 import { readOrder } from "../adapters/monerium-sandbox.js";
-import { moneriumOrderProcessed, redeemOrderDiffers } from "../domain/monerium-order.js";
-import { paymentMemo } from "../sepa.js";
+import { moneriumOrderProcessed, redeemMemoDiffers, redeemOrderDiffers } from "../domain/monerium-order.js";
 
 export type AttachOutcome =
   | { ok: true }
@@ -59,8 +58,7 @@ export function redeemOrderMismatch(t: Transfer, user: User, orderId: string, or
   if (differs) return differs;
   if (!moneriumOrderProcessed(order.meta?.state ?? order.state)) return "state (not processed)";
   if (order.chain !== MONERIUM.chain) return "chain";
-  if (order.memo !== paymentMemo(t.id, t.reference)) return "payment memo";
-  return undefined;
+  return redeemMemoDiffers(order, signed.memo);
 }
 
 export async function attachRedeemOrder(transferId: string, orderId: string): Promise<AttachOutcome> {
