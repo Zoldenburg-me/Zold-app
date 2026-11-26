@@ -9,6 +9,12 @@
  * PDF is a real PDF holding the same facts, a tampered snapshot fails, and a
  * deposit that changed under the document makes it fail verification.
  *
+ * Hostile text in the PDF: parentheses, backslashes, CRLF, NUL and Unicode
+ * stay inside their string (every content operator is one the writer emits),
+ * a very long word is broken inside the margins, a free-text cell is cut
+ * before the next one and the Beleg then names it in full, and the file name
+ * is one safe path component whatever the stored date, code and reference say.
+ *
  * Run: npm run beleg:test
  */
 import "./_test-env.js";
@@ -27,7 +33,7 @@ const { writeStatementLines } = await import("../services/api/src/bookkeeping/wr
 const { holderFor, issueBelegForLine } = await import("../services/api/src/bookkeeping/issue.js");
 const { belegFileName, belegLines, belegPdf, belegStillAgrees, belegTitle, buildBeleg, UNEXECUTED_NOTE } = await import("../services/api/src/bookkeeping/beleg.js");
 const { verifyZoldAttestation, snapshotDigest } = await import("../services/api/src/documents.js");
-const { winAnsi } = await import("../services/api/src/bookkeeping/pdf.js");
+const { textPdf, winAnsi } = await import("../services/api/src/bookkeeping/pdf.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -141,6 +147,151 @@ await check("the text rendering states the ECB rate is a daily fixing, and the P
   assert.equal(body.slice(startxref, startxref + 4), "xref");
   assert.equal(winAnsi("€ Müller — 東").toString("hex"), "80204dfc6c6c65722097203f", "euro and dash are WinAnsi; CJK is ?");
   assert.equal(belegFileName(snap, "ABCDEFGHJKMNPQR"), "2026-09-10_ABCDEFGHJKMNPQR_RE-2026-0042.pdf");
+});
+
+console.log("\nHostile text in the PDF");
+
+/** Every page's content stream, read by its /Length the way a viewer does. */
+const contentStreams = (pdf: Buffer): string[] => {
+  const body = pdf.toString("latin1");
+  const out: string[] = [];
+  const re = /<< \/Length (\d+) >>\nstream\n/g;
+  for (let m; (m = re.exec(body)); ) {
+    const start = m.index + m[0].length;
+    const len = Number(m[1]);
+    assert.equal(body.slice(start + len, start + len + 10), "\nendstream", "the stream ends where /Length says");
+    out.push(body.slice(start, start + len));
+  }
+  return out;
+};
+// The only operators the writer emits: a text show or a hairline.
+const TEXT_OP = /^(?:0\.38|0) g BT \/F[12] [\d.]+ Tf -?[\d.]+ -?[\d.]+ Td \(((?:[\x20-\x27\x2a-\x5b\x5d-\x7e]|\\[()\\]|\\[0-7]{3})*)\) Tj ET$/;
+const RULE_OP = /^(?:0 G 0\.8|0\.85 G 0\.4) w [\d.]+ [\d.]+ m [\d.]+ [\d.]+ l S$/;
+const shown = (pdf: Buffer): string[] => contentStreams(pdf).flatMap((c) => c.split("\n")).map((op) => {
+  const m = TEXT_OP.exec(op);
+  assert.ok(m || RULE_OP.test(op), `an operator the writer does not emit: ${JSON.stringify(op)}`);
+  return m ? m[1].replace(/\\([0-7]{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8))).replace(/\\([()\\])/g, "$1") : undefined;
+}).filter((t): t is string => t !== undefined);
+const HOSTILE = ["a(b)c\\d)", ") Tj ET BT /F1 99 Tf 0 0 Td (owned", "x\r\ny\rz\n", "nul\u0000end\u0007", "endstream\nendobj\n%%EOF", "Müller € 東京 𝔘 \uD800", "\\) \\\\ ( \\("];
+
+await check("parentheses, backslashes, CRLF, NUL and Unicode stay inside their string: no operator, stream or object can be injected", () => {
+  const pdf = textPdf([
+    ...HOSTILE.map((t) => ({ text: t })),
+    ...HOSTILE.map((t) => ({ text: "", cells: [{ text: t, at: 0 }, { text: t, at: 1, align: "right" as const }] })),
+  ], { title: HOSTILE.join(" "), author: ")>> /JavaScript (x)", subject: "\u0000\r\n)" });
+  const streams = contentStreams(pdf);
+  assert.equal(streams.length, Number(/\/Count (\d+)/.exec(pdf.toString("latin1"))![1]), "one content stream per page, none injected");
+  const texts = shown(pdf);
+  for (const t of HOSTILE) {
+    const want = winAnsi(t).toString("latin1");
+    assert.ok(texts.includes(want), `a cell shows ${JSON.stringify(t)} byte for byte (non-WinAnsi as ?)`);
+    assert.ok(texts.join(" ").includes(want.split(/\s+/).filter(Boolean)[0]), "a wrapped line keeps its words");
+  }
+  const info = /5 0 obj\n([^\n]*)\nendobj/.exec(pdf.toString("latin1"))![1];
+  assert.match(info, /^<< \/Title <FEFF[0-9A-F]*> \/Producer \(Zold\) \/Author <FEFF[0-9A-F]*> \/Subject <FEFF[0-9A-F]*> >>$/, "metadata is hex, never a literal string");
+});
+
+// Helvetica and Helvetica-Bold advances in 1/1000 em, typed from Adobe's AFM
+// files for printable ASCII (32-126) and the few WinAnsi glyphs a Beleg
+// shows, independent of the writer's own table. A glyph not listed counts as
+// 1000, so a measurement here is never short.
+const AFM_REGULAR = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+const AFM_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+const AFM_EXTRA: Record<number, [number, number]> = { 0x80: [556, 556], 0x85: [1000, 1000], 0xb7: [278, 278] };
+const afmWidth = (shownBytes: string, size: number, bold: boolean) => {
+  let w = 0;
+  for (const ch of shownBytes) {
+    const b = ch.charCodeAt(0);
+    w += b >= 32 && b <= 126 ? (bold ? AFM_BOLD : AFM_REGULAR)[b - 32] : AFM_EXTRA[b]?.[bold ? 1 : 0] ?? 1000;
+  }
+  return (w * size) / 1000;
+};
+const PAGE_RIGHT = 595.28 - 56;
+// Every text show with where it starts and ends on its page, by AFM metrics.
+const placed = (pdf: Buffer) => contentStreams(pdf).flatMap((c, page) => c.split("\n").flatMap((op) => {
+  const m = /^(?:0\.38|0) g BT \/F([12]) ([\d.]+) Tf (-?[\d.]+) (-?[\d.]+) Td \(((?:[^\\)]|\\[()\\]|\\[0-7]{3})*)\) Tj ET$/.exec(op);
+  if (!m) return [];
+  const t = m[5].replace(/\\([0-7]{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8))).replace(/\\([()\\])/g, "$1");
+  const x = Number(m[3]);
+  return [{ page, y: m[4], x, end: x + afmWidth(t, Number(m[2]), m[1] === "2"), t }];
+}));
+const assertLaidOut = (pdf: Buffer, what: string) => {
+  const ops = placed(pdf);
+  for (const o of ops) {
+    assert.ok(o.x >= 56 - 0.01 && o.end <= PAGE_RIGHT + 0.01, `${what}: ${JSON.stringify(o.t.slice(0, 30))} spans ${o.x.toFixed(2)}-${o.end.toFixed(2)}, outside 56-${PAGE_RIGHT.toFixed(2)}`);
+  }
+  const rows = new Map<string, typeof ops>();
+  for (const o of ops) rows.set(`${o.page}:${o.y}`, [...(rows.get(`${o.page}:${o.y}`) ?? []), o]);
+  for (const row of rows.values()) {
+    const byX = [...row].sort((a, b) => a.x - b.x);
+    for (let i = 1; i < byX.length; i++) {
+      assert.ok(byX[i - 1].end <= byX[i].x + 0.01, `${what}: ${JSON.stringify(byX[i - 1].t.slice(0, 30))} ends at ${byX[i - 1].end.toFixed(2)}, over ${JSON.stringify(byX[i].t.slice(0, 30))} at ${byX[i].x.toFixed(2)}`);
+    }
+  }
+  return ops;
+};
+
+await check("a very long single word is broken across lines inside the margins, every character kept", () => {
+  // W is Helvetica's widest letter; 東 prints as ?.
+  for (const ch of ["W", "i", "€", "東"]) {
+    const word = ch.repeat(3000);
+    const want = winAnsi(word).toString("latin1");
+    for (const ln of [{ text: word }, { text: `RE ${word} tail`, indent: 24, size: 7.5 }, { text: word, bold: true }]) {
+      const pdf = textPdf([ln], { title: "t" });
+      assert.equal(shown(pdf).join("").replace(/RE|tail|\s/g, ""), want, `${ch}: every character is on the page`);
+      assertLaidOut(pdf, ch);
+    }
+  }
+});
+
+await check("a 140-character W reference and a 22-character all-caps name stay inside their cells and the page, by Helvetica's own metrics", () => {
+  const reference = "W".repeat(140);
+  const name = "MOHRMANN WOLLWERK GMBH";
+  assert.equal(name.length, 22);
+  const snap = buildBeleg({ ...line, statement: { ...line.statement!, reference, counterparty: { name, iban: "DE89370400440532013000" } } } as any, { holder: { name: "WWWWWWWW WWWWWWWW WWWWWWWW", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit });
+  const pdf = belegPdf(snap, "ABCDEFGHJKMNPQR", now);
+  const ops = assertLaidOut(pdf, "the Beleg");
+  assert.ok(ops.map((o) => o.t).join("").includes(reference), "the full reference is drawn, wrapped");
+  assert.ok(ops.some((o) => o.t === name) || ops.some((o) => o.t.includes(name)), "the full name is drawn");
+});
+
+await check("a free-text cell too long for its column is cut with an ellipsis before the next cell, never drawn over the amount", () => {
+  const long = "R".repeat(400);
+  const texts = shown(textPdf([{ text: "", cells: [{ text: "26 October 2026", at: 0 }, { text: long, at: 0.2, clip: true }, { text: long, at: 0.52, clip: true }, { text: "+€33.00", at: 1, align: "right" }] }], { title: "t" }));
+  const cut = texts.filter((t) => t.startsWith("R"));
+  assert.equal(cut.length, 2);
+  for (const t of cut) assert.ok(t.endsWith("\x85") && t.length < 60, `cut with … (${t.length} chars)`);
+  assert.ok(texts.includes("+\x8033.00"), "the amount is drawn whole");
+});
+
+await check("the Beleg names a reference or counterparty its row had to cut in full under Booked against", () => {
+  const reference = `RE-2026-0042 ${"Rechnungsnummer-und-Kundennummer-".repeat(4)}Ende`;
+  const name = "Sehr Lange Firmenbezeichnung Gesellschaft mit beschraenkter Haftung und Co KG";
+  const snap = buildBeleg({ ...line, statement: { ...line.statement!, reference, counterparty: { name } } } as any, { holder: { name: "Zoldenburg UG", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit });
+  const text = belegLines(snap, "ABCDEFGHJKMNPQR", now).map((l) => l.text).join("\n");
+  assert.ok(text.includes(reference), "the full reference");
+  assert.ok(text.includes(name), "the full counterparty");
+  // Drawn whole somewhere (wrapped over lines), not only cut in the row.
+  const pdfText = shown(belegPdf(snap, "ABCDEFGHJKMNPQR", now)).join("").replace(/\s/g, "");
+  assert.ok(pdfText.includes(reference.replace(/\s/g, "")), "the PDF carries the full reference");
+  assert.ok(pdfText.includes(name.replace(/\s/g, "")), "the PDF carries the full counterparty");
+});
+
+await check("a Beleg file name is one safe path component whatever the stored date, code and reference say", () => {
+  const base = buildBeleg(line, { holder: { name: "Z", addressLines: [], safeAddress: SAFE, chainId: 31337, accountSince: now }, deposit });
+  const cases: [string, string, string][] = [
+    ["../../../etc/x", "../../evil", "../..\\a/b"],
+    ["2026-09-10\r\nSet-Cookie: x", "ABC\"DEF", "\" ; filename=evil.exe"],
+    ["/abs", "C:\\Windows", "É東𝔘\u0000\u202e"],
+    ["", "", ""],
+    ["..", "..", ".."],
+  ];
+  for (const [valueDate, code, reference] of cases) {
+    const n = belegFileName({ ...base, line: { ...base.line, valueDate, reference } }, code);
+    assert.match(n, /^[A-Za-z0-9][A-Za-z0-9._-]*\.pdf$/, JSON.stringify([valueDate, code, reference, n]));
+    assert.ok(!n.includes(".."), n);
+  }
+  assert.equal(belegFileName(base, "ABCDE-FGHJK-MNPQR"), "2026-09-10_ABCDEFGHJKMNPQR_RE-2026-0042.pdf", "a real one is unchanged");
 });
 
 console.log("\nIssue, sign, verify");
