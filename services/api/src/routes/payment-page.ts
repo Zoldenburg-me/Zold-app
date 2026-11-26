@@ -27,7 +27,7 @@ import { describeCause } from "../http/log-cause.js";
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface PaymentPageDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 
@@ -132,24 +132,29 @@ export async function livePaymentPage(user: User): Promise<boolean> {
           return false;
         }
         renewFailed.delete(user.id);
-        const fresh = store.findUser(user.id);
-        if (fresh?.paymentPage?.handle !== page.handle || !sameActivation(fresh.paymentPage.forwarder, f)) return false;
-        const now = new Date().toISOString();
-        store.updateUser(user.id, {
-          paymentPage: { ...fresh.paymentPage, forwarder: next.forwarder, supportedTokens: next.accepts, routesReadAt: now, updatedAt: now },
+        // The row held: a page saved meanwhile is not overwritten.
+        return await store.tx(async () => {
+          const fresh = await store.lockUser(user.id);
+          if (fresh?.paymentPage?.handle !== page.handle || !sameActivation(fresh.paymentPage.forwarder, f)) return false;
+          const now = new Date().toISOString();
+          await store.updateUser(user.id, {
+            paymentPage: { ...fresh.paymentPage, forwarder: next.forwarder, supportedTokens: next.accepts, routesReadAt: now, updatedAt: now },
+          });
+          return true;
         });
-        return true;
       } catch (err: any) {
         console.error(`payment page: renewing forwarder for ${user.id} failed: ${describeCause(err)}`);
         if (err instanceof ForwarderInactiveError) {
           renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: true, activation: f });
-          const fresh = store.findUser(user.id);
-          const shown = fresh?.paymentPage;
-          if (shown?.handle === page.handle && shown.forwarder && sameActivation(shown.forwarder, f) && shown.depositAddress.toLowerCase() === err.address.toLowerCase()) {
-            store.updateUser(user.id, {
-              paymentPage: { ...shown, forwarder: { ...shown.forwarder, active: false }, updatedAt: new Date().toISOString() },
-            });
-          }
+          await store.tx(async () => {
+            // The row held: a page changed meanwhile is not overwritten.
+            const shown = (await store.lockUser(user.id))?.paymentPage;
+            if (shown?.handle === page.handle && shown.forwarder && sameActivation(shown.forwarder, f) && shown.depositAddress.toLowerCase() === err.address.toLowerCase()) {
+              await store.updateUser(user.id, {
+                paymentPage: { ...shown, forwarder: { ...shown.forwarder, active: false }, updatedAt: new Date().toISOString() },
+              });
+            }
+          });
           return false;
         }
         renewFailed.set(user.id, { until: Date.now() + RENEW_RETRY_MS, closed: false, activation: f });
@@ -175,11 +180,11 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
   router.post(
     "/users/:id/handle",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       // A page takes crypto into the Safe: not for an account whose segment has no on-chain balance.
-      if (!requireCapability(user, "onchain_balance", res)) return;
+      if (!(await requireCapability(user, "onchain_balance", res))) return;
       let handle: string;
       let displayName: string | undefined;
       let settlementAsset: "EURE" | "USDC";
@@ -191,8 +196,8 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
         if (e instanceof HandleError) return res.status(400).json({ error: e.message });
         throw e;
       }
-      const taken = store.findUserByHandle(handle);
-      if ((taken && taken.id !== user.id) || store.findOrgByHandle(handle)) {
+      const taken = await store.findUserByHandle(handle);
+      if ((taken && taken.id !== user.id) || (await store.findOrgByHandle(handle))) {
         return res.status(409).json({ error: `"${handle}" is already taken` });
       }
       if (
@@ -225,32 +230,33 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
       }
       // The partner round trip above yields the event loop, so another claim
       // of the same handle can land while this one waits. Handle uniqueness
-      // is a check-then-write invariant: re-assert it in the same synchronous
-      // window as the write (the claimAuthorization / holdDailyCap pattern).
-      const takenNow = store.findUserByHandle(handle);
-      if ((takenNow && takenNow.id !== user.id) || store.findOrgByHandle(handle)) {
-        return res.status(409).json({ error: `"${handle}" is already taken` });
-      }
-      const updated = store.updateUser(user.id, {
-        handle: undefined,
-        payDisplayName: undefined,
-        autoConvert: undefined,
-        paymentPage: {
-          handle,
-          displayName,
-          depositAddress: forwarder.address,
-          recipientAddress: user.address,
-          forwarder: forwarder.forwarder,
-          supportedTokens: forwarder.accepts,
-          routesReadAt: now,
-          settlementAsset,
-          autoConvert: existing?.autoConvert ?? false,
-          createdAt: existing?.createdAt ?? now,
-          updatedAt: now,
-        },
+      // is a check-then-write invariant: re-assert it in one transaction with
+      // the write (Postgres also refuses it through payment_handles).
+      const updated = await store.tx(async () => {
+        const takenNow = await store.findUserByHandle(handle);
+        if ((takenNow && takenNow.id !== user.id) || (await store.findOrgByHandle(handle))) return undefined;
+        return await store.updateUser(user.id, {
+          handle: undefined,
+          payDisplayName: undefined,
+          autoConvert: undefined,
+          paymentPage: {
+            handle,
+            displayName,
+            depositAddress: forwarder.address,
+            recipientAddress: user.address,
+            forwarder: forwarder.forwarder,
+            supportedTokens: forwarder.accepts,
+            routesReadAt: now,
+            settlementAsset,
+            autoConvert: existing?.autoConvert ?? false,
+            createdAt: existing?.createdAt ?? now,
+            updatedAt: now,
+          },
+        });
       });
+      if (!updated) return res.status(409).json({ error: `"${handle}" is already taken` });
       // The name follows the handle: the caller replaces its own (absent when none is shown).
-      const pub = publicUser(updated);
+      const pub = await publicUser(updated);
       res.json({
         handle: updated.paymentPage!.handle,
         displayName: updated.paymentPage!.displayName,
@@ -264,13 +270,13 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
   router.get(
     "/pay/:handle",
     wrap(async (req, res) => {
-      const user = store.findUserByHandle(req.params.handle);
+      const user = await store.findUserByHandle(req.params.handle);
       if (!user?.paymentPage?.handle) {
         // An organisation's page: bank details of its euro account, or closed
         // while no active account has an IBAN on the company's own profile.
-        const org = store.findOrgByHandle(req.params.handle);
+        const org = await store.findOrgByHandle(req.params.handle);
         if (!org) return res.status(404).json({ error: "no such payment page" });
-        const page = orgPageAccount(org);
+        const page = await orgPageAccount(org);
         if ("reason" in page) return res.status(503).json(PAGE_CLOSED);
         // Monerium's name for the profile, or nothing: orgPageAccount falls
         // back to the organisation's own name, which no one verified.
@@ -278,7 +284,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
         return res.json(publicOrgPayee(org, page.account, standing.status === "verified" ? standing.name : undefined));
       }
       if (!(await livePaymentPage(user))) return res.status(503).json(PAGE_CLOSED);
-      res.json(publicPayee(store.findUser(user.id) ?? user, payChain()));
+      res.json(publicPayee((await store.findUser(user.id)) ?? user, payChain()));
     }),
   );
 
@@ -287,9 +293,9 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
   router.get(
     "/users/:id/address/qr.svg",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (user.passkeySafe?.status !== "active") return res.status(409).json({ error: "this account has no wallet address yet" });
       res.type("image/svg+xml");
       res.setHeader("cache-control", "private, no-store");
@@ -300,7 +306,7 @@ export function createPaymentPageRouter(deps: PaymentPageDeps) {
   router.get(
     "/pay/:handle/qr.svg",
     wrap(async (req, res) => {
-      const user = store.findUserByHandle(req.params.handle);
+      const user = await store.findUserByHandle(req.params.handle);
       if (!user?.paymentPage?.handle) return res.status(404).json({ error: "no such payment page" });
       if (!(await livePaymentPage(user))) return res.status(503).json(PAGE_CLOSED);
       res.type("image/svg+xml");

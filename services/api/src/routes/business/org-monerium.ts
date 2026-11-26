@@ -47,7 +47,7 @@ import { verifyPasskeyStepUp } from "../auth.js";
 import { wrap } from "../util.js";
 
 export interface OrgRoutes {
-  ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+  ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
 
 /** Proves the keys (token grant) and lists the profiles they open. */
@@ -58,7 +58,7 @@ export type Verify = (clientId: string, clientSecret: string) => Promise<{ profi
 export type StepUp = (userId: string, body: unknown, res: express.Response) => Promise<boolean>;
 
 const liveStepUp: StepUp = async (userId, body, res) => {
-  const user = store.findUser(userId);
+  const user = await store.findUser(userId);
   if (!user) {
     res.status(401).json({ error: "no such user" });
     return false;
@@ -82,22 +82,22 @@ export function orgMoneriumStatus(m: Organisation["monerium"]): OrgMoneriumStatu
 const maskId = (id: string) => (id.length > 10 ? `${id.slice(0, 4)}…${id.slice(-4)}` : "…");
 
 /** How far the company's IBAN on its Safe has got (domain/org-monerium-iban.ts). */
-function ibanView(org: Organisation) {
-  const account = companyEurAccount(store.accountsOf(org.id));
+async function ibanView(org: Organisation) {
+  const account = companyEurAccount(await store.accountsOf(org.id));
   const state = companyIbanState(org, account);
   return { state, ...(state === "issued" ? { iban: account!.identifier.iban, safeAddress: account!.address } : {}) };
 }
 
 /** What a member may see. Never the secret, in any form. */
-export function publicOrgMonerium(org: Organisation) {
+export async function publicOrgMonerium(org: Organisation) {
   const m = org.monerium;
   const environment = moneriumEnvironment(MONERIUM.baseUrl);
   if (!m) {
     const problem = dataEncryptionProblem();
-    return { status: "not_connected" as const, environment, available: problem === null, ...(problem ? { needs: `the server's data encryption key: ${problem}` } : {}), companyIban: ibanView(org) };
+    return { status: "not_connected" as const, environment, available: problem === null, ...(problem ? { needs: `the server's data encryption key: ${problem}` } : {}), companyIban: await ibanView(org) };
   }
   return {
-    companyIban: ibanView(org),
+    companyIban: await ibanView(org),
     status: orgMoneriumStatus(m),
     environment,
     available: true,
@@ -158,8 +158,8 @@ const sameKeys = (a: Organisation["monerium"], b: NonNullable<Organisation["mone
   !!a && a.clientId === b.clientId && a.clientSecretEnc === b.clientSecretEnc;
 
 /** The Monerium profile the company's issued IBAN belongs to, if one is. */
-export function issuedProfileId(orgId: string): string | undefined {
-  const a = store.accountsOf(orgId).find((x) => x.currency === "EUR" && x.identifier?.iban && x.moneriumProfile);
+export async function issuedProfileId(orgId: string): Promise<string | undefined> {
+  const a = (await store.accountsOf(orgId)).find((x) => x.currency === "EUR" && x.identifier?.iban && x.moneriumProfile);
   return a?.moneriumProfile?.id;
 }
 
@@ -179,8 +179,8 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
   /** Session, role, then org kind: the three checks, in that order. Run
    *  again after every wait on Monerium, so what is written is decided on the
    *  org and membership as they are then, not as they were before the call. */
-  const gate = (req: express.Request, res: express.Response) => {
-    const ctx = deps.ctxOf(req, res);
+  const gate = async (req: express.Request, res: express.Response) => {
+    const ctx = await deps.ctxOf(req, res);
     if (!ctx) return undefined;
     if (!requirePermission(ctx, res, "accounts.open")) return undefined;
     if (orgEntity(ctx.org) !== "company") {
@@ -190,14 +190,14 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
     return ctx;
   };
 
-  r.get("/:orgId/monerium", (req, res) => {
-    const ctx = gate(req, res);
+  r.get("/:orgId/monerium", async (req, res) => {
+    const ctx = await gate(req, res);
     if (!ctx) return;
-    res.json({ monerium: publicOrgMonerium(ctx.org) });
+    res.json({ monerium: await publicOrgMonerium(ctx.org) });
   });
 
   r.post("/:orgId/monerium", wrap(async (req, res) => {
-    const ctx = gate(req, res);
+    const ctx = await gate(req, res);
     if (!ctx) return;
     const problem = dataEncryptionProblem();
     if (problem) return res.status(503).json({ error: `${problem}, so Monerium keys cannot be stored` });
@@ -217,16 +217,16 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
       verified = await verify(input.clientId, input.clientSecret);
     } catch (err) {
       const no = refusal(err);
-      if (no.status === 400) store.audit(auditEntry("partner.call_refused", { partner: "monerium", status: 400, orgId: ctx.org.id }, ctx.userId));
+      if (no.status === 400) await store.audit(auditEntry("partner.call_refused", { partner: "monerium", status: 400, orgId: ctx.org.id }, ctx.userId));
       return res.status(no.status).json(no.body);
     }
     // Once the company's IBAN is issued, its profile is fixed: replacement
     // keys must open that same profile, or the IBAN could no longer be read.
-    const issuedTo = issuedProfileId(ctx.org.id);
+    const issuedTo = await issuedProfileId(ctx.org.id);
     const profile = issuedTo ? storedProfile(verified.profiles, issuedTo) : corporateProfile(verified.profiles);
     if (!profile) return res.status(409).json(issuedTo ? ISSUED_PROFILE_MISSING : NO_COMPANY_PROFILE);
     // A member removed or demoted, or the org no longer a company, while Monerium answered: nothing is stored.
-    const cur = gate(req, res);
+    const cur = await gate(req, res);
     if (!cur) return;
     // Keys connected or replaced by someone else meanwhile are not written
     // over: a first connection was approved by nobody's passkey, and a
@@ -240,18 +240,24 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
       throw err;
     }
     const now = new Date().toISOString();
-    // The Safe's link belongs to the profile: kept for the same one, dropped for another.
-    const prior = store.findOrganisation(ctx.org.id)?.monerium;
-    const safe = prior?.safe && prior.profile.id === profile.id ? { safe: prior.safe } : {};
-    const org = store.updateOrganisation(ctx.org.id, {
-      monerium: { clientId: input.clientId, clientSecretEnc, profile, connectedAt: now, checkedAt: now, connectedByMemberId: ctx.member.id, ...safe },
-    });
-    store.audit(auditEntry("partner.credentials_connected", { partner: "monerium", orgId: org.id, profileState: profile.state }, ctx.userId));
-    res.status(201).json({ monerium: publicOrgMonerium(org) });
+    // Compared again on the stored row as it is written. The Safe's link
+    // belongs to the profile: kept for the same one, dropped for another.
+    const org = await store.updateOrganisationIf(
+      ctx.org.id,
+      (o) => (before ? sameKeys(o.monerium, before) : !o.monerium),
+      (o) => {
+        const prior = o.monerium;
+        const safe = prior?.safe && prior.profile.id === profile.id ? { safe: prior.safe } : {};
+        return { monerium: { clientId: input.clientId, clientSecretEnc, profile, connectedAt: now, checkedAt: now, connectedByMemberId: ctx.member.id, ...safe } };
+      },
+    );
+    if (!org) return res.status(409).json(KEYS_CHANGED);
+    await store.audit(auditEntry("partner.credentials_connected", { partner: "monerium", orgId: org.id, profileState: profile.state }, ctx.userId));
+    res.status(201).json({ monerium: await publicOrgMonerium(org) });
   }));
 
   r.post("/:orgId/monerium/check", wrap(async (req, res) => {
-    const ctx = gate(req, res);
+    const ctx = await gate(req, res);
     if (!ctx) return;
     const m = ctx.org.monerium;
     if (!m) return res.status(409).json({ error: "no Monerium keys are connected", code: "MONERIUM_NOT_CONNECTED" });
@@ -264,48 +270,59 @@ export function createOrgMoneriumRoutes(deps: OrgRoutes, verify: Verify = verify
     }
     // Who may write, and over which keys, is decided now: an owner may have
     // removed or replaced the keys, or this member, while Monerium answered.
-    const cur = gate(req, res);
+    const cur = await gate(req, res);
     if (!cur) return;
     if (!sameKeys(cur.org.monerium, m)) return res.status(409).json(KEYS_CHANGED);
     const at = new Date().toISOString();
-    const { rejectedAt: _r, profileMissingAt: _p, ...rest } = cur.org.monerium!;
+    // Each write below is compared again on the stored row.
+    const write = async (extra: Partial<NonNullable<Organisation["monerium"]>>) => {
+      const org = await store.updateOrganisationIf(ctx.org.id, (o) => sameKeys(o.monerium, m), (o) => {
+        const { rejectedAt: _r, profileMissingAt: _p, ...rest } = o.monerium!;
+        return { monerium: { ...rest, checkedAt: at, ...extra } };
+      });
+      if (!org) res.status(409).json(KEYS_CHANGED);
+      return org;
+    };
     if (!verified) {
       // Monerium refused keys it accepted before: say so, keep the row so an
       // admin sees what was connected and replaces it.
-      const org = store.updateOrganisation(ctx.org.id, { monerium: { ...rest, checkedAt: at, rejectedAt: at } });
-      store.audit(auditEntry("partner.call_refused", { partner: "monerium", status: 400, orgId: ctx.org.id }, ctx.userId));
-      return res.json({ monerium: publicOrgMonerium(org) });
+      const org = await write({ rejectedAt: at });
+      if (!org) return;
+      await store.audit(auditEntry("partner.call_refused", { partner: "monerium", status: 400, orgId: ctx.org.id }, ctx.userId));
+      return res.json({ monerium: await publicOrgMonerium(org) });
     }
     // The profile the keys opened at connect is the company's. If the keys no
     // longer open it, the connection is invalid until it is back or the keys
     // are replaced; a different one is never silently adopted.
     const profile = storedProfile(verified.profiles, m.profile.id);
     if (!profile) {
-      const org = store.updateOrganisation(ctx.org.id, { monerium: { ...rest, checkedAt: at, profileMissingAt: at } });
+      const org = await write({ profileMissingAt: at });
+      if (!org) return;
       return res.status(409).json({
         code: "MONERIUM_PROFILE_CHANGED",
         error: "These keys no longer open the company profile they were connected with. Remove the keys and connect the company's current keys.",
-        monerium: publicOrgMonerium(org),
+        monerium: await publicOrgMonerium(org),
       });
     }
-    const org = store.updateOrganisation(ctx.org.id, { monerium: { ...rest, profile, checkedAt: at } });
-    res.json({ monerium: publicOrgMonerium(org) });
+    const org = await write({ profile });
+    if (!org) return;
+    res.json({ monerium: await publicOrgMonerium(org) });
   }));
 
   r.delete("/:orgId/monerium", wrap(async (req, res) => {
-    const ctx = gate(req, res);
+    const ctx = await gate(req, res);
     if (!ctx) return;
     if (!ctx.org.monerium) return res.status(409).json({ error: "no Monerium keys are connected", code: "MONERIUM_NOT_CONNECTED" });
     const approved = { ...ctx.org.monerium };
     if (!(await stepUp(ctx.userId, req.body, res))) return;
     // Decided on the org and membership as they are after the approval: only
     // the keys the passkey approved removing are removed.
-    const cur = gate(req, res);
+    const cur = await gate(req, res);
     if (!cur) return;
     if (!sameKeys(cur.org.monerium, approved)) return res.status(409).json(KEYS_CHANGED);
-    const org = store.updateOrganisation(ctx.org.id, { monerium: undefined });
-    store.audit(auditEntry("partner.credentials_removed", { partner: "monerium", orgId: org.id }, ctx.userId));
-    res.json({ monerium: publicOrgMonerium(org) });
+    const org = await store.updateOrganisation(ctx.org.id, { monerium: undefined });
+    await store.audit(auditEntry("partner.credentials_removed", { partner: "monerium", orgId: org.id }, ctx.userId));
+    res.json({ monerium: await publicOrgMonerium(org) });
   }));
 
   return r;

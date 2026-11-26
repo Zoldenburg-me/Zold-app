@@ -410,18 +410,18 @@ function partnerBucket(req: express.Request): "p" | "d" | undefined {
 }
 
 /** The one per-IP bucket every /api call counts against, and its limit. */
-function primaryBucket(req: express.Request, path: string): [string, number] {
+async function primaryBucket(req: express.Request, path: string): Promise<[string, number]> {
   if (path.startsWith("/shopify/")) return ["s", SECURITY.shopifyRateLimitPerMin];
   if (path.startsWith("/admin")) {
     // Keyed per operator: each operator counts apart.
-    const operator = operatorBucketId(req);
+    const operator = await operatorBucketId(req);
     if (operator) return [`o:${operator}`, SECURITY.operatorRateLimitPerMin];
   }
   // A valid checkout-service credential polls at its own rate; a wrong one is
   // a guess and stays on the auth bucket. Covers the transfer read and every
   // /service/merchant/* route alike.
   if (path.startsWith("/service/")) {
-    return checkoutCredentialFor(bearerToken(req))
+    return (await checkoutCredentialFor(bearerToken(req)))
       ? ["c", CHECKOUT_SERVICE.rateLimitPerMin]
       : ["a", SECURITY.authRateLimitPerMin];
   }
@@ -429,14 +429,14 @@ function primaryBucket(req: express.Request, path: string): [string, number] {
   return ["g", SECURITY.rateLimitPerMin];
 }
 
-export const apiRateLimit: express.RequestHandler = (req, res, next) => {
+export const apiRateLimit: express.RequestHandler = async (req, res, next) => {
   const ip = clientKey(req.ip);
   const path = req.path.toLowerCase();
   // Shopify's calls arrive from Shopify's shared addresses and each carries a
   // 256-bit HMAC, so it is not a guess; its own bucket keeps real merchant
   // volume off the 20/min one. A live operator session is not a guess either;
   // an unknown bearer stays on the credential bucket.
-  const [primary, perMin] = primaryBucket(req, path);
+  const [primary, perMin] = await primaryBucket(req, path);
   const ok = rateLimit(`${primary}:${ip}`, perMin);
   if (!ok) return res.status(429).json({ error: "rate limited — slow down" });
   const bucket = partnerBucket(req);

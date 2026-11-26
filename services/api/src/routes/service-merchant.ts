@@ -54,12 +54,12 @@ type Caller = { credential: ServiceCredential };
 
 /** The credential check every route starts with; answers and returns
  *  undefined when the caller is not the checkout service. */
-function checkoutCaller(req: express.Request, res: express.Response): Caller | undefined {
-  if (!checkoutCredentialIssued()) {
+async function checkoutCaller(req: express.Request, res: express.Response): Promise<Caller | undefined> {
+  if (!(await checkoutCredentialIssued())) {
     res.status(503).json({ error: "no checkout service credential issued" });
     return undefined;
   }
-  const credential = checkoutCredentialFor(bearerToken(req));
+  const credential = await checkoutCredentialFor(bearerToken(req));
   if (!credential) {
     res.status(401).json({ error: "checkout service authorization required" });
     return undefined;
@@ -68,13 +68,13 @@ function checkoutCaller(req: express.Request, res: express.Response): Caller | u
   return { credential };
 }
 
-function audit(kind: AuditKind, caller: Caller, linkId: string, outcome: string, extra: Record<string, unknown> = {}, userId?: string) {
-  store.audit(auditEntry(kind, { credentialId: caller.credential.id, linkId: linkId.slice(0, MAX_AUDITED_ID), outcome, ...extra }, userId));
+async function audit(kind: AuditKind, caller: Caller, linkId: string, outcome: string, extra: Record<string, unknown> = {}, userId?: string) {
+  await store.audit(auditEntry(kind, { credentialId: caller.credential.id, linkId: linkId.slice(0, MAX_AUDITED_ID), outcome, ...extra }, userId));
 }
 
 /** The request belongs to this link, or it does not exist for the caller. */
-function requestOfLink(link: MerchantLink | undefined, id: string): PaymentRequest | undefined {
-  const r = store.findPaymentRequest(id);
+async function requestOfLink(link: MerchantLink | undefined, id: string): Promise<PaymentRequest | undefined> {
+  const r = await store.findPaymentRequest(id);
   return link && r && r.source.linkId === link.id ? r : undefined;
 }
 
@@ -137,17 +137,17 @@ export function createServiceMerchantRouter() {
   const router = express.Router();
 
   /** The body both code routes take, or undefined once refused. */
-  const codeBody = (req: express.Request, res: express.Response, caller: Caller, kind: AuditKind) => {
+  const codeBody = async (req: express.Request, res: express.Response, caller: Caller, kind: AuditKind) => {
     const shop = normaliseShop(String(req.body?.shop ?? ""));
     if (typeof req.body?.code !== "string" || !isValidShopDomain(shop)) {
-      audit(kind, caller, "", "invalid");
+      await audit(kind, caller, "", "invalid");
       res.status(400).json({ error: "send {code, shop}: code the zlc_ link code, shop the store's myshopify.com domain", code: "INVALID_REQUEST" });
       return undefined;
     }
     return { code: req.body.code as string, shop };
   };
-  const codeInvalid = (res: express.Response, caller: Caller, kind: AuditKind) => {
-    audit(kind, caller, "", "code_invalid");
+  const codeInvalid = async (res: express.Response, caller: Caller, kind: AuditKind) => {
+    await audit(kind, caller, "", "code_invalid");
     return res.status(404).json({ error: "this link code is unknown, expired, used, or for another store", code: "LINK_CODE_INVALID" });
   };
 
@@ -156,27 +156,32 @@ export function createServiceMerchantRouter() {
    * up to 15 minutes old: everything is asked again. Answers and returns
    * true when refused.
    */
-  const refusePending = (res: express.Response, caller: Caller, kind: AuditKind, pending: PendingLink): boolean => {
-    const where = { orgId: pending.orgId, shop: pending.shop };
-    const refused = linkRefusal(pending.orgId, pending.shop, pending.installerId);
-    if (refused) {
-      audit(kind, caller, "", `refused:${refused.code}`, where);
-      res.status(409).json(refused);
-      return true;
-    }
-    const avail = merchantLinksAvailable();
-    if (!avail.available) {
-      audit(kind, caller, "", "unavailable", where);
-      res.status(503).json({ error: avail.reason, code: "MERCHANT_LINKS_UNAVAILABLE" });
-      return true;
-    }
-    const payee = store.findUser(pending.payeeUserId);
-    if (!payee?.paymentPage?.handle || !payee.paymentPage.depositAddress) {
-      audit(kind, caller, "", "refused:NO_PAYMENT_PAGE", where);
-      res.status(409).json({ code: "NO_PAYMENT_PAGE", error: "the receiving account no longer has a payment page" });
-      return true;
-    }
-    return false;
+  const refusePending = async (res: express.Response, caller: Caller, kind: AuditKind, pending: PendingLink): Promise<boolean> => {
+    return store.tx(async () => {
+      // The org's row held: the installer's membership and role change only
+      // under the same lock, so the checks hold until the link is written.
+      await store.lockOrganisation(pending.orgId);
+      const where = { orgId: pending.orgId, shop: pending.shop };
+      const refused = await linkRefusal(pending.orgId, pending.shop, pending.installerId);
+      if (refused) {
+        await audit(kind, caller, "", `refused:${refused.code}`, where);
+        res.status(409).json(refused);
+        return true;
+      }
+      const avail = await merchantLinksAvailable();
+      if (!avail.available) {
+        await audit(kind, caller, "", "unavailable", where);
+        res.status(503).json({ error: avail.reason, code: "MERCHANT_LINKS_UNAVAILABLE" });
+        return true;
+      }
+      const payee = await store.findUser(pending.payeeUserId);
+      if (!payee?.paymentPage?.handle || !payee.paymentPage.depositAddress) {
+        await audit(kind, caller, "", "refused:NO_PAYMENT_PAGE", where);
+        res.status(409).json({ code: "NO_PAYMENT_PAGE", error: "the receiving account no longer has a payment page" });
+        return true;
+      }
+      return false;
+    });
   };
 
   /**
@@ -187,21 +192,21 @@ export function createServiceMerchantRouter() {
   router.post(
     "/service/merchant/links/preview",
     wrap(async (req, res) => {
-      const caller = checkoutCaller(req, res);
+      const caller = await checkoutCaller(req, res);
       if (!caller) return;
       const kind: AuditKind = "service.merchant_link_preview";
-      const body = codeBody(req, res, caller, kind);
+      const body = await codeBody(req, res, caller, kind);
       if (!body) return;
       const pending = peekLinkCode(body.code, body.shop);
-      if (!pending) return codeInvalid(res, caller, kind);
-      if (refusePending(res, caller, kind, pending)) return;
+      if (!pending) return await codeInvalid(res, caller, kind);
+      if ((await refusePending(res, caller, kind, pending))) return;
       markLinkCodePreviewed(body.code);
-      const page = store.findUser(pending.payeeUserId)!.paymentPage!;
+      const page = (await store.findUser(pending.payeeUserId))!.paymentPage!;
       const payeeDisplayName = shownDisplayName(page.displayName);
-      audit(kind, caller, "", "previewed", { orgId: pending.orgId, shop: body.shop, payeeUserId: pending.payeeUserId }, pending.installerId);
+      await audit(kind, caller, "", "previewed", { orgId: pending.orgId, shop: body.shop, payeeUserId: pending.payeeUserId }, pending.installerId);
       res.json({
         shop: pending.shop,
-        orgName: store.findOrganisation(pending.orgId)?.name,
+        orgName: (await store.findOrganisation(pending.orgId))?.name,
         payeeHandle: page.handle,
         ...(payeeDisplayName ? { payeeDisplayName } : {}),
         expiresAt: new Date(pending.expiresAt).toISOString(),
@@ -212,41 +217,44 @@ export function createServiceMerchantRouter() {
   router.post(
     "/service/merchant/links/exchange",
     wrap(async (req, res) => {
-      const caller = checkoutCaller(req, res);
+      const caller = await checkoutCaller(req, res);
       if (!caller) return;
       const kind: AuditKind = "service.merchant_link_exchange";
-      const body = codeBody(req, res, caller, kind);
+      const body = await codeBody(req, res, caller, kind);
       if (!body) return;
       const { shop } = body;
       // Consumed first: whatever happens next, the code is spent.
       const pending = consumeLinkCode(body.code, shop);
-      if (!pending) return codeInvalid(res, caller, kind);
+      if (!pending) return await codeInvalid(res, caller, kind);
       // The shop's admin must have been shown whose store this becomes.
       if (!pending.previewedAt) {
-        audit(kind, caller, "", "refused:LINK_NOT_CONFIRMED", { orgId: pending.orgId, shop });
+        await audit(kind, caller, "", "refused:LINK_NOT_CONFIRMED", { orgId: pending.orgId, shop });
         return res.status(409).json({ error: "this link code was never previewed: show the store's admin the organisation and payee, then exchange a fresh code", code: "LINK_NOT_CONFIRMED" });
       }
-      // No await between these checks and the write.
-      if (refusePending(res, caller, kind, pending)) return;
-      const payee = store.findUser(pending.payeeUserId)!;
-      let established: ReturnType<typeof establishLink>;
-      try {
-        established = establishLink(pending);
-      } catch (err) {
-        if (err instanceof EncryptionUnavailableError) {
-          audit("service.merchant_link_exchange", caller, "", "unavailable:encryption", { orgId: pending.orgId, shop });
-          return res.status(503).json({ error: err.message, code: "MERCHANT_LINKS_UNAVAILABLE" });
+      // These checks and the write are one transaction.
+      const established = await store.tx(async () => {
+        if ((await refusePending(res, caller, kind, pending))) return undefined;
+        try {
+          return await establishLink(pending);
+        } catch (err) {
+          if (err instanceof EncryptionUnavailableError) {
+            await audit("service.merchant_link_exchange", caller, "", "unavailable:encryption", { orgId: pending.orgId, shop });
+            res.status(503).json({ error: err.message, code: "MERCHANT_LINKS_UNAVAILABLE" });
+            return undefined;
+          }
+          throw err;
         }
-        throw err;
-      }
+      });
+      if (!established) return;
+      const payee = (await store.findUser(pending.payeeUserId))!;
       const { link, previousPayeeUserId } = established;
-      audit("service.merchant_link_exchange", caller, link.id, "linked", {
+      await audit("service.merchant_link_exchange", caller, link.id, "linked", {
         orgId: link.orgId, shop, payeeUserId: link.payeeUserId, ...(previousPayeeUserId ? { previousPayeeUserId } : {}),
       }, pending.installerId);
       res.json({
         linkId: link.id,
         shop: link.shop,
-        orgName: store.findOrganisation(link.orgId)?.name,
+        orgName: (await store.findOrganisation(link.orgId))?.name,
         payeeHandle: payee.paymentPage!.handle,
         linkSecret: linkSecretOf(link),
       });
@@ -256,54 +264,56 @@ export function createServiceMerchantRouter() {
   router.get(
     "/service/merchant/links/:linkId",
     wrap(async (req, res) => {
-      const caller = checkoutCaller(req, res);
+      const caller = await checkoutCaller(req, res);
       if (!caller) return;
       const id = String(req.params.linkId);
-      const link = store.findMerchantLink(id);
-      audit("service.merchant_link_read", caller, id, link ? "served" : "not_found");
+      const link = await store.findMerchantLink(id);
+      await audit("service.merchant_link_read", caller, id, link ? "served" : "not_found");
       if (!link) return res.status(404).json({ error: "not found", code: "NOT_FOUND" });
-      res.json(serviceLinkView(link));
+      res.json(await serviceLinkView(link));
     }),
   );
 
   router.post(
     "/service/merchant/links/:linkId/payment-requests",
     wrap(async (req, res) => {
-      const caller = checkoutCaller(req, res);
+      const caller = await checkoutCaller(req, res);
       if (!caller) return;
       const id = String(req.params.linkId);
-      const link = store.findMerchantLink(id);
-      const refuse = (status: number, outcome: string, body: Record<string, unknown>) => {
-        audit("service.merchant_request_create", caller, id, outcome);
+      const link = await store.findMerchantLink(id);
+      const refuse = async (status: number, outcome: string, body: Record<string, unknown>) => {
+        await audit("service.merchant_request_create", caller, id, outcome);
         return res.status(status).json(body);
       };
-      if (!link) return refuse(404, "not_found", { error: "not found", code: "NOT_FOUND" });
-      if (link.revokedAt) return refuse(403, "revoked", { error: "this merchant link was revoked", code: "LINK_REVOKED" });
-      if (!merchantLinksAvailable().available) {
-        return refuse(503, "unavailable", { error: "merchant links are not available on this deployment", code: "MERCHANT_LINKS_UNAVAILABLE" });
+      if (!link) return await refuse(404, "not_found", { error: "not found", code: "NOT_FOUND" });
+      if (link.revokedAt) return await refuse(403, "revoked", { error: "this merchant link was revoked", code: "LINK_REVOKED" });
+      if (!(await merchantLinksAvailable()).available) {
+        return await refuse(503, "unavailable", { error: "merchant links are not available on this deployment", code: "MERCHANT_LINKS_UNAVAILABLE" });
       }
       const body = parseCreate(req.body);
-      if ("error" in body) return refuse(400, "invalid", { ...body, code: "INVALID_REQUEST" });
+      if ("error" in body) return await refuse(400, "invalid", { ...body, code: "INVALID_REQUEST" });
       const base = baseUrlFor(req);
       // Answer with an existing request for the order when it is this
       // link's; another link's or org's is not ours to hand out.
-      const answer = (r: PaymentRequest, status: number, outcome: string) => {
-        if (r.source.linkId !== link.id || r.orgId !== link.orgId) {
-          audit("service.merchant_request_create", caller, id, "order_taken");
-          return res.status(409).json({ error: "this order already has a payment request elsewhere", code: "ORDER_TAKEN" });
-        }
-        audit("service.merchant_request_create", caller, id, outcome, { paymentRequestId: r.id }, r.userId);
-        return res.status(status).json(serviceRequestView(r, base));
+      const answer = async (r: PaymentRequest, status: number, outcome: string) => {
+        return store.tx(async () => {
+          if (r.source.linkId !== link.id || r.orgId !== link.orgId) {
+            await audit("service.merchant_request_create", caller, id, "order_taken");
+            return res.status(409).json({ error: "this order already has a payment request elsewhere", code: "ORDER_TAKEN" });
+          }
+          await audit("service.merchant_request_create", caller, id, outcome, { paymentRequestId: r.id }, r.userId);
+          return res.status(status).json(serviceRequestView(r, base));
+        });
       };
       // The shop is the link's, never the body's.
-      const existing = store.findPaymentRequestBySource("shopify", body.gid, link.shop);
-      if (existing) return answer(existing, 200, "existing");
+      const existing = await store.findPaymentRequestBySource("shopify", body.gid, link.shop);
+      if (existing) return await answer(existing, 200, "existing");
       // Fail closed on a payee that is no longer the one the org would choose.
-      const payeeProblem = linkPayeeProblem(link);
-      if (payeeProblem) return refuse(409, "stale_payee", { error: payeeProblem, code: "NO_PAYMENT_PAGE" });
-      const payee = store.findUser(link.payeeUserId);
+      const payeeProblem = await linkPayeeProblem(link);
+      if (payeeProblem) return await refuse(409, "stale_payee", { error: payeeProblem, code: "NO_PAYMENT_PAGE" });
+      const payee = await store.findUser(link.payeeUserId);
       if (!payee?.paymentPage?.handle || !payee.paymentPage.depositAddress) {
-        return refuse(409, "no_payment_page", { error: "the receiving account has no payment page; an organisation admin must link the store again from the dashboard", code: "NO_PAYMENT_PAGE" });
+        return await refuse(409, "no_payment_page", { error: "the receiving account has no payment page; an organisation admin must link the store again from the dashboard", code: "NO_PAYMENT_PAGE" });
       }
       let created = false;
       const r = await openOnce(`${link.shop}|${body.gid}`, async () => {
@@ -329,19 +339,19 @@ export function createServiceMerchantRouter() {
           link.orgId,
         );
       });
-      if (created) store.updateMerchantLink(link.id, { lastRequestAt: new Date().toISOString() });
-      return answer(r, created ? 201 : 200, created ? "created" : "existing");
+      if (created) await store.updateMerchantLink(link.id, { lastRequestAt: new Date().toISOString() });
+      return await answer(r, created ? 201 : 200, created ? "created" : "existing");
     }),
   );
 
   router.get(
     "/service/merchant/links/:linkId/payment-requests/:id",
     wrap(async (req, res) => {
-      const caller = checkoutCaller(req, res);
+      const caller = await checkoutCaller(req, res);
       if (!caller) return;
       const linkId = String(req.params.linkId);
-      const r = requestOfLink(store.findMerchantLink(linkId), String(req.params.id));
-      audit("service.merchant_request_read", caller, linkId, r ? "served" : "not_found", { paymentRequestId: String(req.params.id).slice(0, MAX_AUDITED_ID) }, r?.userId);
+      const r = await requestOfLink(await store.findMerchantLink(linkId), String(req.params.id));
+      await audit("service.merchant_request_read", caller, linkId, r ? "served" : "not_found", { paymentRequestId: String(req.params.id).slice(0, MAX_AUDITED_ID) }, r?.userId);
       if (!r) return res.status(404).json({ error: "not found", code: "NOT_FOUND" });
       res.json(serviceRequestView(r, baseUrlFor(req)));
     }),
@@ -350,22 +360,28 @@ export function createServiceMerchantRouter() {
   router.post(
     "/service/merchant/links/:linkId/payment-requests/:id/cancel",
     wrap(async (req, res) => {
-      const caller = checkoutCaller(req, res);
+      const caller = await checkoutCaller(req, res);
       if (!caller) return;
       const linkId = String(req.params.linkId);
-      const r = requestOfLink(store.findMerchantLink(linkId), String(req.params.id));
+      const r = await requestOfLink(await store.findMerchantLink(linkId), String(req.params.id));
       const extra = { paymentRequestId: String(req.params.id).slice(0, MAX_AUDITED_ID) };
       if (!r) {
-        audit("service.merchant_request_cancel", caller, linkId, "not_found", extra);
+        await audit("service.merchant_request_cancel", caller, linkId, "not_found", extra);
         return res.status(404).json({ error: "not found", code: "NOT_FOUND" });
       }
       const base = baseUrlFor(req);
       if (effectiveState(r) !== "OPEN" || r.payments.length > 0) {
-        audit("service.merchant_request_cancel", caller, linkId, "not_cancellable", extra, r.userId);
+        await audit("service.merchant_request_cancel", caller, linkId, "not_cancellable", extra, r.userId);
         return res.status(409).json({ error: "this request is not open, or a payment has arrived against it", code: "NOT_CANCELLABLE", request: serviceRequestView(r, base) });
       }
-      const cancelled = store.updatePaymentRequest(r.id, { state: "CANCELLED", cancelledAt: new Date().toISOString() });
-      audit("service.merchant_request_cancel", caller, linkId, "cancelled", extra, r.userId);
+      // Checked again on the stored row: a payment recorded since the read keeps it.
+      const cancelled = await store.cancelUnpaidPaymentRequest(r.id);
+      if (!cancelled) {
+        await audit("service.merchant_request_cancel", caller, linkId, "not_cancellable", extra, r.userId);
+        const now = await store.findPaymentRequest(r.id);
+        return res.status(409).json({ error: "this request is not open, or a payment has arrived against it", code: "NOT_CANCELLABLE", request: serviceRequestView(now!, base) });
+      }
+      await audit("service.merchant_request_cancel", caller, linkId, "cancelled", extra, r.userId);
       res.json(serviceRequestView(cancelled, base));
     }),
   );

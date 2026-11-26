@@ -16,8 +16,9 @@
  * Money-safety rules, in order of importance:
  *  - config.ts refuses to start with any faucet variable on a chain where EURe
  *    is real money or in production; faucetLive() re-checks;
- *  - a claim (grant row, drip slot) is taken synchronously before the first
- *    await, so two concurrent calls cannot both pay;
+ *  - a claim (grant row, drip slot) is taken with its check, before the first
+ *    chain call (the grant in one store.tx), so two concurrent calls cannot
+ *    both pay;
  *  - a dry faucet, or a failure BEFORE the signed transfer is broadcast
  *    (balance, simulation, nonce, fees, gas estimate, gas money, signing), releases the
  *    claim, and so does a broadcast the node answers with a refusal
@@ -124,27 +125,32 @@ export type FaucetResult =
 
 export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
   if (!faucetEnabled()) return { ok: false, code: "FAUCET_OFF", error: "no faucet on this deployment" };
-  const user = store.findUser(userId);
-  if (!user?.wallet?.deployed) return { ok: false, code: "NO_SAFE", error: "deploy your smart wallet first" };
-  const to = user.address;
-  if (!ADDRESS_RE.test(to) || /^0x0{40}$/.test(to)) return { ok: false, code: "NO_SAFE", error: "deploy your smart wallet first" };
-  if (user.faucet) return { ok: false, code: "ALREADY_GRANTED", error: "this account already received its test EURe" };
-  // Claim before the first await: nothing yields between the check above and
-  // this write, so a concurrent second call sees the claim and returns.
   const grantEur = TESTNET_FAUCET.grantEur;
-  store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash: "", at: new Date().toISOString() } });
-  const release = () => store.updateUser(user.id, { faucet: undefined });
+  // Checked and claimed in one transaction, before the send: a concurrent
+  // second call sees the claim and returns.
+  const claimed = await store.tx(async (): Promise<FaucetResult | { user: NonNullable<Awaited<ReturnType<typeof store.findUser>>> }> => {
+    const user = await store.lockUser(userId);
+    if (!user?.wallet?.deployed) return { ok: false, code: "NO_SAFE", error: "deploy your smart wallet first" };
+    if (!ADDRESS_RE.test(user.address) || /^0x0{40}$/.test(user.address)) return { ok: false, code: "NO_SAFE", error: "deploy your smart wallet first" };
+    if (user.faucet) return { ok: false, code: "ALREADY_GRANTED", error: "this account already received its test EURe" };
+    await store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash: "", at: new Date().toISOString() } });
+    return { user };
+  });
+  if (!("user" in claimed)) return claimed;
+  const { user } = claimed;
+  const to = user.address as `0x${string}`;
+  const release = async () => await store.updateUser(user.id, { faucet: undefined });
   let sent: Sent;
   try {
     sent = await sendToken(addrs().eure, to, eur.toWei(grantEur), `grant to ${user.id}`);
   } catch (err: any) {
-    release();
+    await release();
     console.error(`faucet: funding ${user.id} failed: ${describeCause(err)}`);
     return { ok: false, code: "FAUCET_FAILED", error: UNAVAILABLE };
   }
   if (sent.kind === "dry") {
     // Nothing was sent, so a top-up plus retry can still fund this account.
-    release();
+    await release();
     console.warn(`faucet: ${faucetWallet!.account.address} holds ${eur.fromWei(sent.have)} EURe on chain ${CHAIN_ID}, below the ${grantEur} EURe grant — top it up; skipped ${user.id}`);
     return { ok: false, code: "FAUCET_DRY", error: "the test faucet is empty — try again later" };
   }
@@ -156,11 +162,11 @@ export async function faucetFundSafe(userId: string): Promise<FaucetResult> {
   }
   if (sent.reverted) {
     // A reverted transfer moved nothing, so the account may claim again.
-    release();
+    await release();
     console.error(`faucet: grant to ${to} (${user.id}) reverted: ${sent.txHash}`);
     return { ok: false, code: "FAUCET_FAILED", error: UNAVAILABLE };
   }
-  store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash: sent.txHash, at: new Date().toISOString() } });
+  await store.updateUser(user.id, { faucet: { grantedEur: grantEur, txHash: sent.txHash, at: new Date().toISOString() } });
   console.log(`faucet: ${grantEur} EURe -> ${to} (${user.id}) ${sent.txHash}`);
   return { ok: true, grantedEur: grantEur, txHash: sent.txHash };
 }

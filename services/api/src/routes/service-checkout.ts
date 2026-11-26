@@ -34,16 +34,16 @@ export function createCheckoutServiceRouter() {
   router.get(
     "/service/checkout/transfers/:id",
     wrap(async (req, res) => {
-      if (!checkoutCredentialIssued()) {
+      if (!(await checkoutCredentialIssued())) {
         return res.status(503).json({ error: "no checkout service credential issued" });
       }
-      const credential = checkoutCredentialFor(bearerToken(req));
+      const credential = await checkoutCredentialFor(bearerToken(req));
       if (!credential) return res.status(401).json({ error: "checkout service authorization required" });
 
       const id = String(req.params.id);
-      const t = store.findTransfer(id);
+      const t = await store.findTransfer(id);
       const served = t && isCheckoutTransfer(t) ? t : undefined;
-      store.audit(
+      await store.audit(
         auditEntry(
           "service.checkout_transfer_read",
           {
@@ -74,7 +74,7 @@ export function createCheckoutServiceRouter() {
       if (typeof revokePrevious !== "boolean") {
         return res.status(400).json({ error: "revokePrevious must be true or false" });
       }
-      const issued = rotateCheckoutCredential(operatorLabel(req), revokePrevious);
+      const issued = await rotateCheckoutCredential(operatorLabel(req), revokePrevious);
       res.setHeader("cache-control", "no-store");
       res.status(201).json(issued);
     }),

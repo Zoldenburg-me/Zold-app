@@ -30,8 +30,8 @@ export interface RevalueOptions {
 }
 
 /** An invoice past DRAFT that bills or settles the row. */
-function issuedInvoiceHolding(orgId: string, entryId: string): string | undefined {
-  const holder = store.invoicesOf(orgId).find(
+async function issuedInvoiceHolding(orgId: string, entryId: string): Promise<string | undefined> {
+  const holder = (await store.invoicesOf(orgId)).find(
     (i) =>
       i.state !== "DRAFT" &&
       i.state !== "DELETED" &&
@@ -42,7 +42,7 @@ function issuedInvoiceHolding(orgId: string, entryId: string): string | undefine
 }
 
 /** Why this row cannot be revalued, or undefined when it can. */
-export function revalueRefusal(entry: LedgerEntry): string | undefined {
+export async function revalueRefusal(entry: LedgerEntry): Promise<string | undefined> {
   if (entry.source.kind !== "wallet") return "Only a row synced from an imported wallet is valued this way.";
   if (entry.tags.includes("unlisted") || entry.txType === "unlisted_token") return "The token is on no token list, so it is never priced.";
   if (entry.tags.includes("e-money")) return "EURe is booked at par and needs no price.";
@@ -57,15 +57,15 @@ export function revalueRefusal(entry: LedgerEntry): string | undefined {
   }
   const amount = Number(entry.amount);
   if (!Number.isFinite(amount) || amount <= 0) return "The row's quantity is not a positive number.";
-  const held = issuedInvoiceHolding(entry.orgId, entry.id);
+  const held = await issuedInvoiceHolding(entry.orgId, entry.id);
   if (held) return `Invoice ${held} has been issued with this row on it, so its value is not changed.`;
   return undefined;
 }
 
 export async function revalueEntry(orgId: string, entryId: string, opts: RevalueOptions = {}): Promise<RevalueOutcome | undefined> {
-  const entry = store.ledgerOf(orgId).find((e) => e.id === entryId);
+  const entry = (await store.ledgerOf(orgId)).find((e) => e.id === entryId);
   if (!entry) return undefined;
-  const refusal = revalueRefusal(entry);
+  const refusal = await revalueRefusal(entry);
   if (refusal) return { status: "refused", reason: refusal };
 
   const value = opts.value ?? valueTransfer;
@@ -79,9 +79,11 @@ export async function revalueEntry(orgId: string, entryId: string, opts: Revalue
   const { valuation } = result;
   const now = (opts.now ?? (() => new Date().toISOString()))();
   // Nothing awaited from here: the row is read and written as one.
-  return store.batched((): RevalueOutcome => {
-    const current = store.ledgerOf(orgId).find((e) => e.id === entryId);
-    const again = current ? revalueRefusal(current) : "The row is gone.";
+  return await store.tx(async (): Promise<RevalueOutcome> => {
+    // Every ledger writer of the org takes this lock before it reads the rows it changes.
+    await store.lockKey(`ledger:${orgId}`);
+    const current = (await store.ledgerOf(orgId)).find((e) => e.id === entryId);
+    const again = current ? (await revalueRefusal(current)) : "The row is gone.";
     if (!current || again) return { status: "refused", reason: again ?? "The row is gone." };
     const valued: LedgerEntry = {
       ...current,
@@ -103,16 +105,16 @@ export async function revalueEntry(orgId: string, entryId: string, opts: Revalue
       },
     };
     // A rule keyed on the asset now sees its real symbol.
-    const [ruled] = applyRules(store.rulesOf(orgId), [valued]).entries;
-    store.replaceLedgerEntries([ruled]);
+    const [ruled] = applyRules(await store.rulesOf(orgId), [valued]).entries;
+    await store.replaceLedgerEntries([ruled]);
     return { status: "valued", entry: ruled };
   });
 }
 
 /** Every row of the organisation that sync booked without a value and could
  *  be valued this way. */
-export const revaluable = (orgId: string): LedgerEntry[] =>
-  store
-    .ledgerOf(orgId)
+export const revaluable = async (orgId: string): Promise<LedgerEntry[]> =>
+  (await store
+    .ledgerOf(orgId))
     .filter((e) => e.source.kind === "wallet" && e.tags.includes("needs-valuation") && !e.tags.includes("unlisted") && e.txType !== "unlisted_token")
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

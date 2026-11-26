@@ -53,13 +53,13 @@ const pickups = new Map<string, CashPickup>(); // transferId -> pickup
 
 /** Return the memo this pickup must use for every SEP-10 call. Stored pickups
  *  from before this field existed can recover it from the transfer's user. */
-export function anchorMemoForPickup(
+export async function anchorMemoForPickup(
   transferId: string,
   pickup?: Pick<CashPickup, "anchorMemo">,
-): string | undefined {
+): Promise<string | undefined> {
   if (pickup?.anchorMemo) return pickup.anchorMemo;
-  const transfer = store.findTransfer(transferId);
-  const user = transfer ? store.findUser(transfer.userId) : undefined;
+  const transfer = await store.findTransfer(transferId);
+  const user = transfer ? (await store.findUser(transfer.userId)) : undefined;
   return user ? senderMemo(user.id) : undefined;
 }
 
@@ -282,7 +282,7 @@ export async function refreshAnchorPickup(
 ): Promise<CashPickup | undefined> {
   const pickup = pickups.get(transferId) ?? existing;
   if (!pickup?.anchorTransactionId || !anchorModeEnabled()) return undefined;
-  pickup.anchorMemo = anchorMemoForPickup(transferId, pickup);
+  pickup.anchorMemo = await anchorMemoForPickup(transferId, pickup);
   pickups.set(transferId, pickup);
   const treasury = await getTreasury();
   const jwt = await sep10Auth(
@@ -320,13 +320,13 @@ export async function fundAndRefreshAnchorPickup(
   pollMs = 2_000,
   timeoutMs = 60_000,
   /** Called the moment a payment hash exists, before any polling. The caller
-   *  must persist it synchronously: a crash during the poll loop would
+   *  must have persisted it when this resolves: a crash during the poll loop would
    *  otherwise lose the record and the next run would pay a second time. */
-  onPaymentSubmitted?: (pickup: CashPickup, hash: string) => void,
+  onPaymentSubmitted?: (pickup: CashPickup, hash: string) => void | Promise<void>,
   /** Called just before the payment is broadcast. The caller must persist an
-   *  intent synchronously, so a crash before the hash is recorded cannot read
+   *  intent, on disk when this resolves, so a crash before the hash is recorded cannot read
    *  as "never paid". */
-  beforeBroadcast?: () => void,
+  beforeBroadcast?: () => void | Promise<void>,
 ): Promise<CashPickup | undefined> {
   const pickup = await refreshAnchorPickup(transferId, existing);
   if (!pickup?.anchorTransactionId || !pickup.anchorAmount || !pickup.anchorAsset) return pickup;
@@ -337,7 +337,7 @@ export async function fundAndRefreshAnchorPickup(
   }
 
   const treasury = await getTreasury();
-  pickup.anchorMemo = anchorMemoForPickup(transferId, pickup);
+  pickup.anchorMemo = await anchorMemoForPickup(transferId, pickup);
   const jwt = await sep10Auth(
     STELLAR.anchorDomain,
     treasury,
@@ -355,7 +355,7 @@ export async function fundAndRefreshAnchorPickup(
         beforeBroadcast,
       );
       pickup.anchorPaymentHash = sent.hash;
-      onPaymentSubmitted?.(pickup, sent.hash);
+      await onPaymentSubmitted?.(pickup, sent.hash);
     } catch (err: any) {
       if (errorText(err).includes("has not provided a withdrawal account yet")) {
         return pickup;

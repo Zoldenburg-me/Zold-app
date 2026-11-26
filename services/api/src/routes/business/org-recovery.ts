@@ -38,7 +38,7 @@ export function createOrgRecoveryRoutes(
   r.get(
     "/:orgId/recovery",
     wrap(async (req, res) => {
-      const ctx = deps.ctxOf(req, res);
+      const ctx = await deps.ctxOf(req, res);
       if (!ctx) return;
       if (!requirePermission(ctx, res, "accounts.read")) return;
       try {
@@ -54,7 +54,7 @@ export function createOrgRecoveryRoutes(
   r.post(
     "/:orgId/recovery/guardian",
     wrap(async (req, res) => {
-      const ctx = deps.ctxOf(req, res);
+      const ctx = await deps.ctxOf(req, res);
       if (!ctx) return;
       let out;
       try {
@@ -67,7 +67,7 @@ export function createOrgRecoveryRoutes(
         return res.status(502).json({ error: "Couldn’t prepare adding the guardian. Nothing was queued.", code: "PREPARE_FAILED" });
       }
       res.status(out.created ? 201 : 200).json({
-        op: out.op ? publicSafeOp(out.op) : null,
+        op: out.op ? (await publicSafeOp(out.op)) : null,
         ...(out.created ? { note: "Queued: adding Zoldenburg as the guardian is waiting for the owners’ signatures." } : {}),
       });
     }),

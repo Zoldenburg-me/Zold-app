@@ -47,7 +47,7 @@ import { issueChallenge, verifyRegistration } from "../webauthn.js";
 import { wrap } from "./util.js";
 
 export interface TurnkeyRecoveryDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
   enabled?: () => boolean;
   /** The recovery module, or a stand-in under test. */
   chain?: TurnkeyRecoveryChain;
@@ -124,9 +124,9 @@ function fail(res: express.Response, err: unknown) {
 const FINALIZE_PENDING = "finishing didn’t go through yet — it is tried again automatically";
 
 /** The account's Turnkey requests still open: in their waiting period, or not yet timed out. */
-const liveTurnkeyRequests = (userId: string) =>
-  store
-    .recoveryRequestsForUser(userId)
+const liveTurnkeyRequests = async (userId: string) =>
+  (await store
+    .recoveryRequestsForUser(userId))
     .filter((r) => r.mode === "turnkey" && OPEN.includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
 
 export function createTurnkeyRecoveryRouter({
@@ -146,27 +146,33 @@ export function createTurnkeyRecoveryRouter({
 
   /** The request named in the path, if the caller holds its secret; expired
    *  ones are marked so and answered 410. */
-  const requestFor = (req: express.Request, res: express.Response): RecoveryRequest | undefined => {
-    const r = store.findRecoveryRequest(req.params.id);
-    if (!r || r.mode !== "turnkey" || !secretMatches(r, presentedSecret(req))) {
-      res.status(404).json({ error: "recovery not found" });
-      return undefined;
-    }
-    if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status) && Date.now() >= Date.parse(r.expiresAt)) {
-      res.status(410).json({ ...heldView(store.updateRecoveryRequest(r.id, { status: "EXPIRED" })), error: "this recovery expired — start again" });
-      return undefined;
-    }
-    return r;
+  const requestFor = async (req: express.Request, res: express.Response): Promise<RecoveryRequest | undefined> => {
+    return store.tx(async () => {
+      const found = await store.findRecoveryRequest(req.params.id);
+      if (!found || found.mode !== "turnkey" || !secretMatches(found, presentedSecret(req))) {
+        res.status(404).json({ error: "recovery not found" });
+        return undefined;
+      }
+      // Read again under the user's row, the lock every writer of the request takes.
+      await store.lockUser(found.userId);
+      const r = (await store.findRecoveryRequest(found.id))!;
+      if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status) && Date.now() >= Date.parse(r.expiresAt)) {
+        const expired = await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" });
+        res.status(410).json({ ...heldView(expired ?? r), error: "this recovery expired — start again" });
+        return undefined;
+      }
+      return r;
+    });
   };
 
   router.post(
     "/recovery/turnkey/requests",
     wrap(async (req, res) => {
       const email = typeof req.body?.email === "string" ? req.body.email : "";
-      const user = email ? store.findUserByEmail(email) : undefined;
+      const user = email ? (await store.findUserByEmail(email)) : undefined;
       const guardian = turnkeyGuardianFor(user);
       if (!user || !guardian) return res.status(404).json({ error: "recovery not found" });
-      const mine = liveTurnkeyRequests(user.id);
+      const mine = await liveTurnkeyRequests(user.id);
       // The starting browser resumes its own request by the secret.
       const open = mine.find((r) => secretMatches(r, presentedSecret(req)));
       if (!open && mine.some((r) => r.status === "GRACE_PERIOD")) {
@@ -187,7 +193,7 @@ export function createTurnkeyRecoveryRouter({
       let request = open;
       if (!request) {
         // Read again after the await: a start racing this one is counted.
-        const waiting = liveTurnkeyRequests(user.id)
+        const waiting = (await liveTurnkeyRequests(user.id))
           .filter((r) => r.status !== "GRACE_PERIOD")
           .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt));
         if (waiting.length >= MAX_OPEN) {
@@ -195,7 +201,7 @@ export function createTurnkeyRecoveryRouter({
           if (!spare) {
             return res.status(429).json({ error: "too many recoveries of this account are waiting — try again in an hour", code: "TOO_MANY_RECOVERIES" });
           }
-          store.updateRecoveryRequest(spare.id, { status: "EXPIRED" });
+          await store.updateRecoveryRequest(spare.id, { status: "EXPIRED" });
         }
         const now = new Date();
         request = {
@@ -212,7 +218,7 @@ export function createTurnkeyRecoveryRouter({
           factors: { kyc: "pending", otp: "pending", liveness: "pending", manualReview: "pending" },
           turnkey: { accessHash: hashSecret(secret!), guardianSubOrgId: guardian.turnkeySubOrgId },
         };
-        store.addRecoveryRequest(request);
+        await store.addRecoveryRequest(request);
         console.log(`RECOVERY: ${request.id} started for ${user.id} with its Turnkey guardian`);
       }
       const out: Record<string, unknown> = {
@@ -232,15 +238,15 @@ export function createTurnkeyRecoveryRouter({
   router.post(
     "/recovery/turnkey/requests/:id/passkey",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       if (request.status !== "PASSKEY_PENDING") return res.status(409).json({ ...heldView(request), error: `recovery is ${request.status}` });
-      if (!store.findUser(request.userId)?.passkeySafe) return res.status(410).json({ error: "the account behind this recovery no longer exists" });
+      if (!(await store.findUser(request.userId))?.passkeySafe) return res.status(410).json({ error: "the account behind this recovery no longer exists" });
       const { credentialId, attestation, clientDataJSON } = req.body ?? {};
       if (!credentialId || typeof credentialId !== "string" || !attestation || !clientDataJSON) {
         return res.status(400).json({ error: "credentialId, attestation and clientDataJSON required" });
       }
-      if (store.findUserByCredential(credentialId)) return res.status(409).json({ error: "that passkey already belongs to an account" });
+      if ((await store.findUserByCredential(credentialId))) return res.status(409).json({ error: "that passkey already belongs to an account" });
       let reg;
       try {
         reg = verifyRegistration(attestation, clientDataJSON, SECURITY.rpId, SECURITY.origins, `recovery:${request.id}`);
@@ -251,7 +257,7 @@ export function createTurnkeyRecoveryRouter({
       if (reg.key.alg !== "ES256") return res.status(400).json({ error: "the new passkey must be a P-256 (ES256) credential to own a Safe" });
       const owner = webauthnOwnerFromJwk(reg.key.jwk);
       if (!owner) return res.status(400).json({ error: "could not read the new passkey's public key" });
-      const updated = store.updateRecoveryRequest(request.id, {
+      const updated = await store.updateRecoveryRequest(request.id, {
         status: "REVIEW_PENDING",
         turnkey: {
           ...request.turnkey,
@@ -268,7 +274,7 @@ export function createTurnkeyRecoveryRouter({
   router.get(
     "/recovery/turnkey/requests/:id",
     wrap(async (req, res) => {
-      let request = requestFor(req, res);
+      let request = await requestFor(req, res);
       if (!request) return;
       request = await syncTurnkeyFromChain(request, chain).catch(() => request!);
       res.json({ ...heldView(request), gracePeriodSeconds: recoveryGracePeriodSeconds(request.recoveryModuleAddress) });
@@ -278,7 +284,7 @@ export function createTurnkeyRecoveryRouter({
   router.get(
     "/recovery/turnkey/requests/:id/digest",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       try {
         if (request.status !== "REVIEW_PENDING") throw new TurnkeyGuardianError(`recovery is ${request.status}`, 409, "NOT_WAITING");
@@ -298,7 +304,7 @@ export function createTurnkeyRecoveryRouter({
   router.get(
     "/recovery/turnkey/requests/:id/activity/:activityId",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       try {
         const subOrgId = request.turnkey?.guardianSubOrgId;
@@ -314,7 +320,7 @@ export function createTurnkeyRecoveryRouter({
   router.post(
     "/recovery/turnkey/requests/:id/signature",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       try {
         const { r, s, v } = req.body ?? {};
@@ -328,7 +334,7 @@ export function createTurnkeyRecoveryRouter({
   router.post(
     "/recovery/turnkey/requests/:id/finalize",
     wrap(async (req, res) => {
-      const request = requestFor(req, res);
+      const request = await requestFor(req, res);
       if (!request) return;
       if (request.status === "FINALIZED") return res.json(heldView(request));
       if (request.status !== "GRACE_PERIOD") return res.status(409).json({ ...heldView(request), error: `recovery is ${request.status}` });
@@ -347,22 +353,22 @@ export function createTurnkeyRecoveryRouter({
 
   // ---- the owner's half ---------------------------------------------------
 
-  const ownerFor = (req: express.Request, res: express.Response): User | undefined => {
-    const user = store.findUser(req.params.id);
+  const ownerFor = async (req: express.Request, res: express.Response): Promise<User | undefined> => {
+    const user = await store.findUser(req.params.id);
     if (!user) {
       res.status(404).json({ error: "user not found" });
       return undefined;
     }
-    return requireUserSession(req, res, user.id) ? user : undefined;
+    return (await requireUserSession(req, res, user.id)) ? user : undefined;
   };
 
   router.get(
     "/users/:id/recovery/turnkey/requests",
     wrap(async (req, res) => {
-      const user = ownerFor(req, res);
+      const user = await ownerFor(req, res);
       if (!user) return;
-      const requests = store
-        .recoveryRequestsForUser(user.id)
+      const requests = (await store
+        .recoveryRequestsForUser(user.id))
         .filter((r) => r.mode === "turnkey" && OPEN.includes(r.status))
         .map(publicRecoveryRequest);
       const out: Record<string, unknown> = { requests };
@@ -382,9 +388,9 @@ export function createTurnkeyRecoveryRouter({
   router.post(
     "/users/:id/recovery/turnkey/requests/:rid/cancel",
     wrap(async (req, res) => {
-      const user = ownerFor(req, res);
+      const user = await ownerFor(req, res);
       if (!user) return;
-      const r = store.findRecoveryRequest(req.params.rid);
+      const r = await store.findRecoveryRequest(req.params.rid);
       if (!r || r.userId !== user.id || r.mode !== "turnkey") return res.status(404).json({ error: "recovery not found" });
       if (!["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) {
         return res.status(409).json({ error: `recovery is ${r.status} — a recovery on chain is cancelled with your passkey`, code: "NOT_CANCELABLE" });
@@ -394,7 +400,7 @@ export function createTurnkeyRecoveryRouter({
       if (isBeingSigned(r.id)) {
         return res.status(409).json({ error: "this recovery is being approved right now — cancel it with your passkey in a moment", code: "BEING_SIGNED" });
       }
-      const updated = store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
+      const updated = await store.updateRecoveryRequest(r.id, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
       console.log(`RECOVERY: ${r.id} cancelled by its owner before the guardian signed`);
       res.json(publicRecoveryRequest(updated));
     }),

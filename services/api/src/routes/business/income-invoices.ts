@@ -37,11 +37,12 @@ import { requireCapability, requirePermission, type OrgContext } from "../org-co
 import { wrap } from "../util.js";
 import { issueOutgoing } from "./issue-outgoing.js";
 import { draftFrom, str } from "./shared.js";
+import { forEachSeq, mapSeq } from "../../seq.js";
 
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
 export interface OrgRoutes {
-  ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+  ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
 
 /** Short enough that a line (description, amount, token, date, value and
@@ -62,7 +63,7 @@ class PayerRuleError extends Error {}
  * a rate left blank or an exemption with no reason is refused, because a
  * default here would be Zold choosing the tax treatment.
  */
-function payerRuleFrom(org: Organisation, raw: unknown, memberId: string, now: string): PayerRule {
+async function payerRuleFrom(org: Organisation, raw: unknown, memberId: string, now: string): Promise<PayerRule> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new PayerRuleError("A payer rule is an object.");
   const body = raw as Record<string, any>;
   const serviceDescription = str(body.serviceDescription) ?? "";
@@ -95,7 +96,7 @@ function payerRuleFrom(org: Organisation, raw: unknown, memberId: string, now: s
   const notes = str(body.notes);
   if (notes && notes.length > NOTES_MAX) throw new PayerRuleError(`Notes are limited to ${NOTES_MAX} characters.`);
 
-  const read = draftFrom(org, { vat, recipient: body.recipient, supplyKind: body.supplyKind, lines: [] });
+  const read = await draftFrom(org, { vat, recipient: body.recipient, supplyKind: body.supplyKind, lines: [] });
   return {
     serviceDescription,
     vat: read.treatment,
@@ -128,11 +129,11 @@ function payerWalletsFrom(raw: unknown, existing: ContactWallet[]): ContactWalle
  * draft made while a wallet is behind bills only what the ledger holds, so
  * the person issuing it is told, on the draft, what may be missing.
  */
-function syncWarningsFor(ctx: OrgContext, month: string, now: string): string[] {
+async function syncWarningsFor(ctx: OrgContext, month: string, now: string): Promise<string[]> {
   const timeZone = ctx.org.reporting.timeZone;
   const monthIsOver = month < monthOf(now, timeZone);
   const firstDay = monthPeriod(month).from;
-  return store.importedWalletsOf(ctx.org.id).flatMap((w) => {
+  return (await store.importedWalletsOf(ctx.org.id)).flatMap((w) => {
     const name = w.label || `${w.address.slice(0, 8)}…`;
     const bookedFrom = w.sync.from ?? dayOf(w.createdAt, timeZone);
     return [
@@ -150,9 +151,9 @@ function syncWarningsFor(ctx: OrgContext, month: string, now: string): string[] 
 
 /** Plan a month from what the store holds now. Each draft carries what the
  *  wallets' sync state leaves uncertain about the month. */
-function planFor(ctx: OrgContext, month: string, now: string): IncomePlan & { syncWarnings: string[] } {
-  const syncWarnings = syncWarningsFor(ctx, month, now);
-  const plan = planFrom(ctx, month, now);
+async function planFor(ctx: OrgContext, month: string, now: string): Promise<IncomePlan & { syncWarnings: string[] }> {
+  const syncWarnings = await syncWarningsFor(ctx, month, now);
+  const plan = await planFrom(ctx, month, now);
   return {
     ...plan,
     drafts: plan.drafts.map((d) => ({ ...d, fromReceipts: { ...d.fromReceipts!, syncWarnings } })),
@@ -160,31 +161,33 @@ function planFor(ctx: OrgContext, month: string, now: string): IncomePlan & { sy
   };
 }
 
-function planFrom(ctx: OrgContext, month: string, now: string): IncomePlan {
+async function planFrom(ctx: OrgContext, month: string, now: string): Promise<IncomePlan> {
+  // The plan is pure, so each wallet's proof is read up front.
+  const proofs = new Map(await mapSeq(await store.importedWalletsOf(ctx.org.id), async (w) => [w.id, await walletProofIn(ctx, w.id)] as const));
   return planIncomeDrafts({
     orgId: ctx.org.id,
     timeZone: ctx.org.reporting.timeZone,
     month,
-    contacts: store.contactsOf(ctx.org.id),
-    ledger: store.ledgerOf(ctx.org.id),
-    invoices: store.invoicesOf(ctx.org.id),
+    contacts: await store.contactsOf(ctx.org.id),
+    ledger: await store.ledgerOf(ctx.org.id),
+    invoices: await store.invoicesOf(ctx.org.id),
     now,
     memberId: ctx.member.id,
     newLinkTokenHash: () => newLinkToken().hash,
-    walletProof: (walletId) => walletProofIn(ctx, walletId),
+    walletProof: (walletId) => proofs.get(walletId) ?? "removed",
   });
 }
 
 /** The proof state of an imported wallet of this organisation, read now. */
-function walletProofIn(ctx: OrgContext, walletId: string): WalletProof {
-  const wallet = store.findImportedWallet(walletId);
+async function walletProofIn(ctx: OrgContext, walletId: string): Promise<WalletProof> {
+  const wallet = await store.findImportedWallet(walletId);
   return wallet && wallet.orgId === ctx.org.id ? proofStateOf(wallet) : "removed";
 }
 
 /** An id held by anything but this organisation's own draft is a bug in the
  *  plan, and writing over it would rewrite an issued invoice. */
-function assertWritable(draft: Invoice): void {
-  const existing = store.findInvoice(draft.id);
+async function assertWritable(draft: Invoice): Promise<void> {
+  const existing = await store.findInvoice(draft.id);
   if (existing && (existing.orgId !== draft.orgId || existing.state !== "DRAFT")) {
     throw new Error(`income draft ${draft.id} collides with an invoice in ${existing.state}`);
   }
@@ -192,9 +195,14 @@ function assertWritable(draft: Invoice): void {
 
 /** Add new drafts and replace those that are still drafts. All are checked
  *  before the first is written, so a refusal leaves none half done. */
-function writeDrafts(drafts: Invoice[]): Invoice[] {
-  drafts.forEach(assertWritable);
-  return drafts.map((draft) => (store.findInvoice(draft.id) ? store.updateInvoice(draft.id, draft) : store.addInvoice(draft)));
+async function writeDrafts(drafts: Invoice[]): Promise<Invoice[]> {
+  return store.tx(async () => {
+    // The org's row held (as the income run holds it): a draft checked
+    // writable here is still a draft when it is replaced.
+    for (const orgId of new Set(drafts.map((d) => d.orgId))) await store.lockOrganisation(orgId);
+    await forEachSeq(drafts, assertWritable);
+    return await mapSeq(drafts, async (draft) => ((await store.findInvoice(draft.id)) ? (await store.updateInvoice(draft.id, draft)) : (await store.addInvoice(draft))));
+  });
 }
 
 /** The issue request for a draft: the rule's template, the draft's lines. */
@@ -216,40 +224,44 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
 
-  const contactOf = (ctx: OrgContext, req: express.Request) => {
-    const contact = store.findContact(String(req.params.contactId));
+  const contactOf = async (ctx: OrgContext, req: express.Request) => {
+    const contact = await store.findContact(String(req.params.contactId));
     return contact && contact.orgId === ctx.org.id ? contact : undefined;
   };
 
-  r.put("/:orgId/contacts/:contactId/payer-rule", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "invoices")) return;
-    if (!requirePermission(ctx, res, "invoices.manage")) return;
-    const contact = contactOf(ctx, req);
-    if (!contact) return res.status(404).json({ error: "no such contact" });
-    try {
-      const payerRule = payerRuleFrom(ctx.org, req.body, ctx.member.id, new Date().toISOString());
-      // The rule and the addresses it reads are saved together or not at all.
-      const wallets = payerWalletsFrom(req.body?.wallets, contact.wallets);
-      res.json({ contact: store.updateContact(contact.id, { payerRule, ...(wallets ? { wallets } : {}) }) });
-    } catch (err) {
-      if (err instanceof PayerRuleError || err instanceof InvoiceComplianceError || err instanceof ContactError) {
-        return res.status(400).json({ error: err.message });
+  r.put("/:orgId/contacts/:contactId/payer-rule", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "invoices")) return;
+      if (!requirePermission(ctx, res, "invoices.manage")) return;
+      const contact = await contactOf(ctx, req);
+      if (!contact) return res.status(404).json({ error: "no such contact" });
+      try {
+        const payerRule = await payerRuleFrom(ctx.org, req.body, ctx.member.id, new Date().toISOString());
+        // The rule and the addresses it reads are saved together or not at all.
+        const wallets = payerWalletsFrom(req.body?.wallets, contact.wallets);
+        res.json({ contact: await store.updateContact(contact.id, { payerRule, ...(wallets ? { wallets } : {}) }) });
+      } catch (err) {
+        if (err instanceof PayerRuleError || err instanceof InvoiceComplianceError || err instanceof ContactError) {
+          return res.status(400).json({ error: err.message });
+        }
+        throw err;
       }
-      throw err;
-    }
+    });
   });
 
   /** Stop invoicing a contact's receipts. Its drafts and invoices stay. */
-  r.delete("/:orgId/contacts/:contactId/payer-rule", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "invoices")) return;
-    if (!requirePermission(ctx, res, "invoices.manage")) return;
-    const contact = contactOf(ctx, req);
-    if (!contact) return res.status(404).json({ error: "no such contact" });
-    res.json({ contact: store.updateContact(contact.id, { payerRule: undefined }) });
+  r.delete("/:orgId/contacts/:contactId/payer-rule", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "invoices")) return;
+      if (!requirePermission(ctx, res, "invoices.manage")) return;
+      const contact = await contactOf(ctx, req);
+      if (!contact) return res.status(404).json({ error: "no such contact" });
+      res.json({ contact: await store.updateContact(contact.id, { payerRule: undefined }) });
+    });
   });
 
   /**
@@ -258,36 +270,39 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
    * touches nothing that was issued. The answer accounts for every valued
    * receipt of the month that is on no draft.
    */
-  r.post("/:orgId/income-invoices/run", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "invoices")) return;
-    if (!requirePermission(ctx, res, "invoices.manage")) return;
-    try {
-      const now = new Date().toISOString();
-      const month: unknown = req.body?.month;
-      assertCollectableMonth(month, ctx.org.reporting.timeZone, now);
-      // Read and write with nothing awaited between: two runs cannot both
-      // claim a row.
-      const { plan, written } = store.batched(() => {
-        const plan = planFor(ctx, month, now);
-        return { plan, written: writeDrafts(plan.drafts) };
-      });
-      res.json({
-        month,
-        timeZone: ctx.org.reporting.timeZone,
-        contacts: plan.contacts,
-        withoutRule: plan.withoutRule,
-        withoutContact: plan.withoutContact,
-        alreadyInvoiced: plan.alreadyInvoiced,
-        onOtherDrafts: plan.onOtherDrafts,
-        syncWarnings: plan.syncWarnings,
-        invoices: written.map(ownerInvoiceView),
-      });
-    } catch (err) {
-      if (err instanceof IncomeInvoiceError) return res.status(400).json({ error: err.message });
-      throw err;
-    }
+  r.post("/:orgId/income-invoices/run", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "invoices")) return;
+      if (!requirePermission(ctx, res, "invoices.manage")) return;
+      try {
+        const now = new Date().toISOString();
+        const month: unknown = req.body?.month;
+        assertCollectableMonth(month, ctx.org.reporting.timeZone, now);
+        // Read and write in one transaction that holds the organisation:
+        // two runs cannot both claim a row (§2 rule 4).
+        const { plan, written } = await store.tx(async () => {
+          await store.lockOrganisation(ctx.org.id);
+          const plan = await planFor(ctx, month, now);
+          return { plan, written: await writeDrafts(plan.drafts) };
+        });
+        res.json({
+          month,
+          timeZone: ctx.org.reporting.timeZone,
+          contacts: plan.contacts,
+          withoutRule: plan.withoutRule,
+          withoutContact: plan.withoutContact,
+          alreadyInvoiced: plan.alreadyInvoiced,
+          onOtherDrafts: plan.onOtherDrafts,
+          syncWarnings: plan.syncWarnings,
+          invoices: written.map(ownerInvoiceView),
+        });
+      } catch (err) {
+        if (err instanceof IncomeInvoiceError) return res.status(400).json({ error: err.message });
+        throw err;
+      }
+    });
   });
 
   /**
@@ -299,18 +314,18 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
    * issues what they looked at, not what changed underneath.
    */
   r.post("/:orgId/income-invoices/:invoiceId/issue", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "invoices")) return;
     if (!requirePermission(ctx, res, "invoices.manage")) return;
-    const stored = store.findInvoice(String(req.params.invoiceId));
+    const stored = await store.findInvoice(String(req.params.invoiceId));
     if (!stored || stored.orgId !== ctx.org.id || !stored.fromReceipts || stored.state === "DELETED") {
       return res.status(404).json({ error: "no such draft" });
     }
     if (stored.state !== "DRAFT") {
       return res.status(409).json({ error: `This invoice has already been issued${stored.issued ? ` as ${stored.issued.number}` : ""}.` });
     }
-    const contact = store.findContact(stored.fromReceipts.contactId);
+    const contact = await store.findContact(stored.fromReceipts.contactId);
     const rule = contact?.orgId === ctx.org.id ? contact.payerRule : undefined;
     if (!rule) {
       return res.status(409).json({
@@ -320,14 +335,14 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
 
     // Every wallet the draft bills from must be proven now, not only when it
     // was collected. Nothing is written: collecting again moves the rows.
-    const rows = new Map(store.ledgerOf(ctx.org.id).map((e) => [e.id, e]));
+    const rows = new Map((await store.ledgerOf(ctx.org.id)).map((e) => [e.id, e]));
     const unproven = new Map<string, { walletId: string; label: string; proof: WalletProof }>();
     for (const line of stored.lines) {
       const source = line.receipt ? rows.get(line.receipt.ledgerEntryId)?.source : undefined;
       const walletId = source?.kind === "wallet" ? source.walletId : "";
-      const proof = walletId ? walletProofIn(ctx, walletId) : "removed";
+      const proof = walletId ? (await walletProofIn(ctx, walletId)) : "removed";
       if (proof !== "proven") {
-        const label = store.findImportedWallet(walletId)?.label ?? (walletId || `the wallet of row ${line.receipt?.ledgerEntryId ?? "?"}`);
+        const label = (await store.findImportedWallet(walletId))?.label ?? (walletId || `the wallet of row ${line.receipt?.ledgerEntryId ?? "?"}`);
         unproven.set(walletId || label, { walletId, label, proof });
       }
     }
@@ -339,10 +354,10 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
         return source?.kind === "wallet" ? [source.walletId] : [];
       }));
       for (const walletId of billedWallets) {
-        const wallet = store.findImportedWallet(walletId)!;
+        const wallet = (await store.findImportedWallet(walletId))!;
         const proof = wallet.ownership!;
         const result = await verifyOwnership(wallet, proof.message, proof.signature, proof.method);
-        store.audit(auditEntry("wallet.ownership_checked", {
+        await store.audit(auditEntry("wallet.ownership_checked", {
           orgId: ctx.org.id, walletId, chainId: wallet.chainId, address: wallet.address,
           check: "issue", outcome: result.verdict, ...(result.verdict !== "valid" ? { reason: result.reason } : {}),
         }, ctx.userId));
@@ -351,9 +366,9 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
         }
         if (result.verdict === "rejected") {
           const at = new Date().toISOString();
-          const latest = store.findImportedWallet(walletId);
+          const latest = await store.findImportedWallet(walletId);
           if (latest?.ownership && latest.ownership.signature === proof.signature && latest.ownership.message === proof.message) {
-            store.updateImportedWallet(walletId, {
+            await store.updateImportedWallet(walletId, {
               ownership: { ...latest.ownership, status: "lapsed", checkedAt: at, lapsedAt: latest.ownership.lapsedAt ?? at, lapseReason: result.reason },
             });
           }
@@ -371,7 +386,7 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
 
     let fresh: Invoice | undefined;
     try {
-      fresh = planFor(ctx, stored.fromReceipts.month, new Date().toISOString()).drafts.find((d) => d.id === stored.id);
+      fresh = (await planFor(ctx, stored.fromReceipts.month, new Date().toISOString())).drafts.find((d) => d.id === stored.id);
     } catch (err) {
       if (err instanceof IncomeInvoiceError) return res.status(400).json({ error: err.message });
       throw err;
@@ -382,7 +397,7 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
     const transactions = changed.map((id) =>
       [...stored.lines, ...fresh.lines].find((l) => l.receipt?.ledgerEntryId === id)?.receipt?.txHash.slice(0, 12) ?? id,
     );
-    const [current] = writeDrafts([fresh]);
+    const [current] = await writeDrafts([fresh]);
     if (changed.length || ruleChanged) {
       return res.status(409).json({
         error:
@@ -416,12 +431,12 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
 
     // What it bills must not change while the VIES and rate lookups run: the
     // wallets still proven, the rows still at the values on the lines.
-    const stillIssuable = () => {
-      const now = new Map(store.ledgerOf(ctx.org.id).map((e) => [e.id, e]));
+    const stillIssuable = async () => {
+      const now = new Map((await store.ledgerOf(ctx.org.id)).map((e) => [e.id, e]));
       for (const line of current.lines) {
         const row = line.receipt ? now.get(line.receipt.ledgerEntryId) : undefined;
         const walletId = row?.source.kind === "wallet" ? row.source.walletId : "";
-        if (!row || walletProofIn(ctx, walletId) !== "proven") {
+        if (!row || (await walletProofIn(ctx, walletId)) !== "proven") {
           return "A wallet this draft bills from stopped being proven while it was being issued. Nothing was issued.";
         }
         if (classifyReceipt(row).kind !== "eligible" || (classifyReceipt(row) as { eurCents: number }).eurCents !== line.receipt!.eurCents) {

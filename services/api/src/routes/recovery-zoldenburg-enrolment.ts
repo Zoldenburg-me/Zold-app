@@ -23,7 +23,7 @@ import {
 } from "../recovery/zoldenburg-enrolment.js";
 
 export interface ZoldenburgEnrolmentDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
   /** The passkey step-up; server.ts leaves the default. */
   verifyStepUp?: (user: User, body: unknown, res: express.Response) => Promise<boolean>;
 }
@@ -36,13 +36,13 @@ export function createZoldenburgEnrolmentRouter(deps: ZoldenburgEnrolmentDeps) {
     (req: express.Request, res: express.Response, next: express.NextFunction) =>
       Promise.resolve(fn(req, res)).catch(next);
 
-  const userFor = (req: express.Request, res: express.Response): User | undefined => {
-    const user = store.findUser(req.params.id);
+  const userFor = async (req: express.Request, res: express.Response): Promise<User | undefined> => {
+    const user = await store.findUser(req.params.id);
     if (!user) {
       res.status(404).json({ error: "user not found" });
       return undefined;
     }
-    if (!deps.requireUserSession(req, res, user.id)) return undefined;
+    if (!(await deps.requireUserSession(req, res, user.id))) return undefined;
     return user;
   };
 
@@ -57,7 +57,7 @@ export function createZoldenburgEnrolmentRouter(deps: ZoldenburgEnrolmentDeps) {
   router.get(
     "/users/:id/recovery/zoldenburg/enrolment",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       res.json(enrolmentView(user));
     }),
@@ -66,13 +66,13 @@ export function createZoldenburgEnrolmentRouter(deps: ZoldenburgEnrolmentDeps) {
   router.post(
     "/users/:id/recovery/zoldenburg/enrolment",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       const no = refusal(user);
       if (no) return res.status(no[0]).json({ error: no[2], code: no[1] });
       if (!(await verifyStepUp(user, req.body, res))) return;
-      const { code, memo } = issueEnrolmentCode(user);
-      const fresh = store.findUser(user.id)!;
+      const { code, memo } = await issueEnrolmentCode(user);
+      const fresh = (await store.findUser(user.id))!;
       res.status(201).json({ ...enrolmentView(fresh), code, memo, payTo: { iban: fresh.iban, name: fresh.name } });
     }),
   );
@@ -80,13 +80,13 @@ export function createZoldenburgEnrolmentRouter(deps: ZoldenburgEnrolmentDeps) {
   router.post(
     "/users/:id/recovery/zoldenburg/enrolment/check",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       const last = user.zoldenburgEnrolment?.lastCheck?.at;
       // Monerium is asked at most every checkEveryMs per account; a faster
       // click gets the last answer.
       if (!last || Date.now() - Date.parse(last) >= ENROLMENT.checkEveryMs) await checkEnrolment(user.id);
-      res.json(enrolmentView(store.findUser(user.id)!));
+      res.json(enrolmentView((await store.findUser(user.id))!));
     }),
   );
 

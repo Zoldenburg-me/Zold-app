@@ -24,8 +24,9 @@ export function starterRecoveryRequest(request: RecoveryRequest) {
  * someone's phone number.
  */
 export function publicRecoveryRequest(request: RecoveryRequest) {
-  const { contact: _contact, reviewedBy: _reviewedBy, reviewReason: _reviewReason, ownerAlerts: _ownerAlerts, candide, zoldenburg, turnkey, ...pub } = request;
-  const out: Record<string, unknown> = { ...pub };
+  const { contact: _contact, reviewedBy: _reviewedBy, reviewReason: _reviewReason, ownerAlerts: _ownerAlerts, relaying, candide, zoldenburg, turnkey, ...pub } = request;
+  // A relay runs for seconds; it shows as the status it came from, as before.
+  const out: Record<string, unknown> = { ...pub, ...(request.status === "RELAYING" && relaying ? { status: relaying.from } : {}) };
   if (candide) {
     const { newPasskey, auths, accessHash: _accessHash, otpTicketHash: _otpTicketHash, ...rest } = candide;
     out.candide = {

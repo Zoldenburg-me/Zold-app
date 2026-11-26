@@ -26,17 +26,6 @@ export const API_HOST = process.env.TRANSF_API_HOST ?? "127.0.0.1";
 export const IS_PRODUCTION = process.env.NODE_ENV === "production" || process.env.TRANSF_PRODUCTION === "1";
 export const PUBLIC_URL = process.env.TRANSF_PUBLIC_URL ?? "";
 
-/**
- * Which store serves the API: `json` (db.json), the only one wired today.
- * The Postgres backend (store/pg/) has no caller until the cut-over
- * (docs/postgres-store-design.md §8), so asking for it refuses instead of
- * running on db.json while the operator believes it is on Postgres.
- */
-export const STORE_BACKEND = process.env.STORE_BACKEND || "json";
-if (STORE_BACKEND !== "json") {
-  throw new Error("STORE_BACKEND must be json: the Postgres backend is not wired to the API yet");
-}
-
 export const USING_LOCAL_RPC = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?($|\/)/.test(RPC_URL);
 
 /**
@@ -52,6 +41,25 @@ export const CHAIN_ID = envNumber("TRANSF_CHAIN_ID", 8453, { min: 1, integer: tr
 export const REAL_MONEY_CHAINS = new Set([1, 100, 137, 8453, 42161, 59144]);
 export const IS_REAL_MONEY_CHAIN = REAL_MONEY_CHAINS.has(CHAIN_ID);
 export const IS_LOCAL_CHAIN = CHAIN_ID === 31337;
+
+/**
+ * Which store serves the API: `json` (db.json, the default until the
+ * cut-over) or `postgres` (`DATABASE_URL`, and `DATABASE_CA` for a TLS host;
+ * docs/postgres-store-design.md §4). Postgres is refused on a real-money
+ * chain until the cut-over (§8 S8): until then it runs for the suites and on
+ * testnet only. Anything else refuses, so a typo never runs on db.json while
+ * the operator believes it is on Postgres.
+ */
+export const STORE_BACKEND = process.env.STORE_BACKEND || "json";
+if (STORE_BACKEND !== "json" && STORE_BACKEND !== "postgres") {
+  throw new Error("STORE_BACKEND must be json or postgres");
+}
+export const DATABASE_URL = process.env.DATABASE_URL ?? "";
+export const DATABASE_CA = process.env.DATABASE_CA || undefined;
+if (STORE_BACKEND === "postgres") {
+  if (IS_REAL_MONEY_CHAIN) throw new Error("STORE_BACKEND=postgres is refused on a real-money chain until the cut-over");
+  if (!DATABASE_URL) throw new Error("STORE_BACKEND=postgres needs DATABASE_URL");
+}
 export const USING_LOCAL_API_HOST = API_HOST === "127.0.0.1" || API_HOST === "localhost" || API_HOST === "::1";
 
 /**

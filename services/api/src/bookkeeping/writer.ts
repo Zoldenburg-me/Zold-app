@@ -38,6 +38,7 @@ import { withoutConversionOutputs } from "../transfers/activity.js";
 import type { MoneyInHolder } from "./money-in.js";
 import type { Account } from "../domain/types.js";
 import { liveCryptoSend } from "../wallet/org-debit.js";
+import { filterSeq, findSeq, mapSeq } from "../seq.js";
 
 /**
  * Rule 2. No dex, LI.FI, RFQ or CoW swap has executed with real money, so a
@@ -45,9 +46,9 @@ import { liveCryptoSend } from "../wallet/org-debit.js";
  * store, not asserted: a converted deposit on a real-money chain with a
  * chain transaction hash is the evidence, and nothing else is.
  */
-export function swapsHaveExecuted(): boolean {
+export async function swapsHaveExecuted(): Promise<boolean> {
   if (!IS_REAL_MONEY_CHAIN) return false;
-  return store.cryptoDeposits.some(
+  return (await store.list("cryptoDeposits")).some(
     (d) => d.holding === "converted" && /^0x[0-9a-fA-F]{64}$/.test(d.conversion?.txHash ?? ""),
   );
 }
@@ -60,11 +61,11 @@ export function swapsHaveExecuted(): boolean {
  * account, that is the company's, from the day its books start
  * (`backedSince`, domain/safe-books.ts); otherwise the person's own.
  */
-export function booksFor(userId: string): { orgId: string; accountId: string; since?: string } | undefined {
-  const backed = store.accounts.filter((a) => a.backingUserId === userId && a.currency === "EUR");
-  const account = backed.find((a) => store.findOrganisation(a.orgId)?.type === "business") ?? backed[0];
+export async function booksFor(userId: string): Promise<{ orgId: string; accountId: string; since?: string } | undefined> {
+  const backed = (await store.list("accounts")).filter((a) => a.backingUserId === userId && a.currency === "EUR");
+  const account = (await findSeq(backed, async (a) => (await store.findOrganisation(a.orgId))?.type === "business")) ?? backed[0];
   if (!account) return undefined;
-  const user = store.findUser(userId);
+  const user = await store.findUser(userId);
   const since = account.backedSince ?? (user ? safeBooksStart(user) : undefined);
   return { orgId: account.orgId, accountId: account.id, ...(since ? { since } : {}) };
 }
@@ -78,39 +79,39 @@ const warned = new Set<string>();
  * poll and every minute. A group keeps store order, as the filter did.
  */
 interface Rows {
-  transfersOf(userId: string): Transfer[];
-  depositsOf(userId: string): CryptoDeposit[];
-  cryptoSendsOf(userId: string): CryptoSend[];
-  issueOrdersOf(userId: string): MoneriumIssueRecord[];
-  issueOrdersOfAccount(accountId: string): MoneriumIssueRecord[];
+  transfersOf(userId: string): Transfer[] | Promise<Transfer[]>;
+  depositsOf(userId: string): CryptoDeposit[] | Promise<CryptoDeposit[]>;
+  cryptoSendsOf(userId: string): CryptoSend[] | Promise<CryptoSend[]>;
+  issueOrdersOf(userId: string): MoneriumIssueRecord[] | Promise<MoneriumIssueRecord[]>;
+  issueOrdersOfAccount(accountId: string): MoneriumIssueRecord[] | Promise<MoneriumIssueRecord[]>;
   /** A company's sends from this account's Safe, each in its op's state. */
-  cryptoSendsOfAccount(account: Account): CryptoSend[];
-  sweepsOf(userId: string): ConversionSweep[];
-  paymentRequestsOf(userId: string): PaymentRequest[];
-  invoicesOf(orgId: string): Invoice[];
+  cryptoSendsOfAccount(account: Account): CryptoSend[] | Promise<CryptoSend[]>;
+  sweepsOf(userId: string): ConversionSweep[] | Promise<ConversionSweep[]>;
+  paymentRequestsOf(userId: string): PaymentRequest[] | Promise<PaymentRequest[]>;
+  invoicesOf(orgId: string): Invoice[] | Promise<Invoice[]>;
   /** What every org's invoices pay: a mark on a line one of them pays is dropped. */
-  invoicePayments(): InvoicePayments;
-  rulesOf(orgId: string): AccountRule[];
-  ledgerOf(orgId: string): LedgerEntry[];
-  swapsHaveExecuted(): boolean;
+  invoicePayments(): InvoicePayments | Promise<InvoicePayments>;
+  rulesOf(orgId: string): AccountRule[] | Promise<AccountRule[]>;
+  ledgerOf(orgId: string): LedgerEntry[] | Promise<LedgerEntry[]>;
+  swapsHaveExecuted(): boolean | Promise<boolean>;
   /** Lines just written, so the next user booked under the same org sees them. */
   added(orgId: string, entries: LedgerEntry[]): void;
 }
 
 const storeRows: Rows = {
-  transfersOf: (id) => store.transfers.filter((t) => t.userId === id),
-  depositsOf: (id) => withoutConversionOutputs(store.cryptoDeposits.filter((d) => d.userId === id), store.transfers.filter((t) => t.userId === id)),
+  transfersOf: async (id) => (await store.list("transfers")).filter((t) => t.userId === id),
+  depositsOf: async (id) => withoutConversionOutputs((await store.list("cryptoDeposits")).filter((d) => d.userId === id), (await store.list("transfers")).filter((t) => t.userId === id)),
   // A company send's userId is who queued it; it is the company's money.
-  cryptoSendsOf: (id) => store.cryptoSends.filter((c) => c.userId === id && !c.safeOpId),
-  issueOrdersOf: (id) => store.moneriumIssueOrders.filter((o) => o.userId === id),
-  issueOrdersOfAccount: (id) => store.moneriumIssueOrders.filter((o) => o.accountId === id),
-  cryptoSendsOfAccount: (a) => companySends(store.cryptoSends, a),
-  sweepsOf: (id) => store.conversionSweeps.filter((s) => s.userId === id),
-  paymentRequestsOf: (id) => store.paymentRequestsForUser(id),
-  invoicesOf: (orgId) => store.invoicesOf(orgId),
-  invoicePayments: () => invoicePayments(store.invoices),
-  rulesOf: (orgId) => store.rulesOf(orgId),
-  ledgerOf: (orgId) => store.ledgerOf(orgId),
+  cryptoSendsOf: async (id) => (await store.list("cryptoSends")).filter((c) => c.userId === id && !c.safeOpId),
+  issueOrdersOf: async (id) => (await store.list("moneriumIssueOrders")).filter((o) => o.userId === id),
+  issueOrdersOfAccount: async (id) => (await store.list("moneriumIssueOrders")).filter((o) => o.accountId === id),
+  cryptoSendsOfAccount: async (a) => await companySends(await store.list("cryptoSends"), a),
+  sweepsOf: async (id) => (await store.list("conversionSweeps")).filter((s) => s.userId === id),
+  paymentRequestsOf: async (id) => await store.paymentRequestsForUser(id),
+  invoicesOf: async (orgId) => await store.invoicesOf(orgId),
+  invoicePayments: async () => invoicePayments(await store.list("invoices")),
+  rulesOf: async (orgId) => await store.rulesOf(orgId),
+  ledgerOf: async (orgId) => await store.ledgerOf(orgId),
   swapsHaveExecuted,
   added: () => {},
 };
@@ -128,36 +129,34 @@ function groupBy<T>(rows: readonly T[], key: (row: T) => string | undefined): Ma
 }
 
 /** A company send is the account's when its op spends from the account's Safe. */
-function companySends(sends: readonly CryptoSend[], account: Account): CryptoSend[] {
+async function companySends(sends: readonly CryptoSend[], account: Account): Promise<CryptoSend[]> {
   const safe = account.address?.toLowerCase();
-  return sends
-    .filter((c) => c.safeOpId && c.orgId === account.orgId && !!safe && store.findSafeOp(c.safeOpId)?.safeAddress.toLowerCase() === safe)
-    .map((c) => liveCryptoSend(c));
+  return await mapSeq((await filterSeq(sends, async (c) => c.safeOpId && c.orgId === account.orgId && !!safe && (await store.findSafeOp(c.safeOpId))?.safeAddress.toLowerCase() === safe)), async (c) => await liveCryptoSend(c));
 }
 
 /** Valid for one synchronous sweep: nothing else writes these tables meanwhile. */
-function groupedRows(): Rows {
-  const transfers = groupBy(store.transfers, (t) => t.userId);
+async function groupedRows(): Promise<Rows> {
+  const transfers = groupBy(await store.list("transfers"), (t) => t.userId);
   // A conversion's EURe output is not income (transfers/activity.ts).
-  const deposits = groupBy(withoutConversionOutputs(store.cryptoDeposits, store.transfers), (d) => d.userId);
-  const issueOrders = groupBy(store.moneriumIssueOrders, (o) => o.userId);
-  const accountIssueOrders = groupBy(store.moneriumIssueOrders, (o) => o.accountId);
-  const cryptoSends = groupBy(store.cryptoSends.filter((c) => !c.safeOpId), (c) => c.userId);
-  const orgSends = groupBy(store.cryptoSends.filter((c) => c.safeOpId), (c) => c.orgId);
-  const sweeps = groupBy(store.conversionSweeps, (s) => s.userId);
-  const paymentRequests = groupBy(store.paymentRequests, (r) => r.userId);
-  const invoices = groupBy(store.invoices, (i) => i.orgId);
-  const paid = invoicePayments(store.invoices);
-  const rules = groupBy(store.accountRules, (r) => r.orgId);
-  const ledger = groupBy(store.ledger, (e) => e.orgId);
-  const swaps = swapsHaveExecuted();
+  const deposits = groupBy(withoutConversionOutputs(await store.list("cryptoDeposits"), await store.list("transfers")), (d) => d.userId);
+  const issueOrders = groupBy(await store.list("moneriumIssueOrders"), (o) => o.userId);
+  const accountIssueOrders = groupBy(await store.list("moneriumIssueOrders"), (o) => o.accountId);
+  const cryptoSends = groupBy((await store.list("cryptoSends")).filter((c) => !c.safeOpId), (c) => c.userId);
+  const orgSends = groupBy((await store.list("cryptoSends")).filter((c) => c.safeOpId), (c) => c.orgId);
+  const sweeps = groupBy(await store.list("conversionSweeps"), (s) => s.userId);
+  const paymentRequests = groupBy(await store.list("paymentRequests"), (r) => r.userId);
+  const invoices = groupBy(await store.list("invoices"), (i) => i.orgId);
+  const paid = invoicePayments(await store.list("invoices"));
+  const rules = groupBy(await store.list("accountRules"), (r) => r.orgId);
+  const ledger = groupBy(await store.list("ledger"), (e) => e.orgId);
+  const swaps = await swapsHaveExecuted();
   return {
     transfersOf: (id) => transfers.get(id) ?? [],
     depositsOf: (id) => deposits.get(id) ?? [],
     cryptoSendsOf: (id) => cryptoSends.get(id) ?? [],
     issueOrdersOf: (id) => issueOrders.get(id) ?? [],
     issueOrdersOfAccount: (id) => accountIssueOrders.get(id) ?? [],
-    cryptoSendsOfAccount: (a) => companySends(orgSends.get(a.orgId) ?? [], a),
+    cryptoSendsOfAccount: async (a) => await companySends(orgSends.get(a.orgId) ?? [], a),
     sweepsOf: (id) => sweeps.get(id) ?? [],
     paymentRequestsOf: (id) => paymentRequests.get(id) ?? [],
     invoicesOf: (orgId) => invoices.get(orgId) ?? [],
@@ -175,14 +174,14 @@ function groupedRows(): Rows {
 
 /** Books exist only under an org, and an org always has a reporting zone: a
  *  line is never dated in a zone guessed for it. */
-function zoneOf(orgId: string): string {
-  const timeZone = store.findOrganisation(orgId)?.reporting?.timeZone;
+async function zoneOf(orgId: string): Promise<string> {
+  const timeZone = (await store.findOrganisation(orgId))?.reporting?.timeZone;
   if (!timeZone) throw new Error(`organisation ${orgId} has no reporting time zone`);
   return timeZone;
 }
 
-function inputsFor(user: User, rows: Rows): StatementInputs | undefined {
-  const books = booksFor(user.id);
+async function inputsFor(user: User, rows: Rows): Promise<StatementInputs | undefined> {
+  const books = await booksFor(user.id);
   if (!books) {
     if (!warned.has(user.id)) {
       warned.add(user.id);
@@ -195,23 +194,25 @@ function inputsFor(user: User, rows: Rows): StatementInputs | undefined {
     accountId: books.accountId,
     userId: user.id,
     safeAddress: user.address,
-    timeZone: zoneOf(books.orgId),
-    transfers: rows.transfersOf(user.id),
-    deposits: rows.depositsOf(user.id),
-    issueOrders: rows.issueOrdersOf(user.id),
-    sweeps: rows.sweepsOf(user.id),
-    invoices: rows.invoicesOf(books.orgId),
-    paymentRequests: rows.paymentRequestsOf(user.id),
-    cryptoSends: rows.cryptoSendsOf(user.id),
-    swapsHaveExecuted: rows.swapsHaveExecuted(),
+    timeZone: await zoneOf(books.orgId),
+    transfers: await rows.transfersOf(user.id),
+    deposits: await rows.depositsOf(user.id),
+    issueOrders: await rows.issueOrdersOf(user.id),
+    sweeps: await rows.sweepsOf(user.id),
+    invoices: await rows.invoicesOf(books.orgId),
+    paymentRequests: await rows.paymentRequestsOf(user.id),
+    cryptoSends: await rows.cryptoSendsOf(user.id),
+    swapsHaveExecuted: await rows.swapsHaveExecuted(),
   };
 }
 
 /** Project and write one user's lines. Returns what changed. */
-export function writeStatementLinesFor(user: User, rows: Rows = storeRows): { added: number; updated: number } {
-  const inp = inputsFor(user, rows);
-  if (!inp) return { added: 0, updated: 0 };
-  return writeProjected(inp, booksFor(user.id)?.since, rows);
+export async function writeStatementLinesFor(user: User, rows: Rows = storeRows): Promise<{ added: number; updated: number }> {
+  return store.tx(async () => {
+    const inp = await inputsFor(user, rows);
+    if (!inp) return { added: 0, updated: 0 };
+    return await writeProjected(inp, (await booksFor(user.id))?.since, rows);
+  });
 }
 
 /**
@@ -219,67 +220,77 @@ export function writeStatementLinesFor(user: User, rows: Rows = storeRows): { ad
  * lines are the bank credits booked to the account itself and the sends its
  * owners signed from its Safe.
  */
-export function writeAccountStatementLines(account: Account, rows: Rows = storeRows): { added: number; updated: number } {
-  const inp: StatementInputs = {
-    orgId: account.orgId,
-    accountId: account.id,
-    safeAddress: account.address!,
-    timeZone: zoneOf(account.orgId),
-    transfers: [],
-    deposits: [],
-    issueOrders: rows.issueOrdersOfAccount(account.id),
-    sweeps: [],
-    invoices: rows.invoicesOf(account.orgId),
-    paymentRequests: [],
-    cryptoSends: rows.cryptoSendsOfAccount(account),
-    companyPayouts: account.moneriumPayouts ?? [],
-    swapsHaveExecuted: rows.swapsHaveExecuted(),
-  };
-  return writeProjected(inp, undefined, rows);
+export async function writeAccountStatementLines(account: Account, rows: Rows = storeRows): Promise<{ added: number; updated: number }> {
+  return store.tx(async () => {
+    const inp: StatementInputs = {
+      orgId: account.orgId,
+      accountId: account.id,
+      safeAddress: account.address!,
+      timeZone: await zoneOf(account.orgId),
+      transfers: [],
+      deposits: [],
+      issueOrders: await rows.issueOrdersOfAccount(account.id),
+      sweeps: [],
+      invoices: await rows.invoicesOf(account.orgId),
+      paymentRequests: [],
+      cryptoSends: await rows.cryptoSendsOfAccount(account),
+      companyPayouts: account.moneriumPayouts ?? [],
+      swapsHaveExecuted: await rows.swapsHaveExecuted(),
+    };
+    return await writeProjected(inp, undefined, rows);
+  });
 }
 
-function writeProjected(inp: StatementInputs, since: string | undefined, rows: Rows): { added: number; updated: number } {
-  // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
-  const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
-  const existing = rows.ledgerOf(inp.orgId);
-  const { toAdd, toUpdate } = mergeStatementLines(existing, projected, rows.invoicePayments());
-  if (toAdd.length) {
-    const { entries } = applyRules(rows.rulesOf(inp.orgId), toAdd);
-    store.addLedgerEntries(entries);
-    rows.added(inp.orgId, entries);
-  }
-  for (const u of toUpdate) store.updateLedgerEntry(u.id, u.patch);
-  return { added: toAdd.length, updated: toUpdate.length };
+async function writeProjected(inp: StatementInputs, since: string | undefined, rows: Rows): Promise<{ added: number; updated: number }> {
+  return store.tx(async () => {
+    // Every ledger writer of the org takes this lock before it reads the rows it changes.
+    await store.lockKey(`ledger:${inp.orgId}`);
+    // Nothing from before the Safe's books start: an imported Safe's earlier life is not the account's.
+    const projected = projectStatementLines(inp).filter((e) => !since || e.at >= since);
+    // Merged against the sweep's snapshot first; with anything to write it is
+    // merged again against the ledger read under the lock, so a
+    // categorisation or a Beleg code committed since the snapshot is kept.
+    const paid = await rows.invoicePayments();
+    let { toAdd, toUpdate } = mergeStatementLines(await rows.ledgerOf(inp.orgId), projected, paid);
+    if (toAdd.length || toUpdate.length) ({ toAdd, toUpdate } = mergeStatementLines(await store.ledgerOf(inp.orgId), projected, paid));
+    if (toAdd.length) {
+      const { entries } = applyRules(await rows.rulesOf(inp.orgId), toAdd);
+      await store.addLedgerEntries(entries);
+      rows.added(inp.orgId, entries);
+    }
+    for (const u of toUpdate) await store.updateLedgerEntry(u.id, u.patch);
+    return { added: toAdd.length, updated: toUpdate.length };
+  });
 }
 
 let running = false;
 
 /** Every user, one at a time, landing as one file write at the end. */
-export function writeStatementLines(): { added: number; updated: number } {
+export async function writeStatementLines(): Promise<{ added: number; updated: number }> {
   if (running) return { added: 0, updated: 0 };
   running = true;
   try {
     let added = 0;
     let updated = 0;
     // One file write per sweep: a write per user re-serialised the whole store
-    // once for every user with a new line. The sweep is synchronous, and
-    // batched() writes on the way out even if a user's projection throws.
-    store.batched(() => {
-      const rows = groupedRows();
-      for (const u of store.users) {
+    // once for every user with a new line. The sweep reads only the store,
+    // and store.tx writes on the way out even if a user's projection throws.
+    await store.tx(async () => {
+      const rows = await groupedRows();
+      for (const u of (await store.list("users"))) {
         try {
-          const r = writeStatementLinesFor(u, rows);
+          const r = await writeStatementLinesFor(u, rows);
           added += r.added;
           updated += r.updated;
         } catch (err: any) {
           console.error(`bookkeeping: could not write statement lines for ${u.id}: ${describeCause(err)}`);
         }
       }
-      for (const a of store.accounts) {
+      for (const a of (await store.list("accounts"))) {
         const paidOut = (a.moneriumPayouts ?? []).some((p) => p.state === "sent");
-        if (!a.address || (!rows.issueOrdersOfAccount(a.id).length && !rows.cryptoSendsOfAccount(a).length && !paidOut)) continue;
+        if (!a.address || (!(await rows.issueOrdersOfAccount(a.id)).length && !(await rows.cryptoSendsOfAccount(a)).length && !paidOut)) continue;
         try {
-          const r = writeAccountStatementLines(a, rows);
+          const r = await writeAccountStatementLines(a, rows);
           added += r.added;
           updated += r.updated;
         } catch (err: any) {
@@ -299,13 +310,13 @@ export function writeStatementLines(): { added: number; updated: number } {
  * issue order the poller sees on our chain, so an order mirrored before this
  * table existed still gets its line on the next poll. Idempotent on the id.
  */
-export function noteMoneriumIssue(order: MoneriumOrderLike, holder: MoneyInHolder): MoneriumIssueRecord | undefined {
+export async function noteMoneriumIssue(order: MoneriumOrderLike, holder: MoneyInHolder): Promise<MoneriumIssueRecord | undefined> {
   const amountEur = moneriumAmountEur(order.amount);
   if (!amountEur) return undefined;
   const d = order.counterpart?.details ?? {};
   const name = d.name || d.companyName || [d.firstName, d.lastName].filter(Boolean).join(" ") || undefined;
   const processedAt = order.meta?.processedAt ?? order.meta?.placedAt ?? order.placedAt ?? order.createdAt ?? new Date().toISOString();
-  return store.recordMoneriumIssue({
+  return await store.recordMoneriumIssue({
     orderId: order.id,
     ...(holder.kind === "user" ? { userId: holder.user.id } : { accountId: holder.account.id }),
     amountEur,
@@ -318,6 +329,6 @@ export function noteMoneriumIssue(order: MoneriumOrderLike, holder: MoneyInHolde
 }
 
 /** The lines of one org, newest first, with the entry shape the routes serve. */
-export function statementLinesOf(orgId: string): LedgerEntry[] {
-  return store.ledgerOf(orgId).filter((e) => e.statement);
+export async function statementLinesOf(orgId: string): Promise<LedgerEntry[]> {
+  return (await store.ledgerOf(orgId)).filter((e) => e.statement);
 }

@@ -27,6 +27,7 @@ import { checkConnection } from "../adapters/monerium-sandbox.js";
 import { moneriumProfileState } from "./onboarding.js";
 import { maskIdentifier } from "./mask.js";
 import { redactedMessage } from "../http/log-cause.js";
+import { mapSeq } from "../seq.js";
 
 const asList = (v: any, key: string): any[] => (Array.isArray(v) ? v : Array.isArray(v?.[key]) ? v[key] : []);
 
@@ -70,8 +71,8 @@ export function moneriumAccountRow(u: User) {
 }
 
 /** Every SEPA payout's redeem order, as Zold recorded it. */
-function redeemOrdersOf(userId?: string) {
-  return store.transfers
+async function redeemOrdersOf(userId?: string) {
+  return (await store.list("transfers"))
     .filter((t) => t.rail === "sepa" && (!userId || t.userId === userId))
     .map((t) => ({
       transferId: t.id,
@@ -93,16 +94,16 @@ function redeemOrdersOf(userId?: string) {
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
-function moneriumAudit(userId?: string, limit = 200) {
-  return store
-    .auditFor(userId, 2000)
+async function moneriumAudit(userId?: string, limit = 200) {
+  return (await store
+    .auditFor(userId, 2000))
     .filter((e) => e.kind.startsWith("partner.") || e.kind.startsWith("account.monerium") || e.kind.startsWith("operator.monerium"))
     .filter((e) => !e.data?.partner || e.data.partner === "monerium")
     .slice(0, limit);
 }
 
 /** What Zold stored for one account. */
-export function storedMonerium(u: User) {
+export async function storedMonerium(u: User) {
   const m = u.monerium;
   return {
     row: moneriumAccountRow(u),
@@ -122,12 +123,12 @@ export function storedMonerium(u: User) {
     ibanBic: u.ibanBic,
     ibanMoves: u.moneriumIbanMoves ?? [],
     refusal: u.moneriumRefusal,
-    issueOrders: store.moneriumIssueOrders
+    issueOrders: (await store.list("moneriumIssueOrders"))
       .filter((r) => r.userId === u.id)
       .map((r) => ({ ...r, counterpartyIban: maskIdentifier(r.counterpartyIban) }))
       .sort((a, b) => Date.parse(b.processedAt) - Date.parse(a.processedAt)),
-    redeemOrders: redeemOrdersOf(u.id),
-    audit: moneriumAudit(u.id),
+    redeemOrders: await redeemOrdersOf(u.id),
+    audit: await moneriumAudit(u.id),
   };
 }
 
@@ -162,37 +163,36 @@ export async function liveMonerium(u: User, operator: string) {
     part(() => client.addresses()),
     part(() => client.orders(profileId)),
   ]);
-  store.audit(auditEntry("operator.monerium_read", { partner: "monerium", operator, profileId }, u.id));
+  await store.audit(auditEntry("operator.monerium_read", { partner: "monerium", operator, profileId }, u.id));
   return { available: true as const, readAt: new Date().toISOString(), context, profiles, profile, ibans, addresses, orders };
 }
 
 /** Deployment-wide Monerium picture: config, accounts, orders, audit. */
 export async function moneriumOverview(live: boolean) {
-  const accounts = store.users.filter((u) => u.monerium || u.funding?.moneriumProfileId || u.moneriumRefusal).map(moneriumAccountRow);
-  const orgAccounts = store.accounts
-    .filter((a) => a.moneriumProfile || a.provider === "monerium")
-    .map((a) => ({
+  const accounts = (await store.list("users")).filter((u) => u.monerium || u.funding?.moneriumProfileId || u.moneriumRefusal).map(moneriumAccountRow);
+  const orgAccounts = await mapSeq((await store.list("accounts"))
+    .filter((a) => a.moneriumProfile || a.provider === "monerium"), async (a) => ({
       accountId: a.id,
       orgId: a.orgId,
-      org: store.findOrganisation(a.orgId)?.name,
+      org: (await store.findOrganisation(a.orgId))?.name,
       label: a.label,
       status: a.status,
       backingUserId: a.backingUserId,
       profile: a.moneriumProfile,
       detail: a.detail,
     }));
-  const names = new Map(store.users.map((u) => [u.id, u.name]));
+  const names = new Map((await store.list("users")).map((u) => [u.id, u.name]));
   return {
     deployment: moneriumDeployment(),
     app: live ? await part(() => checkConnection()) : undefined,
     accounts,
     orgAccounts,
-    issueOrders: store.moneriumIssueOrders
+    issueOrders: (await store.list("moneriumIssueOrders"))
       .slice()
       .sort((a, b) => Date.parse(b.processedAt) - Date.parse(a.processedAt))
       .slice(0, 300)
       .map((r) => ({ ...r, counterpartyIban: maskIdentifier(r.counterpartyIban), userName: r.userId ? names.get(r.userId) : undefined })),
-    redeemOrders: redeemOrdersOf().slice(0, 300).map((r) => ({ ...r, userName: names.get(r.userId) })),
-    audit: moneriumAudit(undefined, 300).map((e) => ({ ...e, userName: e.userId ? names.get(e.userId) : undefined })),
+    redeemOrders: (await redeemOrdersOf()).slice(0, 300).map((r) => ({ ...r, userName: names.get(r.userId) })),
+    audit: (await moneriumAudit(undefined, 300)).map((e) => ({ ...e, userName: e.userId ? names.get(e.userId) : undefined })),
   };
 }

@@ -39,7 +39,7 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string
 
 /** requireUserSession is injected — server.ts owns authentication. */
 export interface UserDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 
@@ -152,19 +152,19 @@ const decisionAudit = (d: Decided, type: "individual" | "company") => ({
 });
 
 /** Write a decision that opened (or keeps) an account onto its row. */
-function applyDecision(userId: string, d: Decided, softSignals: any) {
+async function applyDecision(userId: string, d: Decided, softSignals: any): Promise<void> {
   const { decision } = d;
-  // One write: a segment saved without its country and answers could not be
-  // retried, as the route decides once.
-  store.batched(() => {
-  store.setSegment(userId, {
+  // One transaction: a segment saved without its country and answers could
+  // not be retried, as the route decides once.
+  await store.tx(async () => {
+  await store.setSegment(userId, {
     value: decision.segment,
     reasonCode: decision.reasonCode,
     decidedAt: new Date().toISOString(),
     decidedBy: "system",
     ...(decision.gate ? { gate: decision.gate } : {}),
   });
-  store.updateUser(userId, {
+  await store.updateUser(userId, {
     country: d.residence,
     ...(d.declaredCitizenships ? { citizenships: d.declaredCitizenships } : {}),
     ...(d.incorporation ? { companyIncorporationCountry: normaliseCountryCode(d.incorporation) } : {}),
@@ -182,7 +182,7 @@ function applyDecision(userId: string, d: Decided, softSignals: any) {
         }
       : {}),
   });
-  store.addUsAnswers(userId, {
+  await store.addUsAnswers(userId, {
     ...d.answers,
     answeredAt: new Date().toISOString(),
     version: d.combined ? US_QUESTION_COMBINED_VERSION : US_QUESTIONS_VERSION,
@@ -224,7 +224,7 @@ export function createUserRouter(deps: UserDeps) {
       // lookup ambiguous. A row with no passkey is onboarding that stopped
       // before any credential existed (nothing can sign in to it), so the same
       // person may start again after a failed ceremony.
-      if (emailHeldBy(store.usersByEmail(emailNorm), EMAIL_VERIFICATION.enabled)) {
+      if (emailHeldBy(await store.usersByEmail(emailNorm), EMAIL_VERIFICATION.enabled)) {
         return res.status(409).json({
           error: "an account already uses this email — sign in with your passkey, or recover the account if you lost the device",
           code: "EMAIL_IN_USE",
@@ -248,7 +248,7 @@ export function createUserRouter(deps: UserDeps) {
       // be auditable whether or not an account exists, and "we refused someone
       // and kept no record of why" is the failure this log exists to prevent.
       if (d?.decision.segment.startsWith("BLOCKED_")) {
-        store.audit(auditEntry("segment.decided", {
+        await store.audit(auditEntry("segment.decided", {
           ...decisionAudit(d, type),
           email: redact(emailNorm),
           outcome: "refused_at_signup",
@@ -286,11 +286,11 @@ export function createUserRouter(deps: UserDeps) {
           : { mode: "sandbox", status: "kyc_pending" },
         createdAt: new Date().toISOString(),
       };
-      store.addUser(user);
-      store.updateUser(user.id, { accountType: type, ...(orgName ? { companyName: orgName } : {}) });
-      if (d) applyDecision(user.id, d, req.body?.softSignals);
+      await store.addUser(user);
+      await store.updateUser(user.id, { accountType: type, ...(orgName ? { companyName: orgName } : {}) });
+      if (d) await applyDecision(user.id, d, req.body?.softSignals);
       else {
-        store.setSegment(user.id, { value: "UNDECIDED", reasonCode: "residence_not_given", decidedAt: new Date().toISOString(), decidedBy: "system" });
+        await store.setSegment(user.id, { value: "UNDECIDED", reasonCode: "residence_not_given", decidedAt: new Date().toISOString(), decidedBy: "system" });
       }
       // One consent per kind and partner, at most MAX_SIGNUP_CONSENTS, in one
       // write: the list comes from an unauthenticated body, and every store
@@ -301,9 +301,9 @@ export function createUserRouter(deps: UserDeps) {
         const partner = typeof c.partner === "string" && c.partner ? c.partner.slice(0, 80) : undefined;
         given.set(`${c.kind}:${partner ?? ""}`, { ...c, partner });
       }
-      store.batched(() => {
+      await store.tx(async () => {
         for (const c of given.values()) {
-          store.addConsent(user.id, {
+          await store.addConsent(user.id, {
             kind: c.kind,
             ...(c.partner ? { partner: c.partner } : {}),
             version: typeof c.version === "string" && c.version ? c.version.slice(0, 40) : CONSENT_VERSION,
@@ -313,21 +313,22 @@ export function createUserRouter(deps: UserDeps) {
           });
         }
       });
-      store.audit(auditEntry("segment.decided", {
+      await store.audit(auditEntry("segment.decided", {
         ...(d ? decisionAudit(d, type) : { accountType: type, segment: "UNDECIDED", reasonCode: "residence_not_given" }),
         softUsSignals: d?.decision.review?.softUsSignals ?? [],
         outcome: "account_created",
       }, user.id));
-      res.status(201).json(withSession(user));
+      // The row as stored: the segment, consents and patch above went onto it.
+      res.status(201).json(await withSession((await store.findUser(user.id))!));
     }),
   );
 
   router.get(
     "/users/:id",
     wrap(async (req, res) => {
-      let user = store.findUser(req.params.id);
+      let user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (user.funding?.status === "iban_pending") {
         user = await refreshPendingIban(user);
       } else {
@@ -335,7 +336,7 @@ export function createUserRouter(deps: UserDeps) {
         user = await verifyIbanBinding(user);
       }
       const balances = await accountBalances(user.address);
-      res.json({ ...publicUser(user), ...balances });
+      res.json({ ...(await publicUser(user)), ...balances });
     }),
   );
 
@@ -347,9 +348,12 @@ export function createUserRouter(deps: UserDeps) {
   router.post(
     "/users/:id/residence",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
-      if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      const found = await store.findUser(req.params.id);
+      if (!found) return res.status(404).json({ error: "user not found" });
+      if (!(await requireUserSession(req, res, found.id))) return;
+      // The row held: two answers sent at once decide the segment once.
+      return store.tx(async () => {
+      const user = (await store.lockUser(found.id))!;
       if (user.segment?.value !== "UNDECIDED") {
         return res.status(409).json({ code: "RESIDENCE_SET", error: "This account has already said where it is based." });
       }
@@ -364,13 +368,14 @@ export function createUserRouter(deps: UserDeps) {
       const d = decideSegment({ ...req.body, softSignals: undefined }, type);
       if ("refuse" in d) return res.status(400).json(d.refuse);
       const blocked = d.decision.segment.startsWith("BLOCKED_");
-      store.audit(auditEntry("segment.decided", {
+      await store.audit(auditEntry("segment.decided", {
         ...decisionAudit(d, type),
         outcome: blocked ? "refused_at_residence" : "residence_given",
       }, user.id));
       if (blocked) return res.status(403).json(blockedBody(d.decision.segment));
-      applyDecision(user.id, d, undefined);
-      res.json(publicUser(store.findUser(user.id)!));
+      await applyDecision(user.id, d, undefined);
+      res.json(await publicUser((await store.findUser(user.id))!));
+      });
     }),
   );
 
@@ -382,18 +387,18 @@ export function createUserRouter(deps: UserDeps) {
   router.patch(
     "/users/:id/name",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       const r = nameChange(user, req.body?.name);
       if ("code" in r) return res.status(r.status).json({ code: r.code, error: r.error });
-      const updated = store.updateUser(user.id, { name: r.name });
+      const updated = await store.updateUser(user.id, { name: r.name });
       // That it changed, not to what: the name itself is on the user row.
-      store.audit(auditEntry("user.name_changed", {}, user.id));
-      for (const { org } of store.organisationsForUser(user.id)) {
-        if (org.type === "personal") store.updateOrganisation(org.id, { name: r.name });
+      await store.audit(auditEntry("user.name_changed", {}, user.id));
+      for (const { org } of (await store.organisationsForUser(user.id))) {
+        if (org.type === "personal") await store.updateOrganisation(org.id, { name: r.name });
       }
-      res.json(publicUser(updated));
+      res.json(await publicUser(updated));
     }),
   );
 
@@ -406,9 +411,9 @@ export function createUserRouter(deps: UserDeps) {
   router.get(
     "/users/:id/bic",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (!user.iban) return res.json({ bic: null });
       const current = normalizeIban(user.iban);
       if (user.ibanBic && normalizeIban(user.ibanBic.iban) === current) return res.json({ bic: user.ibanBic.bic });
@@ -420,7 +425,7 @@ export function createUserRouter(deps: UserDeps) {
         return res.status(502).json({ error: "Monerium did not answer. Try again in a moment." });
       }
       if (!bic) return res.json({ bic: null });
-      store.updateUser(user.id, { ibanBic: { iban: current, bic, checkedAt: new Date().toISOString() } });
+      await store.updateUser(user.id, { ibanBic: { iban: current, bic, checkedAt: new Date().toISOString() } });
       res.json({ bic });
     }),
   );
@@ -428,9 +433,9 @@ export function createUserRouter(deps: UserDeps) {
   router.get(
     "/users/:id/kyc",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       res.json({
         userId: user.id,
         country: user.country,
@@ -461,9 +466,9 @@ export function createUserRouter(deps: UserDeps) {
   router.post(
     "/users/:id/privacy-bundle",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       // Fail closed before any record: nothing bills it or delivers it yet.
       if (!privacyBundleLive()) return res.status(503).json({ error: "privacy bundle is not available", code: "PRIVACY_BUNDLE_UNAVAILABLE" });
       if (!requireKycApproved(user, res)) return;
@@ -479,7 +484,7 @@ export function createUserRouter(deps: UserDeps) {
       }
 
       const now = new Date().toISOString();
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         privacyBundle: {
           planId: plan.id,
           // Nothing here bills or calls Kokio or Mysterium, so nothing is active yet.
@@ -505,27 +510,27 @@ export function createUserRouter(deps: UserDeps) {
           },
         },
       });
-      res.status(201).json({ user: publicUser(updated), plan: publicPlan });
+      res.status(201).json({ user: await publicUser(updated), plan: publicPlan });
     }),
   );
 
   router.post(
     "/users/:id/privacy-bundle/cancel",
     wrap(async (req, res) => {
-      const user = store.findUser(req.params.id);
+      const user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
-      if (!requireUserSession(req, res, user.id)) return;
+      if (!(await requireUserSession(req, res, user.id))) return;
       if (!user.privacyBundle || user.privacyBundle.status === "canceled") {
         return res.status(409).json({ error: "no active privacy bundle" });
       }
-      const updated = store.updateUser(user.id, {
+      const updated = await store.updateUser(user.id, {
         privacyBundle: {
           ...user.privacyBundle,
           status: "canceled",
           canceledAt: new Date().toISOString(),
         },
       });
-      res.json(publicUser(updated));
+      res.json(await publicUser(updated));
     }),
   );
 

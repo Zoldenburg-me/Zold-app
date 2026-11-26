@@ -12,10 +12,11 @@ import { activity, findDriftedLines } from "../../domain/drafts.js";
 import { expiredUnsigned } from "../../orchestrator.js";
 import { liveCryptoSend } from "../../wallet/org-debit.js";
 import type { DraftPayment, DraftState, Invoice } from "../../domain/types.js";
+import { mapSeq } from "../../seq.js";
 
 /** The org's address book, keyed by id, for the drift fingerprint check. */
-export const contactsById = (orgId: string) =>
-  new Map(store.contactsOf(orgId).map((c) => [c.id, c] as const));
+export const contactsById = async (orgId: string) =>
+  new Map((await store.contactsOf(orgId)).map((c) => [c.id, c] as const));
 
 /** What each line of a failed run did, by payee: the run shows nothing else per line, and a
  *  rebuilt run pays a sent line again. "Not sent" only where no payout can follow. */
@@ -44,10 +45,10 @@ const lineReport = (transfers: Transfer[]) => {
  * A draft's execution state, derived from the transfers it created.
  * Returns a view and writes nothing.
  */
-export const withExecutionState = (draft: DraftPayment) => {
+export const withExecutionState = async (draft: DraftPayment) => {
   if (draft.state === "EXECUTING" && draft.cryptoSendIds?.length) {
     // A company send reads its state from its op.
-    const sends = draft.cryptoSendIds.map((id) => store.findCryptoSend(id)).map((x) => x && liveCryptoSend(x));
+    const sends = await mapSeq((await mapSeq(draft.cryptoSendIds, async (id) => await store.findCryptoSend(id))), async (x) => x && (await liveCryptoSend(x)));
     // An unsigned send past its deadline can never be submitted.
     const dead = sends.filter((x) => !x || x.state === "FAILED" || (x.state === "CREATED" && x.deadline * 1000 < Date.now()));
     const state: DraftState = dead.length ? "FAILED" : sends.every((x) => x?.state === "SENT") ? "EXECUTED" : draft.state;
@@ -59,8 +60,7 @@ export const withExecutionState = (draft: DraftPayment) => {
     };
   }
   if (draft.state !== "EXECUTING" || !draft.transferIds?.length) return draft;
-  const transfers = draft.transferIds
-    .map((id) => store.findTransfer(id))
+  const transfers = (await mapSeq(draft.transferIds, async (id) => await store.findTransfer(id)))
     .filter((t): t is NonNullable<typeof t> => Boolean(t));
 
   const summary = transfers.map((t) => ({ id: t.id, state: t.state }));
@@ -88,81 +88,94 @@ export const withExecutionState = (draft: DraftPayment) => {
  * like a draft's execution state, so a row cannot claim PAID while the
  * payout sits in MANUAL_REVIEW.
  */
-export const syncInvoicePayment = (invoice: Invoice): Invoice => {
-  if (invoice.state !== "PAYING") return invoice;
-  const stored = invoice.payment?.cryptoSendId ? store.findCryptoSend(invoice.payment.cryptoSendId) : undefined;
-  const send = stored && liveCryptoSend(stored);
-  if (send) {
-    if (send.state === "SENT") {
-      return store.updateInvoice(invoice.id, {
-        state: "PAID",
-        payment: { ...invoice.payment, paidAt: send.updatedAt, txHash: send.txHash },
-      });
+export const syncInvoicePayment = async (invoice: Invoice): Promise<Invoice> => {
+  return store.tx(async () => {
+    // The row as stored, not the caller's copy; each move is from PAYING, so
+    // a second sync racing this one finds it moved and returns the row.
+    const stored0 = await store.findInvoice(invoice.id);
+    if (!stored0) return invoice;
+    invoice = stored0;
+    if (invoice.state !== "PAYING") return invoice;
+    const move = async (patch: Partial<Invoice>) =>
+      (await store.updateInvoiceFrom(invoice.id, ["PAYING"], patch)) ?? (await store.findInvoice(invoice.id))!;
+    const stored = invoice.payment?.cryptoSendId ? (await store.findCryptoSend(invoice.payment.cryptoSendId)) : undefined;
+    const send = stored && (await liveCryptoSend(stored));
+    if (send) {
+      if (send.state === "SENT") {
+        return await move({
+          state: "PAID",
+          payment: { ...invoice.payment, paidAt: send.updatedAt, txHash: send.txHash },
+        });
+      }
+      // An unsigned send past its deadline can never be submitted.
+      if (send.state === "FAILED" || (send.state === "CREATED" && send.deadline * 1000 < Date.now())) {
+        return await move({
+          state: "SUBMITTED",
+          payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined },
+        });
+      }
+      return invoice;
     }
-    // An unsigned send past its deadline can never be submitted.
-    if (send.state === "FAILED" || (send.state === "CREATED" && send.deadline * 1000 < Date.now())) {
-      return store.updateInvoice(invoice.id, {
+    // A send that no longer exists can never pay the link: it is to pay again.
+    if (invoice.payment?.cryptoSendId) {
+      return await move({ state: "SUBMITTED", payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined } });
+    }
+    const transfer = invoice.payment?.transferId ? (await store.findTransfer(invoice.payment.transferId)) : undefined;
+    if (transfer) {
+      if (transfer.state === "PAID") {
+        return await move({
+          state: "PAID",
+          payment: { ...invoice.payment, paidAt: transfer.updatedAt },
+        });
+      }
+      if (transfer.state === "FAILED" || transfer.state === "REFUNDED" || expiredUnsigned(transfer)) {
+        return await move({
+          state: "SUBMITTED",
+          payment: { ...invoice.payment, draftId: undefined, transferId: undefined },
+        });
+      }
+      return invoice;
+    }
+    const draft = invoice.payment?.draftId ? (await store.findDraft(invoice.payment.draftId)) : undefined;
+    if (!draft || draft.state === "FAILED" || draft.state === "REJECTED" || draft.state === "CANCELLED") {
+      return await move({
         state: "SUBMITTED",
-        payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined },
+        payment: { ...invoice.payment, draftId: undefined },
       });
     }
     return invoice;
-  }
-  // A send that no longer exists can never pay the link: it is to pay again.
-  if (invoice.payment?.cryptoSendId) {
-    return store.updateInvoice(invoice.id, { state: "SUBMITTED", payment: { ...invoice.payment, cryptoSendId: undefined, draftId: undefined } });
-  }
-  const transfer = invoice.payment?.transferId ? store.findTransfer(invoice.payment.transferId) : undefined;
-  if (transfer) {
-    if (transfer.state === "PAID") {
-      return store.updateInvoice(invoice.id, {
-        state: "PAID",
-        payment: { ...invoice.payment, paidAt: transfer.updatedAt },
-      });
-    }
-    if (transfer.state === "FAILED" || transfer.state === "REFUNDED" || expiredUnsigned(transfer)) {
-      return store.updateInvoice(invoice.id, {
-        state: "SUBMITTED",
-        payment: { ...invoice.payment, draftId: undefined, transferId: undefined },
-      });
-    }
-    return invoice;
-  }
-  const draft = invoice.payment?.draftId ? store.findDraft(invoice.payment.draftId) : undefined;
-  if (!draft || draft.state === "FAILED" || draft.state === "REJECTED" || draft.state === "CANCELLED") {
-    return store.updateInvoice(invoice.id, {
-      state: "SUBMITTED",
-      payment: { ...invoice.payment, draftId: undefined },
-    });
-  }
-  return invoice;
+  });
 };
 
-export const releaseInvoicesOf = (draftId: string) => {
-  for (const inv of store.invoices) {
-    if (inv.state === "PAYING" && inv.payment?.draftId === draftId && !inv.payment.transferId) {
-      store.updateInvoice(inv.id, { state: "SUBMITTED", payment: { ...inv.payment, draftId: undefined } });
+export const releaseInvoicesOf = async (draftId: string) => {
+  return store.tx(async () => {
+    for (const inv of (await store.list("invoices"))) {
+      if (inv.state === "PAYING" && inv.payment?.draftId === draftId && !inv.payment.transferId) {
+        await store.updateInvoiceFrom(inv.id, ["PAYING"], { state: "SUBMITTED", payment: { ...inv.payment, draftId: undefined } });
+      }
     }
-  }
+  });
 };
 
 /** Re-check a draft against the address book and park it if anything moved. */
-export const reconcileDrift = (draft: DraftPayment): DraftPayment => {
-  // Only a run not yet sending is parked: rewriting one that is sending would
-  // make it editable, and a second send could follow the first.
-  if (!["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA"].includes(draft.state)) return draft;
-  const drifted = findDriftedLines(draft, contactsById(draft.orgId));
-  if (!drifted.length) return draft;
-  return store.updateDraft(draft.id, {
-    state: "INVALID_DATA",
-    invalidLineIds: drifted,
-    activity: [
-      ...draft.activity,
-      activity(
+export const reconcileDrift = async (draft: DraftPayment): Promise<DraftPayment> => {
+  return store.tx(async () => {
+    // Only a run not yet sending is parked: rewriting one that is sending would
+    // make it editable, and a second send could follow the first.
+    if (!["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA"].includes(draft.state)) return draft;
+    const drifted = findDriftedLines(draft, await contactsById(draft.orgId));
+    if (!drifted.length) return draft;
+    // Never over a claim to execute: only from the states checked above, and
+    // only over the row the drift was found on.
+    const parked = await store.updateDraftFrom(draft.id, { state: "INVALID_DATA", invalidLineIds: drifted }, {
+      from: ["DRAFT", "PENDING_REVIEW", "REVIEWED", "INVALID_DATA"],
+      expectedUpdatedAt: draft.updatedAt,
+      activity: activity(
         "system",
         "invalid_data",
         `${drifted.length} line(s) point at a recipient that has changed since the draft was saved.`,
       ),
-    ],
+    });
+    return parked ?? (await store.findDraft(draft.id)) ?? draft;
   });
 };

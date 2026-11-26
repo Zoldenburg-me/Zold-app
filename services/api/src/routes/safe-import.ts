@@ -51,7 +51,7 @@ import { ownerChangeTxBuilderJson, txBuilderFileName } from "../wallet/safe-tx-b
 import { redactedMessage } from "../http/log-cause.js";
 
 export interface SafeImportDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
   /** Tests pass canned chain answers; production reads the smart-account chain. */
   reader?: () => ChainReader;
   /** Tests skip the relayed verifier deployment. */
@@ -111,8 +111,8 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
     if (address.toLowerCase() === plan.address.toLowerCase()) {
       throw new Refusal(400, "that is this account's own planned Safe — deploy it instead", "OWN_PLAN");
     }
-    const other = store.findUserByAddress(address) ??
-      store.users.find((u) => u.id !== user.id && u.passkeySafe?.address.toLowerCase() === address.toLowerCase());
+    const other = (await store.findUserByAddress(address)) ??
+      (await store.list("users")).find((u) => u.id !== user.id && u.passkeySafe?.address.toLowerCase() === address.toLowerCase());
     if (other && other.id !== user.id) throw new Refusal(409, "another account is already bound to that Safe", "ADDRESS_IN_USE");
     const planCode = await r.getCode(plan.address);
     if (planCode && planCode !== "0x") {
@@ -137,21 +137,23 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
     return res.status(502).json({ error: `chain read failed, nothing was changed: ${redactedMessage(err)}`, code: "RPC_FAILED" });
   };
 
-  const userFor = (req: express.Request, res: express.Response): User | undefined => {
-    const user = store.findUser(req.params.id);
-    if (!user) {
-      res.status(404).json({ error: "user not found" });
-      return undefined;
-    }
-    if (!deps.requireUserSession(req, res, user.id)) return undefined;
-    if (!requireCapability(user, "safe", res)) return undefined;
-    return user;
+  const userFor = async (req: express.Request, res: express.Response): Promise<User | undefined> => {
+    return store.tx(async () => {
+      const user = await store.findUser(req.params.id);
+      if (!user) {
+        res.status(404).json({ error: "user not found" });
+        return undefined;
+      }
+      if (!(await deps.requireUserSession(req, res, user.id))) return undefined;
+      if (!(await requireCapability(user, "safe", res))) return undefined;
+      return user;
+    });
   };
 
   router.post(
     "/users/:id/safe/import/prepare",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       try {
         const r = reader();
@@ -222,7 +224,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
   router.post(
     "/users/:id/safe/import/confirm",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       let bound: User;
       try {
@@ -268,12 +270,12 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           throw new Refusal(409, "the Safe's owners or threshold changed after you approved; check it again and approve the Safe as it is now", "SAFE_CHANGED");
         }
         const now = new Date().toISOString();
-        const alreadyBound = store.findUserByAddress(address) ??
-          store.users.find((u) => u.id !== user.id && u.passkeySafe?.address.toLowerCase() === address.toLowerCase());
+        const alreadyBound = (await store.findUserByAddress(address)) ??
+          (await store.list("users")).find((u) => u.id !== user.id && u.passkeySafe?.address.toLowerCase() === address.toLowerCase());
         if (alreadyBound && alreadyBound.id !== user.id) {
           throw new Refusal(409, "another account is already bound to that Safe", "ADDRESS_IN_USE");
         }
-        bound = store.updateUser(user.id, {
+        bound = await store.updateUser(user.id, {
           address,
           wallet: { type: "candide-safe", deployed: true },
           passkeySafe: {
@@ -292,7 +294,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
       // Same next step as a fresh deployment: the IBAN link is a passkey
       // ceremony the client drives ("Activate IBAN with passkey").
       if (bound.kycStatus === "approved" && !bound.iban && bound.funding?.status !== "active") {
-        bound = store.updateUser(user.id, {
+        bound = await store.updateUser(user.id, {
           funding: {
             ...(bound.funding ?? {}),
             mode: "sandbox",
@@ -301,7 +303,7 @@ export function createSafeImportRouter(deps: SafeImportDeps) {
           },
         });
       }
-      res.status(201).json(publicUser(bound));
+      res.status(201).json(await publicUser(bound));
     }),
   );
 

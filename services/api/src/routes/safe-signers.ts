@@ -44,7 +44,7 @@ import {
 import { checkOpAssertion } from "../http/passkey-assertion.js";
 
 export interface SafeSignerDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 const CEREMONY_TTL_MS = 5 * 60_000;
@@ -113,19 +113,19 @@ const toAssertion = (body: any) => ({
 export function createSafeSignerRouter(deps: SafeSignerDeps) {
   const router = express.Router();
 
-  const userFor = (req: express.Request, res: express.Response): User | undefined => {
-    const user = store.findUser(req.params.id);
+  const userFor = async (req: express.Request, res: express.Response): Promise<User | undefined> => {
+    const user = await store.findUser(req.params.id);
     if (!user) {
       res.status(404).json({ error: "user not found" });
       return undefined;
     }
-    if (!deps.requireUserSession(req, res, user.id)) return undefined;
+    if (!(await deps.requireUserSession(req, res, user.id))) return undefined;
     return user;
   };
 
   /** Load the user, plan and on-chain state, or answer the refusal. */
   const context = async (req: express.Request, res: express.Response) => {
-    const user = userFor(req, res);
+    const user = await userFor(req, res);
     if (!user) return null;
     try {
       const plan = activePlan(user);
@@ -312,7 +312,7 @@ export function createSafeSignerRouter(deps: SafeSignerDeps) {
   router.post(
     "/users/:id/safe/ops/:requestId",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       prune();
       const pending = pendingOps.get(req.params.requestId);

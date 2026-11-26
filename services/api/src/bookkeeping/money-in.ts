@@ -28,10 +28,10 @@ export function bookHolderLabel(holder: MoneyInHolder): string {
   return holder.kind === "user" ? `user:${holder.user.id}` : `account:${holder.account.id}`;
 }
 
-export function moneyInHolder(address: string): MoneyInResolution {
+export async function moneyInHolder(address: string): Promise<MoneyInResolution> {
   if (!address) return { kind: "none" };
-  const user = store.findUserByAddress(address);
-  const accounts = store.accountsAtAddress(address);
+  const user = await store.findUserByAddress(address);
+  const accounts = await store.accountsAtAddress(address);
   if (user) {
     const others = accounts.filter((a) => a.backingUserId !== user.id);
     if (others.length) {
@@ -44,7 +44,7 @@ export function moneyInHolder(address: string): MoneyInResolution {
     return { kind: "unbookable", reason: `${address} is ${accounts.length} accounts (${accounts.map((a) => a.id).join(", ")})` };
   }
   const [account] = accounts;
-  const org = store.findOrganisation(account.orgId);
+  const org = await store.findOrganisation(account.orgId);
   if (!org || orgEntity(org) !== "company" || account.currency !== "EUR" || account.backingUserId) {
     return { kind: "unbookable", reason: `${address} is account ${account.id}, which is not a company Safe's EUR account` };
   }

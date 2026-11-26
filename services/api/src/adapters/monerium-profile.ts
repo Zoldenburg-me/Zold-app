@@ -68,11 +68,8 @@ export async function readMoneriumProfile(user: User, profileId: string): Promis
   if (!one || one.id !== profileId || typeof one.kind !== "string" || typeof one.state !== "string") {
     throw unreachable();
   }
-  const fresh = store.findUser(user.id);
-  if (fresh?.monerium) {
-    store.updateUser(user.id, {
-      monerium: { ...fresh.monerium, profileSeen: { id: profileId, kind: one.kind, state: one.state, at: new Date().toISOString() } },
-    });
+  if ((await store.findUser(user.id))?.monerium) {
+    await store.patchUserSub(user.id, "monerium", (m) => (m ? { ...m, profileSeen: { id: profileId, kind: one.kind, state: one.state, at: new Date().toISOString() } } : m));
   }
   let name: string | undefined = typeof one.name === "string" ? one.name : undefined;
   if (!name) {
@@ -166,14 +163,14 @@ function isRefusal(v: unknown): v is ProfileRefusal {
 
 /** One audit entry per check, pass or refusal, so "which legal entity owned
  *  this IBAN when that payment went out" is answerable later. */
-export function auditProfileCheck(
+export async function auditProfileCheck(
   stage: "adopt" | "fund" | "recheck" | "execute",
   where: { orgId: string; accountId?: string },
   backingUserId: string,
   result: BackingCheck,
   actorId: string,
 ) {
-  store.audit(auditEntry("account.monerium_profile_checked", {
+  await store.audit(auditEntry("account.monerium_profile_checked", {
     stage,
     orgId: where.orgId,
     ...(where.accountId ? { accountId: where.accountId } : {}),

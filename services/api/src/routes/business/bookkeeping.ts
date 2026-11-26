@@ -35,7 +35,7 @@ import {
 /** Resolving the org and the caller's role for a request — injected so this
  *  module cannot acquire its own way of deciding who is calling. */
 export interface OrgRoutes {
-  ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+  ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
 
 /** Rows retried by one call of the bulk revalue: each is a price call, so a
@@ -51,12 +51,12 @@ const COST_BASIS_NOTES = [
 ];
 
 /** The cost basis over the organisation's whole ledger. */
-function basisOf(ctx: OrgContext) {
-  const ownAccounts = store.accounts
+async function basisOf(ctx: OrgContext) {
+  const ownAccounts = (await store.list("accounts"))
     .filter((a) => a.orgId === ctx.org.id && a.address)
     .map((a) => ({ chainId: CHAIN_ID, address: a.address! }));
-  const ownWallets = store.importedWalletsOf(ctx.org.id).map((w) => ({ chainId: w.chainId, address: w.address }));
-  return computeCostBasis(store.ledgerOf(ctx.org.id), { ownWallets, ownAccounts });
+  const ownWallets = (await store.importedWalletsOf(ctx.org.id)).map((w) => ({ chainId: w.chainId, address: w.address }));
+  return computeCostBasis(await store.ledgerOf(ctx.org.id), { ownWallets, ownAccounts });
 }
 
 /** A report month: four-digit year, two-digit month. */
@@ -66,112 +66,120 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
 
-  r.get("/:orgId/chart-of-accounts", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/chart-of-accounts", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "coa.manage")) return;
     if (!requirePermission(ctx, res, "coa.read")) return;
     res.json({
-      accounts: store.chartOf(ctx.org.id),
-      rules: store.rulesOf(ctx.org.id),
+      accounts: await store.chartOf(ctx.org.id),
+      rules: await store.rulesOf(ctx.org.id),
       txTypes: TX_TYPES,
     });
   });
 
-  r.post("/:orgId/chart-of-accounts", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "coa.manage")) return;
-    if (!requirePermission(ctx, res, "coa.manage")) return;
-    try {
-      const fields = validateChartAccount(req.body ?? {});
-      if (store.chartOf(ctx.org.id).some((c) => c.code === fields.code)) {
-        return res.status(409).json({ error: `Account code ${fields.code} is already in use.` });
+  r.post("/:orgId/chart-of-accounts", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "coa.manage")) return;
+      if (!requirePermission(ctx, res, "coa.manage")) return;
+      try {
+        const fields = validateChartAccount(req.body ?? {});
+        if ((await store.chartOf(ctx.org.id)).some((c) => c.code === fields.code)) {
+          return res.status(409).json({ error: `Account code ${fields.code} is already in use.` });
+        }
+        res.status(201).json({
+          account: await store.addChartAccount({
+            id: `coa_${randomUUID()}`,
+            orgId: ctx.org.id,
+            ...fields,
+            archived: false,
+            createdAt: new Date().toISOString(),
+          }),
+        });
+      } catch (err) {
+        if (badRequest(res, err)) return;
+        throw err;
       }
+    });
+  });
+
+  r.post("/:orgId/account-rules", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "coa.rules")) return;
+      if (!requirePermission(ctx, res, "coa.manage")) return;
+
+      const scope = String(req.body?.scope ?? "");
+      if (!["default", "wallet", "asset", "contact"].includes(scope)) {
+        return res
+          .status(400)
+          .json({ error: "Scope must be default, wallet, asset or contact." });
+      }
+      const accountCode = String(req.body?.accountCode ?? "");
+      if (!(await store.chartOf(ctx.org.id)).some((c) => c.code === accountCode)) {
+        return res.status(400).json({ error: `No account with code ${accountCode}.` });
+      }
+      const direction = ["in", "out", "both"].includes(String(req.body?.direction))
+        ? (String(req.body.direction) as "in" | "out" | "both")
+        : "both";
+      const walletId = req.body?.walletId ? String(req.body.walletId) : undefined;
+      if (walletId && !(await store.importedWalletsOf(ctx.org.id)).some((w) => w.id === walletId)) {
+        return res.status(400).json({ error: "No such imported wallet on this organisation." });
+      }
+      const contactId = req.body?.contactId ? String(req.body.contactId) : undefined;
+      if (contactId && !(await store.contactsOf(ctx.org.id)).some((c) => c.id === contactId)) {
+        return res.status(400).json({ error: "No such contact on this organisation." });
+      }
+
       res.status(201).json({
-        account: store.addChartAccount({
-          id: `coa_${randomUUID()}`,
+        rule: await store.addAccountRule({
+          id: `rule_${randomUUID()}`,
           orgId: ctx.org.id,
-          ...fields,
-          archived: false,
+          scope: scope as "default" | "wallet" | "asset" | "contact",
+          match: {
+            txType: req.body?.txType ? String(req.body.txType) : undefined,
+            walletId,
+            asset: req.body?.asset ? String(req.body.asset) : undefined,
+            contactId,
+          },
+          direction,
+          accountCode,
           createdAt: new Date().toISOString(),
         }),
       });
-    } catch (err) {
-      if (badRequest(res, err)) return;
-      throw err;
-    }
-  });
-
-  r.post("/:orgId/account-rules", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "coa.rules")) return;
-    if (!requirePermission(ctx, res, "coa.manage")) return;
-
-    const scope = String(req.body?.scope ?? "");
-    if (!["default", "wallet", "asset", "contact"].includes(scope)) {
-      return res
-        .status(400)
-        .json({ error: "Scope must be default, wallet, asset or contact." });
-    }
-    const accountCode = String(req.body?.accountCode ?? "");
-    if (!store.chartOf(ctx.org.id).some((c) => c.code === accountCode)) {
-      return res.status(400).json({ error: `No account with code ${accountCode}.` });
-    }
-    const direction = ["in", "out", "both"].includes(String(req.body?.direction))
-      ? (String(req.body.direction) as "in" | "out" | "both")
-      : "both";
-    const walletId = req.body?.walletId ? String(req.body.walletId) : undefined;
-    if (walletId && !store.importedWalletsOf(ctx.org.id).some((w) => w.id === walletId)) {
-      return res.status(400).json({ error: "No such imported wallet on this organisation." });
-    }
-    const contactId = req.body?.contactId ? String(req.body.contactId) : undefined;
-    if (contactId && !store.contactsOf(ctx.org.id).some((c) => c.id === contactId)) {
-      return res.status(400).json({ error: "No such contact on this organisation." });
-    }
-
-    res.status(201).json({
-      rule: store.addAccountRule({
-        id: `rule_${randomUUID()}`,
-        orgId: ctx.org.id,
-        scope: scope as "default" | "wallet" | "asset" | "contact",
-        match: {
-          txType: req.body?.txType ? String(req.body.txType) : undefined,
-          walletId,
-          asset: req.body?.asset ? String(req.body.asset) : undefined,
-          contactId,
-        },
-        direction,
-        accountCode,
-        createdAt: new Date().toISOString(),
-      }),
     });
   });
 
   /** Re-run the rules. Touches only rows a rule set before, never a human's. */
-  r.post("/:orgId/account-rules/apply", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "coa.rules")) return;
-    if (!requirePermission(ctx, res, "ledger.categorise")) return;
-    const { changed, entries } = applyRules(store.rulesOf(ctx.org.id), store.ledgerOf(ctx.org.id));
-    store.replaceLedgerEntries(entries);
-    res.json({
-      changed,
-      note: "Only automatically mapped rows were touched. Anything you categorised by hand was left alone.",
+  r.post("/:orgId/account-rules/apply", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "coa.rules")) return;
+      if (!requirePermission(ctx, res, "ledger.categorise")) return;
+      // Every ledger writer of the org takes this lock before it reads the rows it changes.
+      await store.lockKey(`ledger:${ctx.org.id}`);
+      const { changed, entries } = applyRules(await store.rulesOf(ctx.org.id), await store.ledgerOf(ctx.org.id));
+      await store.replaceLedgerEntries(entries);
+      res.json({
+        changed,
+        note: "Only automatically mapped rows were touched. Anything you categorised by hand was left alone.",
+      });
     });
   });
 
   // ── Ledger, assets, reports, export ───────────────────────────────────────
 
-  r.get("/:orgId/ledger", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/ledger", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "ledger.transactions")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
 
-    let entries = store.ledgerOf(ctx.org.id);
+    let entries = await store.ledgerOf(ctx.org.id);
     const { from, to, asset, direction, accountCode, tag } = req.query;
     if (from) entries = entries.filter((e) => e.at >= String(from));
     if (to) entries = entries.filter((e) => e.at <= String(to));
@@ -186,37 +194,40 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     });
   });
 
-  r.patch("/:orgId/ledger/:entryId", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "ledger.transactions")) return;
-    if (!requirePermission(ctx, res, "ledger.categorise")) return;
-    const entry = store.ledgerOf(ctx.org.id).find((e) => e.id === String(req.params.entryId));
-    if (!entry) return res.status(404).json({ error: "no such transaction" });
+  r.patch("/:orgId/ledger/:entryId", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "ledger.transactions")) return;
+      if (!requirePermission(ctx, res, "ledger.categorise")) return;
+      await store.lockKey(`ledger:${ctx.org.id}`);
+      const entry = (await store.ledgerOf(ctx.org.id)).find((e) => e.id === String(req.params.entryId));
+      if (!entry) return res.status(404).json({ error: "no such transaction" });
 
-    const patch: Record<string, unknown> = {};
-    if (req.body?.accountCode !== undefined) {
-      // Undo would bring back a code nobody saw being set.
-      if (isOwnTransfer(entry)) return res.status(409).json({ error: "This line is between your own accounts, so it has no category. Undo that first." });
-      const code = String(req.body.accountCode);
-      if (!store.chartOf(ctx.org.id).some((c) => c.code === code)) {
-        return res.status(400).json({ error: `No account with code ${code}.` });
+      const patch: Record<string, unknown> = {};
+      if (req.body?.accountCode !== undefined) {
+        // Undo would bring back a code nobody saw being set.
+        if (isOwnTransfer(entry)) return res.status(409).json({ error: "This line is between your own accounts, so it has no category. Undo that first." });
+        const code = String(req.body.accountCode);
+        if (!(await store.chartOf(ctx.org.id)).some((c) => c.code === code)) {
+          return res.status(400).json({ error: `No account with code ${code}.` });
+        }
+        patch.accountCode = code;
+        // A human set it, so a later rule run must not overwrite it.
+        patch.accountCodeAuto = false;
       }
-      patch.accountCode = code;
-      // A human set it, so a later rule run must not overwrite it.
-      patch.accountCodeAuto = false;
-    }
-    if (Array.isArray(req.body?.tags)) {
-      if (!requireCapability(ctx, res, "ledger.tags")) return;
-      patch.tags = req.body.tags.map(String);
-      // On a statement line this tag is the own-transfer mark, with its refusals.
-      if (entry.statement && (patch.tags as string[]).includes("internal") !== entry.tags.includes("internal")) {
-        return res.status(409).json({ error: "Use the own-transfer action to change whether this line is between your own accounts." });
+      if (Array.isArray(req.body?.tags)) {
+        if (!requireCapability(ctx, res, "ledger.tags")) return;
+        patch.tags = req.body.tags.map(String);
+        // On a statement line this tag is the own-transfer mark, with its refusals.
+        if (entry.statement && (patch.tags as string[]).includes("internal") !== entry.tags.includes("internal")) {
+          return res.status(409).json({ error: "Use the own-transfer action to change whether this line is between your own accounts." });
+        }
       }
-    }
-    if (typeof req.body?.note === "string") patch.note = req.body.note;
-    const updated = store.updateLedgerEntry(entry.id, patch);
-    res.json({ entry: { ...updated, accountCode: bookedCode(updated) } });
+      if (typeof req.body?.note === "string") patch.note = req.body.note;
+      const updated = await store.updateLedgerEntry(entry.id, patch);
+      res.json({ entry: { ...updated, accountCode: bookedCode(updated) } });
+    });
   });
 
   /**
@@ -224,21 +235,24 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
    * statement line only: on a wallet row the tag would change its cost basis.
    * Taken off a line whatever the line has become, so it can always be undone.
    */
-  r.put("/:orgId/ledger/:entryId/own-transfer", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requireCapability(ctx, res, "ledger.transactions")) return;
-    if (!requirePermission(ctx, res, "ledger.categorise")) return;
-    const entry = store.ledgerOf(ctx.org.id).find((e) => e.id === String(req.params.entryId) && e.statement);
-    if (!entry) return res.status(404).json({ error: "no such statement line" });
-    const own = req.body?.own;
-    if (typeof own !== "boolean") return res.status(400).json({ error: "own must be true or false" });
-    if (own && !ownTransferAllowed(entry, invoicePayments(store.invoices))) {
-      return res.status(409).json({ error: "This line is a fee, a reversal or an invoice payment, so it can't be a transfer between your own accounts." });
-    }
-    const others = entry.tags.filter((t) => t !== "internal");
-    const updated = store.updateLedgerEntry(entry.id, { tags: own ? [...others, "internal"] : others });
-    res.json({ line: publicStatementLine(updated) });
+  r.put("/:orgId/ledger/:entryId/own-transfer", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requireCapability(ctx, res, "ledger.transactions")) return;
+      if (!requirePermission(ctx, res, "ledger.categorise")) return;
+      await store.lockKey(`ledger:${ctx.org.id}`);
+      const entry = (await store.ledgerOf(ctx.org.id)).find((e) => e.id === String(req.params.entryId) && e.statement);
+      if (!entry) return res.status(404).json({ error: "no such statement line" });
+      const own = req.body?.own;
+      if (typeof own !== "boolean") return res.status(400).json({ error: "own must be true or false" });
+      if (own && !ownTransferAllowed(entry, invoicePayments(await store.list("invoices")))) {
+        return res.status(409).json({ error: "This line is a fee, a reversal or an invoice payment, so it can't be a transfer between your own accounts." });
+      }
+      const others = entry.tags.filter((t) => t !== "internal");
+      const updated = await store.updateLedgerEntry(entry.id, { tags: own ? [...others, "internal"] : others });
+      res.json({ line: await publicStatementLine(updated) });
+    });
   });
 
   /**
@@ -246,13 +260,13 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
    * valued. Each figure names the ledger rows behind it. A wallet that is
    * not proven to be the organisation's is still counted, and labelled.
    */
-  r.get("/:orgId/assets", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/assets", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "assets.costBasis")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
-    const basis = basisOf(ctx);
-    const wallets = store.importedWalletsOf(ctx.org.id);
+    const basis = await basisOf(ctx);
+    const wallets = await store.importedWalletsOf(ctx.org.id);
     const proof = new Map(wallets.map((w) => [w.id, proofStateOf(w)]));
     const proofOfLot = (walletId?: string) => (walletId ? proof.get(walletId) ?? "removed" : undefined);
     res.json({
@@ -267,7 +281,7 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
       shortfalls: basis.shortfalls,
       quantityOnly: basis.quantityOnly,
       unreadable: basis.unreadable,
-      needsValuation: revaluable(ctx.org.id).map((e) => ({
+      needsValuation: (await revaluable(ctx.org.id)).map((e) => ({
         entryId: e.id, at: e.at, direction: e.direction, asset: e.asset, amount: e.amount, chainId: e.chainId,
         token: e.token, txHash: e.txHash, note: e.note, walletId: e.source.kind === "wallet" ? e.source.walletId : undefined,
       })),
@@ -278,12 +292,12 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
   });
 
   /** Measured gains and losses per month, with every disposal behind them. */
-  r.get("/:orgId/reports/realised-gains", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/reports/realised-gains", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "assets.costBasis")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
-    const basis = basisOf(ctx);
+    const basis = await basisOf(ctx);
     try {
       res.json({
         timeZone: ctx.org.reporting.timeZone,
@@ -303,7 +317,7 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
 
   /** Ask the price feed again for a row synced without a value. */
   r.post("/:orgId/ledger/:entryId/revalue", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "ledger.transactions")) return;
     if (!requirePermission(ctx, res, "ledger.categorise")) return;
@@ -319,12 +333,12 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
    *  when more remain. A row that still has no price does not hold back the
    *  rows after it. */
   r.post("/:orgId/ledger/revalue", wrap(async (req, res) => {
-    const ctx = ctxOf(req, res);
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "ledger.transactions")) return;
     if (!requirePermission(ctx, res, "ledger.categorise")) return;
     const after = typeof req.body?.after === "string" ? req.body.after : "";
-    const rows = revaluable(ctx.org.id).filter((e) => e.id > after);
+    const rows = (await revaluable(ctx.org.id)).filter((e) => e.id > after);
     const page = rows.slice(0, REVALUE_BATCH);
     const results: { entryId: string; status: string; reason?: string; fiatValue?: string }[] = [];
     for (const row of page) {
@@ -340,8 +354,8 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     res.json({ results, remaining, ...(remaining ? { next: page[page.length - 1].id } : {}) });
   }));
 
-  r.get("/:orgId/reports/monthly-balance", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/reports/monthly-balance", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "reports.monthlyBalance")) return;
     if (!requirePermission(ctx, res, "reports.run")) return;
@@ -369,7 +383,7 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
       return res.status(400).json({ error: `to must not be before ${start}, the first month of the report.`, field: "to" });
     }
 
-    const rows = monthlyBalances(store.ledgerOf(ctx.org.id), { from: start, to });
+    const rows = monthlyBalances(await store.ledgerOf(ctx.org.id), { from: start, to });
     if (String(req.query.format) === "csv") {
       res.type("text/csv").attachment("monthly-balance.csv").send(toCsv(rows as never));
       return;
@@ -383,12 +397,12 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     });
   });
 
-  r.get("/:orgId/export/ledger.csv", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/export/ledger.csv", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requireCapability(ctx, res, "export.ledger")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
-    const rows = ledgerExportRows(store.ledgerOf(ctx.org.id));
+    const rows = ledgerExportRows(await store.ledgerOf(ctx.org.id));
     res
       .type("text/csv")
       .attachment("transactions.csv")

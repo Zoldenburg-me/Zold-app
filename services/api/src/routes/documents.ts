@@ -54,7 +54,7 @@ import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { redactedMessage } from "../http/log-cause.js";
 
 export interface DocumentsDeps {
-  requireUserSession: (req: express.Request, res: express.Response, userId: string) => unknown;
+  requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,8 +119,8 @@ export async function buildStatement(user: User, from: Date, to: Date): Promise<
     const t = Date.parse(at);
     return t >= from.getTime() && t <= to.getTime();
   };
-  const transfers = store.transfers.filter((t: Transfer) => t.userId === user.id);
-  const credits = store.cryptoDeposits.filter((d) => d.userId === user.id);
+  const transfers = (await store.list("transfers")).filter((t: Transfer) => t.userId === user.id);
+  const credits = (await store.list("cryptoDeposits")).filter((d) => d.userId === user.id);
   const mon = await moneriumOrdersFor(user);
   const lines = mergeLines(
     linesFromMoneriumOrders(mon.orders, user.address),
@@ -224,7 +224,7 @@ async function verifyDocument(doc: StoredDocument): Promise<{ ok: boolean; check
   }
   if (doc.snapshot.kind === "beleg") {
     const s = doc.snapshot;
-    const agree = belegRecordsAgree(s);
+    const agree = await belegRecordsAgree(s);
     checks.push({ name: "Records still match", ok: agree.ok, detail: agree.detail });
     if (s.receipt?.txHash && !HARNESS.enabled) {
       try {
@@ -270,20 +270,20 @@ const pendingOwnershipSignatures = new Map<string, { userId: string; documentId:
 export function createDocumentsRouter(deps: DocumentsDeps) {
   const router = express.Router();
 
-  const userFor = (req: express.Request, res: express.Response): User | undefined => {
-    const user = store.findUser(req.params.id);
+  const userFor = async (req: express.Request, res: express.Response): Promise<User | undefined> => {
+    const user = await store.findUser(req.params.id);
     if (!user) {
       res.status(404).json({ error: "user not found" });
       return undefined;
     }
-    if (!deps.requireUserSession(req, res, user.id)) return undefined;
+    if (!(await deps.requireUserSession(req, res, user.id))) return undefined;
     return user;
   };
 
   /** Checked before any chain read: a statement is about fifty of them. */
-  const underDocumentCeiling = (user: User, res: express.Response): boolean => {
+  const underDocumentCeiling = async (user: User, res: express.Response): Promise<boolean> => {
     const since = Date.now() - 24 * 60 * 60_000;
-    const today = store.documentsForUser(user.id).filter((d) => Date.parse(d.createdAt) > since).length;
+    const today = (await store.documentsForUser(user.id)).filter((d) => Date.parse(d.createdAt) > since).length;
     if (today < CEILINGS.documentsPerUserPerDay) return true;
     res.status(409).json(ceilingRefusal("documents made in the last 24 hours", CEILINGS.documentsPerUserPerDay));
     return false;
@@ -315,18 +315,18 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       snapshot,
       attestations: { zold: await signSnapshot(snapshot, code), ...(safe ? { safe } : {}) },
     };
-    store.addDocument(doc);
+    await store.addDocument(doc);
     return doc;
   };
 
   router.get(
     "/users/:id/documents",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       res.json({
-        documents: store
-          .documentsForUser(user.id)
+        documents: (await store
+          .documentsForUser(user.id))
           .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
           .map((d) => ({ ...publicDocument(d), snapshot: undefined, summary: summarise(d) })),
       });
@@ -336,10 +336,10 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
   router.post(
     "/users/:id/documents/receipt",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
-      const transfer = store.findTransfer(String(req.body?.transferId ?? ""));
+      if (!hasAccountOfRecord(user, res) || !(await underDocumentCeiling(user, res))) return;
+      const transfer = await store.findTransfer(String(req.body?.transferId ?? ""));
       if (!transfer || transfer.userId !== user.id) return res.status(404).json({ error: "transfer not found" });
       let snapshot: ReceiptSnapshot;
       try {
@@ -354,9 +354,9 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
   router.post(
     "/users/:id/documents/statement",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
-      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !(await underDocumentCeiling(user, res))) return;
       const { from, to } = periodFrom(req.body);
       if (!from || !to || from >= to) return res.status(400).json({ error: "from and to must be ISO dates with from before to" });
       if (to.getTime() - from.getTime() > 400 * 24 * 3600_000) return res.status(400).json({ error: "a statement covers at most one year" });
@@ -368,10 +368,10 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
   router.post(
     "/users/:id/documents/balance",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       if (!mayIssueHolderLetter(user, res)) return;
-      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !(await underDocumentCeiling(user, res))) return;
       const snapshot = await buildBalance(user);
       res.status(201).json(publicDocument(await issue(user, snapshot)));
     }),
@@ -382,10 +382,10 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
   router.post(
     "/users/:id/documents/ownership",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       if (!mayIssueHolderLetter(user, res)) return;
-      if (!hasAccountOfRecord(user, res) || !underDocumentCeiling(user, res)) return;
+      if (!hasAccountOfRecord(user, res) || !(await underDocumentCeiling(user, res))) return;
       const holder = holderBlock(user);
       const date = new Date().toISOString().slice(0, 10);
       const code = newDocumentCode();
@@ -404,7 +404,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
         snapshot,
         attestations: { zold: await signSnapshot(snapshot, code) },
       };
-      store.addDocument(doc);
+      await store.addDocument(doc);
       const out: Record<string, unknown> = publicDocument(doc);
       const plan = user.passkeySafe;
       if (plan?.status === "active" && user.passkey?.publicKey && user.address.toLowerCase() === plan.address.toLowerCase()) {
@@ -428,13 +428,13 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
   router.post(
     "/users/:id/documents/ownership/:requestId",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
       const pending = pendingOwnershipSignatures.get(req.params.requestId);
       if (!pending || pending.userId !== user.id || pending.expiresAt < Date.now()) {
         return res.status(404).json({ error: "ownership signature request not found or expired" });
       }
-      const doc = store.documents.find((d) => d.id === pending.documentId);
+      const doc = (await store.list("documents")).find((d) => d.id === pending.documentId);
       if (!doc) return res.status(404).json({ error: "document not found" });
       const { authenticatorData, clientDataJSON, signature } = req.body ?? {};
       if (!authenticatorData || !clientDataJSON || !signature) {
@@ -457,7 +457,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       } catch (err: any) {
         return res.status(401).json({ error: redactedMessage(err) });
       }
-      if (!store.recordPasskeyUse(user.id, passkey.credentialId, signCount)) {
+      if (!(await store.recordPasskeyUse(user.id, passkey.credentialId, signCount))) {
         return res.status(401).json({ error: "this passkey is no longer the account's passkey" });
       }
       const plan = user.passkeySafe as PasskeySafeDeploymentPlan;
@@ -467,7 +467,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
         signature: b64urlToBuf(signature),
       });
       pendingOwnershipSignatures.delete(req.params.requestId);
-      const updated = store.updateDocument(doc.id, {
+      const updated = await store.updateDocument(doc.id, {
         attestations: {
           ...doc.attestations,
           safe: { address: plan.address, message: pending.message, signature: safeSig, signedAt: new Date().toISOString() },
@@ -480,11 +480,11 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
   router.delete(
     "/users/:id/documents/:code",
     wrap(async (req, res) => {
-      const user = userFor(req, res);
+      const user = await userFor(req, res);
       if (!user) return;
-      const doc = store.findDocumentByCode(normaliseCode(req.params.code));
+      const doc = await store.findDocumentByCode(normaliseCode(req.params.code));
       if (!doc || doc.userId !== user.id) return res.status(404).json({ error: "document not found" });
-      store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
+      await store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
       res.json({ revoked: true });
     }),
   );
@@ -496,7 +496,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       res.setHeader("X-Robots-Tag", "noindex, nofollow");
       if (!isDocumentCode(req.params.code)) return res.status(404).json({ error: "no such document" });
-      const doc = store.findDocumentByCode(normaliseCode(req.params.code));
+      const doc = await store.findDocumentByCode(normaliseCode(req.params.code));
       if (!doc) return res.status(404).json({ error: "no such document" });
       const verification = await verifyDocument(doc);
       res.json({ ...publicDocument(doc), parties: PARTIES, verification, verifiedAt: new Date().toISOString(), chainId: CHAIN_ID });
@@ -512,10 +512,10 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       res.setHeader("X-Robots-Tag", "noindex, nofollow");
       if (!isDocumentCode(req.params.code)) return res.status(404).json({ error: "no such document" });
-      const doc = store.findDocumentByCode(normaliseCode(req.params.code));
+      const doc = await store.findDocumentByCode(normaliseCode(req.params.code));
       if (!doc || doc.snapshot.kind !== "beleg") return res.status(404).json({ error: "no such document" });
       if (doc.revokedAt) return res.status(410).json({ error: "the holder revoked this document", revoked: true });
-      if (!belegRecordsAgree(doc.snapshot).ok) return res.status(409).json({ error: "this document no longer matches the books; open its page to see why", verifies: false });
+      if (!(await belegRecordsAgree(doc.snapshot)).ok) return res.status(409).json({ error: "this document no longer matches the books; open its page to see why", verifies: false });
       res
         .status(200)
         .type("application/pdf")

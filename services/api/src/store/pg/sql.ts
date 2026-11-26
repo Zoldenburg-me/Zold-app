@@ -14,10 +14,70 @@ export interface Sql {
   exec(text: string): Promise<unknown>;
 }
 
+/** A transaction's connection: `savepoint` runs `fn` so that its failure
+ *  undoes only its own statements and leaves the transaction usable. */
+export interface TxSql extends Sql {
+  savepoint<T>(fn: () => Promise<T>): Promise<T>;
+}
+
 export interface Database extends Sql {
-  /** BEGIN … COMMIT around `fn`, ROLLBACK when it throws. READ COMMITTED. */
-  tx<T>(fn: (q: Sql) => Promise<T>): Promise<T>;
+  /**
+   * BEGIN … COMMIT around `fn`, ROLLBACK when it throws. READ COMMITTED. A
+   * statement that failed inside it (and was not undone by a savepoint)
+   * fails the transaction even if `fn` caught the error: Postgres has
+   * aborted it, and its COMMIT would roll back without saying so.
+   */
+  tx<T>(fn: (q: TxSql) => Promise<T>): Promise<T>;
   close(): Promise<void>;
+}
+
+/**
+ * `raw` as a transaction's connection that remembers a failed statement, with
+ * savepoints. Savepoints are taken one after another (store/backend.ts runs
+ * the nested transactions of one parent in turn), so they nest.
+ */
+function txSql(raw: Sql): { q: TxSql; failed: () => unknown } {
+  let failed: unknown;
+  let n = 0;
+  const run = async <R>(p: Promise<R>): Promise<R> => {
+    try {
+      return await p;
+    } catch (err) {
+      failed ??= err;
+      throw err;
+    }
+  };
+  const q: TxSql = {
+    query: (text, params) => run(raw.query(text, params)),
+    exec: (text) => run(raw.exec(text)),
+    async savepoint(fn) {
+      const name = `zold_sp_${++n}`;
+      await q.query(`SAVEPOINT ${name}`);
+      const before = failed;
+      try {
+        const out = await fn();
+        await q.query(`RELEASE SAVEPOINT ${name}`);
+        return out;
+      } catch (err) {
+        // Back to the savepoint: what failed inside it is undone, and the
+        // transaction can go on. If that fails too, the transaction is lost.
+        await raw.query(`ROLLBACK TO SAVEPOINT ${name}`);
+        failed = before;
+        throw err;
+      }
+    },
+  };
+  return { q, failed: () => failed };
+}
+
+/** Run `fn` on a transaction's connection; refuse to commit after a failed statement. */
+async function inTx<T>(raw: Sql, fn: (q: TxSql) => Promise<T>): Promise<T> {
+  const { q, failed } = txSql(raw);
+  const out = await fn(q);
+  if (failed()) {
+    throw new Error("a statement in this transaction failed and the error was caught; the transaction is rolled back", { cause: failed() });
+  }
+  return out;
 }
 
 /** What PGlite offers, by shape (`@electric-sql/pglite`'s PGlite class). */
@@ -30,10 +90,13 @@ export function pgliteDatabase(db: PgliteLike): Database {
   return {
     query: (text, params) => db.query(text, params),
     exec: (text) => db.exec(text),
-    tx: (fn) => db.transaction((t) => fn(t)),
+    tx: (fn) => db.transaction((t) => inTx(t, fn)),
     close: () => db.close(),
   };
 }
+
+/** How long an application transaction waits for a row or advisory lock (§3). */
+export const LOCK_TIMEOUT = "10s";
 
 export function poolDatabase(pool: pg.Pool): Database {
   // An idle client's error (a restart, pg_terminate_backend, a socket reset)
@@ -49,16 +112,31 @@ export function poolDatabase(pool: pg.Pool): Database {
     async tx(fn) {
       const client = await pool.connect();
       let broken: Error | undefined;
+      // The connection lost while this transaction holds it: the statement in
+      // flight rejects and the transaction fails. Without a listener the
+      // client's own 'error' event would end the process.
+      const lost = (err: Error) => {
+        broken ??= err;
+      };
+      client.on("error", lost);
       try {
         // Named, not inherited: a role or database default of REPEATABLE READ
         // would keep one snapshot for the whole transaction, and a write that
         // waited on a lock would not see what the holder committed (§2).
         await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
-        const out = await fn({
-          query: async (text, params) => client.query(text, params as unknown[]) as never,
-          // No parameters: the simple protocol, which takes several statements.
-          exec: (text) => client.query(text),
-        });
+        // A transaction spans no partner I/O (§3), so a lock it waits for is
+        // held for milliseconds; one still held after LOCK_TIMEOUT is a bug or
+        // a stuck session, and the request fails (55P03) instead of queueing
+        // every later one behind it. Advisory locks count too.
+        await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
+        const out = await inTx(
+          {
+            query: async (text, params) => client.query(text, params as unknown[]) as never,
+            // No parameters: the simple protocol, which takes several statements.
+            exec: (text) => client.query(text),
+          },
+          fn,
+        );
         await client.query("COMMIT");
         return out;
       } catch (err) {
@@ -69,6 +147,7 @@ export function poolDatabase(pool: pg.Pool): Database {
         });
         throw err;
       } finally {
+        client.off("error", lost);
         client.release(broken);
       }
     },

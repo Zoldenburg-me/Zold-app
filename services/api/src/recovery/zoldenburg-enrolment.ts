@@ -195,17 +195,19 @@ const inFlight = new Set<string>();
  * leaves the account armed as before.
  */
 export async function checkEnrolment(userId: string, reads: EnrolmentReads = moneriumReads, now = new Date()): Promise<EnrolmentOutcome> {
-  const user = store.findUser(userId);
+  const user = await store.findUser(userId);
   const code = user?.zoldenburgEnrolment?.code;
   if (!user || !code || now.getTime() >= Date.parse(code.expiresAt) || !enrolmentAvailable()) return "no_code";
   if (inFlight.has(userId)) return "waiting";
   inFlight.add(userId);
-  const record = (outcome: "waiting" | "mismatch" | "unreadable", reason: string) => {
-    const fresh = store.findUser(userId)!;
-    // A newer code issued while this check ran owns the row now.
-    if (fresh.zoldenburgEnrolment?.code?.hash !== code.hash) return outcome;
-    store.updateUser(userId, { zoldenburgEnrolment: { ...fresh.zoldenburgEnrolment, lastCheck: { at: now.toISOString(), outcome, reason } } });
-    return outcome;
+  const record = async (outcome: "waiting" | "mismatch" | "unreadable", reason: string) => {
+    return store.tx(async () => {
+      const fresh = (await store.lockUser(userId))!;
+      // A newer code issued while this check ran owns the row now.
+      if (fresh.zoldenburgEnrolment?.code?.hash !== code.hash) return outcome;
+      await store.updateUser(userId, { zoldenburgEnrolment: { ...fresh.zoldenburgEnrolment, lastCheck: { at: now.toISOString(), outcome, reason } } });
+      return outcome;
+    });
   };
   try {
     let orders: MoneriumOrderLike[];
@@ -213,17 +215,17 @@ export async function checkEnrolment(userId: string, reads: EnrolmentReads = mon
       orders = await inTime(reads.orders(user));
     } catch (err) {
       console.warn(`enrolment: could not read orders for ${user.id}: ${describeCause(err)}`);
-      return record("unreadable", "We could not read your payments at Monerium. If this stays, connect Monerium again.");
+      return await record("unreadable", "We could not read your payments at Monerium. If this stays, connect Monerium again.");
     }
     const found = candidateOrders(orders, user);
-    if (!found.length) return record("waiting", "No payment with your code has arrived yet. A bank transfer can take a working day.");
+    if (!found.length) return await record("waiting", "No payment with your code has arrived yet. A bank transfer can take a working day.");
     let name: string | undefined;
     try {
       name = await inTime(reads.profileName(user));
     } catch (err) {
       console.warn(`enrolment: could not read the Monerium profile for ${user.id}: ${describeCause(err)}`);
     }
-    if (!name) return record("unreadable", "Your payment arrived, but we could not read your verified name at Monerium. We will try again.");
+    if (!name) return await record("unreadable", "Your payment arrived, but we could not read your verified name at Monerium. We will try again.");
     let reason = "";
     for (const o of found) {
       const verdict = judgeEnrolmentOrder(o, user, name);
@@ -231,9 +233,9 @@ export async function checkEnrolment(userId: string, reads: EnrolmentReads = mon
         reason = verdict.reason;
         continue;
       }
-      if (store.findUser(userId)!.zoldenburgEnrolment?.code?.hash !== code.hash) return "no_code";
+      if ((await store.findUser(userId))!.zoldenburgEnrolment?.code?.hash !== code.hash) return "no_code";
       // The code is spent: the new row replaces the old one whole.
-      store.updateUser(userId, {
+      await store.updateUser(userId, {
         zoldenburgEnrolment: {
           bankAccountHmac: bankAccountHmac(verdict.iban),
           keyId: ibanKeyId(),
@@ -245,7 +247,7 @@ export async function checkEnrolment(userId: string, reads: EnrolmentReads = mon
       console.log(`enrolment: ${user.id} armed Zoldenburg recovery (order ${o.id})`);
       return "enrolled";
     }
-    return record("mismatch", reason);
+    return await record("mismatch", reason);
   } finally {
     inFlight.delete(userId);
   }
@@ -255,7 +257,7 @@ export async function checkEnrolment(userId: string, reads: EnrolmentReads = mon
 export async function sweepEnrolments(reads: EnrolmentReads = moneriumReads, sweepNow?: Date): Promise<number> {
   if (!enrolmentAvailable()) return 0;
   let armed = 0;
-  for (const u of [...store.users]) {
+  for (const u of [...await store.list("users")]) {
     const code = u.zoldenburgEnrolment?.code;
     // Each account's own time: a slow sweep must not judge a later account
     // by the clock at its start.
@@ -288,14 +290,16 @@ export function enrolmentView(user: User, now = new Date()) {
 }
 
 /** Issue a code, replacing any open one. The plain code is returned once. */
-export function issueEnrolmentCode(user: User, now = new Date()): { code: string; memo: string } {
-  const { code, hash } = newEnrolmentCode();
-  const { lastCheck: _drop, ...rest } = store.findUser(user.id)!.zoldenburgEnrolment ?? {};
-  store.updateUser(user.id, {
-    zoldenburgEnrolment: {
-      ...rest,
-      code: { hash, issuedAt: now.toISOString(), expiresAt: new Date(now.getTime() + ENROLMENT.codeTtlMs).toISOString() },
-    },
+export async function issueEnrolmentCode(user: User, now = new Date()): Promise<{ code: string; memo: string }> {
+  return store.tx(async () => {
+    const { code, hash } = newEnrolmentCode();
+    const { lastCheck: _drop, ...rest } = (await store.lockUser(user.id))!.zoldenburgEnrolment ?? {};
+    await store.updateUser(user.id, {
+      zoldenburgEnrolment: {
+        ...rest,
+        code: { hash, issuedAt: now.toISOString(), expiresAt: new Date(now.getTime() + ENROLMENT.codeTtlMs).toISOString() },
+      },
+    });
+    return { code, memo: memoFor(code) };
   });
-  return { code, memo: memoFor(code) };
 }

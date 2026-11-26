@@ -13,11 +13,18 @@
  * ./store/db.ts; both are re-exported here.
  */
 import { randomUUID } from "node:crypto";
-import { batched, db, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
+import { mkdirSync } from "node:fs";
+import { beginWrites, DATA_DIR, db, endWrites, initStore as initJsonStore, persist, pruneSessions, seedChartOfAccounts, type Db } from "./store/db.js";
+import { jsonBackend, type StoreBackend } from "./store/backend.js";
+import { createPgStore } from "./store/pg/backend.js";
+import { assertSchemaCurrent } from "./store/pg/migrate.js";
+import { openPool, pgPoolConfig, type Database } from "./store/pg/sql.js";
+import { DATABASE_CA, DATABASE_URL, IS_REAL_MONEY_CHAIN, STORE_BACKEND } from "./config/env.js";
 import { auditEntry } from "./audit.js";
 import type {
   Account,
   AccountRule,
+  DraftActivity,
   ChartAccount,
   Contact,
   DraftPayment,
@@ -32,12 +39,20 @@ import {
   applyOrgSafePlan,
   applyReplacedOrgSafePlan,
   applyReviewResolution,
+  acceptInviteOnRow,
   applyUserPatch,
+  cancelUnpaidOnRow,
   checkReviewResolution,
+  draftPatchOnRow,
+  refuseActivityPatch,
+  settlementOnRow,
+  transferPatchOnRow,
+  type DraftCondition,
   followIban,
-  guardTransferPatch,
-  hashOnRecordIn,
+    hashOnRecordIn,
   passkeyUsePatch,
+  quoteConsumable,
+  emailCodeAttemptPatch,
   reviewRefundTx,
   sessionDead,
   type ReviewResolution,
@@ -53,6 +68,8 @@ import type {
   OperatorCredential,
   OperatorSession,
   PaymentRequest,
+  PendingExecution,
+  PendingExecutionKind,
   PendingSafeOp,
   Quote,
   ReceiptShare,
@@ -69,43 +86,60 @@ import type {
 import { describeCause } from "./http/log-cause.js";
 
 export * from "./store/types.js";
-export { initStore } from "./store/db.js";
 
 export { REVIEW_EVIDENCE_MAX, REVIEW_NOTE_MAX, REVIEW_NOTE_MIN } from "./store/rules.js";
 
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
 
+/** Approvals waiting for a passkey, by `kind:id` — see store.putPendingExecution.
+ *  In memory on db.json: a restart drops them and the approval answers 410. */
+const pendingExecutions = new Map<string, PendingExecution>();
+
 /** Called after a transfer's state changed and was persisted. */
-type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void;
+type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void | Promise<void>;
 const transferStateListeners: TransferStateListener[] = [];
+
+/** State changes written but not yet announced: listeners run once the
+ *  write is on disk and the store is free again (store/backend.ts). */
+const announcements: (() => void)[] = [];
 
 /** A listener's failure is logged, never thrown into the write that moved the
  *  state: the change is already on disk. */
 function announceStateChange(t: Transfer, from: Transfer["state"]) {
   if (t.state === from) return;
-  for (const listener of transferStateListeners) {
-    try {
-      listener(t, from);
-    } catch (err) {
-      console.error(`store: transfer state listener failed for ${t.id}: ${describeCause(err)}`);
+  const row = structuredClone(t);
+  announcements.push(() => {
+    for (const listener of transferStateListeners) {
+      try {
+        Promise.resolve(listener(row, from)).catch((err) =>
+          console.error(`store: transfer state listener failed for ${row.id}: ${describeCause(err)}`),
+        );
+      } catch (err) {
+        console.error(`store: transfer state listener failed for ${row.id}: ${describeCause(err)}`);
+      }
     }
-  }
+  });
 }
 
-type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void;
+type PaymentRequestStateListener = (r: PaymentRequest, from: PaymentRequest["state"]) => void | Promise<void>;
 const paymentRequestStateListeners: PaymentRequestStateListener[] = [];
 
 /** As for transfers: logged, never thrown into the write. */
 function announcePaymentRequestState(r: PaymentRequest, from: PaymentRequest["state"]) {
   if (r.state === from) return;
-  for (const listener of paymentRequestStateListeners) {
-    try {
-      listener(r, from);
-    } catch (err) {
-      console.error(`store: payment request state listener failed for ${r.id}: ${describeCause(err)}`);
+  const row = structuredClone(r);
+  announcements.push(() => {
+    for (const listener of paymentRequestStateListeners) {
+      try {
+        Promise.resolve(listener(row, from)).catch((err) =>
+          console.error(`store: payment request state listener failed for ${row.id}: ${describeCause(err)}`),
+        );
+      } catch (err) {
+        console.error(`store: payment request state listener failed for ${row.id}: ${describeCause(err)}`);
+      }
     }
-  }
+  });
 }
 
 /** Which record already holds `hash` (store/rules.ts hashOnRecordIn). */
@@ -113,31 +147,50 @@ function hashOnRecord(hash: string, userId: string): string | undefined {
   return hashOnRecordIn(db, hash, userId);
 }
 
-export const store = {
-  /** Several writes, one file write (store/db.ts). */
-  batched,
+/**
+ * The JSON backend's synchronous core. Nothing outside store.ts and
+ * store/backend.ts calls it: everything else calls `store`, which runs these
+ * methods one at a time behind the store's mutex and hands out copies.
+ */
+/** Every state a draft can be in: an activity append is refused by none. */
+const DRAFT_STATES: DraftPayment["state"][] = ["DRAFT", "PENDING_REVIEW", "REVIEWED", "REJECTED", "INVALID_DATA", "EXECUTING", "EXECUTED", "FAILED", "CANCELLED"];
+
+export const jsonCore = {
+  /** A transaction's writes land as one file write, at endTx. */
+  beginTx: beginWrites,
+  endTx: endWrites,
+  /** The announcements queued so far, taken out of the queue: the backend
+   *  takes them while it still holds the store and runs them after. */
+  takeAnnouncements(): (() => void)[] {
+    return announcements.splice(0);
+  },
   /** One whole collection, as stored (the `list` of store/backend.ts). */
   list<K extends keyof Db>(name: K): Db[K] {
     return db[name];
   },
-  get users() {
-    return db.users;
-  },
-  get quotes() {
-    return db.quotes;
-  },
-  get transfers() {
-    return db.transfers;
-  },
-  get sessions() {
-    return db.sessions;
-  },
-  get recoveryRequests() {
-    return db.recoveryRequests;
-  },
   addUser(u: User) {
     db.users.push(u);
     persist();
+  },
+  /**
+   * The user, held until the transaction this runs in ends (Postgres:
+   * `FOR UPDATE`; JSON: the mutex already holds everything). For a rule over
+   * other rows of the user (§2 rule 4).
+   */
+  lockUser(id: string) {
+    return db.users.find((u) => u.id === id);
+  },
+  /**
+   * Hold `key` until the transaction this runs in ends (Postgres: an
+   * advisory transaction lock; JSON: the mutex already holds everything).
+   * For a rule over rows no single row stands for, e.g. one org's ledger.
+   */
+  lockKey(_key: string) {},
+  /** Change `passkeySafe` or `monerium` from the stored value (§2 rule 2), with `patch`. */
+  patchUserSub<K extends "passkeySafe" | "monerium">(id: string, key: K, fn: (current: User[K]) => User[K], patch: Partial<User> = {}) {
+    const u = db.users.find((x) => x.id === id);
+    if (!u) throw new Error(`unknown user ${id}`);
+    return jsonCore.updateUser(id, { ...patch, [key]: structuredClone(fn(structuredClone(u[key]))) } as Partial<User>);
   },
   updateUser(id: string, patch: Partial<User>) {
     const u = db.users.find((x) => x.id === id);
@@ -156,7 +209,12 @@ export const store = {
    */
   recordPasskeyUse(id: string, credentialId: string, signCount: number) {
     const patch = passkeyUsePatch(db.users.find((x) => x.id === id), credentialId, signCount);
-    return patch ? store.updateUser(id, patch) : undefined;
+    return patch ? jsonCore.updateUser(id, patch) : undefined;
+  },
+  /** Count one email-code guess on the stored row (rules.ts emailCodeAttemptPatch); undefined when refused. */
+  countEmailCodeAttempt(id: string, max: number, now = Date.now()) {
+    const patch = emailCodeAttemptPatch(db.users.find((x) => x.id === id), max, now);
+    return patch ? jsonCore.updateUser(id, patch) : undefined;
   },
   serviceCredentials(service: ServiceCredential["service"]): readonly ServiceCredential[] {
     return db.serviceCredentials.filter((c) => c.service === service);
@@ -245,6 +303,27 @@ export const store = {
     Object.assign(r, patch);
     persist();
     return r;
+  },
+  /** Write a request only from the statuses it may leave; null when it moved on. */
+  updateRecoveryRequestFrom(id: string, from: readonly RecoveryRequest["status"][], patch: Partial<RecoveryRequest>) {
+    const r = db.recoveryRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown recovery request ${id}`);
+    if (!from.includes(r.status)) return null;
+    return jsonCore.updateRecoveryRequest(id, patch);
+  },
+  /**
+   * Count one OTP guess on the stored row, while it is OTP_PENDING. Past
+   * `max` the request is canceled instead. Null when it is not OTP_PENDING.
+   */
+  countRecoveryOtpAttempt(id: string, max: number) {
+    const r = db.recoveryRequests.find((x) => x.id === id);
+    if (!r || r.status !== "OTP_PENDING" || !r.candide) return null;
+    const attempts = (r.candide.otpAttempts ?? 0) + 1;
+    if (attempts > max) {
+      Object.assign(r, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "too many wrong codes" });
+    } else r.candide = { ...r.candide, otpAttempts: attempts };
+    persist();
+    return { request: r, attempts, over: attempts > max };
   },
   findRecoveryRequest(id: string) {
     return db.recoveryRequests.find((r) => r.id === id);
@@ -344,7 +423,7 @@ export const store = {
    *  address (routes/email-verification.ts), then one that can actually be
    *  recovered when the same address was used more than once. */
   findUserByEmail(email: string) {
-    const matches = store.usersByEmail(email);
+    const matches = jsonCore.usersByEmail(email);
     return (
       matches.find((u) => !!u.emailVerifiedAt) ??
       matches.find((u) => u.passkeySafe?.candideRecovery?.guardianStatus === "active") ??
@@ -365,17 +444,23 @@ export const store = {
   isOrderProcessed(orderId: string) {
     return db.processedMoneriumOrders.includes(orderId);
   },
-  markOrderProcessed(orderId: string) {
-    if (db.processedMoneriumOrders.includes(orderId)) return;
+  /** Claim an order as recorded, once: false when it already was (§2,
+   *  Monerium order dedupe; Postgres: the order id's primary key). */
+  markOrderProcessed(orderId: string): boolean {
+    if (db.processedMoneriumOrders.includes(orderId)) return false;
     db.processedMoneriumOrders.push(orderId);
     persist();
+    return true;
   },
   isWebhookProcessed(webhookId: string) {
     return db.processedMoneriumWebhooks.includes(webhookId);
   },
-  markWebhookProcessed(webhookId: string) {
+  /** Mark a webhook delivery handled, once: false when it already was. */
+  markWebhookProcessed(webhookId: string): boolean {
+    if (db.processedMoneriumWebhooks.includes(webhookId)) return false;
     db.processedMoneriumWebhooks.push(webhookId);
     persist();
+    return true;
   },
   addQuote(q: Quote) {
     // A quote nobody took is worth nothing a day after it expired, and every
@@ -393,11 +478,24 @@ export const store = {
     persist();
     return q;
   },
-  consumeQuote(id: string) {
+  /**
+   * Consume an OPEN quote that has not expired, once (§2, quote → transfer).
+   * The expiry is checked here, on the stored row, not only by the caller:
+   * a quote read before an await can expire before it is consumed.
+   */
+  consumeQuote(id: string, now = Date.now()) {
     const q = db.quotes.find((x) => x.id === id);
     if (!q) throw new Error(`unknown quote ${id}`);
-    if ((q.status ?? "OPEN") !== "OPEN") return false;
+    if (!quoteConsumable(q, now)) return false;
     q.status = "CONSUMED";
+    persist();
+    return true;
+  },
+  /** Mark an OPEN quote EXPIRED; never a consumed one. False when it was not OPEN. */
+  expireQuote(id: string) {
+    const q = db.quotes.find((x) => x.id === id);
+    if (!q || (q.status ?? "OPEN") !== "OPEN") return false;
+    q.status = "EXPIRED";
     persist();
     return true;
   },
@@ -454,6 +552,25 @@ export const store = {
     capHolds.delete(holdId);
   },
   /**
+   * Keep a prepared UserOperation until its passkey approves it (§2,
+   * approvals waiting for a passkey). Expired entries go first. The claim
+   * that submits it drops it in the same transaction, so a replayed
+   * approval finds nothing to submit.
+   */
+  putPendingExecution(kind: PendingExecutionKind, id: string, entry: PendingExecution) {
+    const now = Date.now();
+    for (const [k, p] of pendingExecutions) if (p.expiresAt < now) pendingExecutions.delete(k);
+    pendingExecutions.set(`${kind}:${id}`, entry);
+  },
+  /** The prepared operation, unless its window closed. */
+  findPendingExecution(kind: PendingExecutionKind, id: string): PendingExecution | undefined {
+    const p = pendingExecutions.get(`${kind}:${id}`);
+    return p && p.expiresAt >= Date.now() ? p : undefined;
+  },
+  dropPendingExecution(kind: PendingExecutionKind, id: string) {
+    pendingExecutions.delete(`${kind}:${id}`);
+  },
+  /**
    * Claim the one and only authorization submission for a transfer.
    *
    * Deliberately synchronous: an Express handler runs uninterrupted until its
@@ -477,12 +594,27 @@ export const store = {
   updateTransfer(id: string, patch: Partial<Transfer>) {
     const t = db.transfers.find((x) => x.id === id);
     if (!t) throw new Error(`unknown transfer ${id}`);
-    patch = guardTransferPatch(t, patch);
+    patch = transferPatchOnRow(t, patch);
     const from = t.state;
     Object.assign(t, patch, { updatedAt: new Date().toISOString() });
     persist();
     announceStateChange(t, from);
     return t;
+  },
+  /** Append one step to a transfer's log on the stored row, with `patch`. */
+  appendTransferStep(id: string, step: Transfer["txs"][number], patch: Partial<Transfer> = {}) {
+    const t = db.transfers.find((x) => x.id === id);
+    if (!t) throw new Error(`unknown transfer ${id}`);
+    return jsonCore.updateTransfer(id, { ...patch, txs: [...t.txs, step] });
+  },
+  /**
+   * Change one sub-object of a transfer (`sepa`, `refund`, …) from its
+   * stored value: `fn` gets the value on the row and returns the new one.
+   */
+  patchTransferSub<K extends keyof Transfer>(id: string, key: K, fn: (current: Transfer[K]) => Transfer[K], patch: Partial<Transfer> = {}) {
+    const t = db.transfers.find((x) => x.id === id);
+    if (!t) throw new Error(`unknown transfer ${id}`);
+    return jsonCore.updateTransfer(id, { ...patch, [key]: structuredClone(fn(structuredClone(t[key]))) });
   },
   /** Subscribe to transfer state changes (checkout-webhook.ts). */
   onTransferStateChange(listener: TransferStateListener) {
@@ -520,9 +652,6 @@ export const store = {
   findReceiptShareBySlug(slug: string) {
     return db.receiptShares.find((s) => s.slug === slug);
   },
-  get documents() {
-    return db.documents;
-  },
   addDocument(d: StoredDocument) {
     db.documents.push(d);
     persist();
@@ -547,9 +676,6 @@ export const store = {
   // No delete. A request somebody may have paid against is a record; the
   // owner cancels it (state CANCELLED) and a visitor is told so rather than
   // getting a 404 that reads like a typo.
-  get paymentRequests() {
-    return db.paymentRequests;
-  },
   addPaymentRequest(r: PaymentRequest) {
     db.paymentRequests.push(r);
     persist();
@@ -563,6 +689,33 @@ export const store = {
     persist();
     announcePaymentRequestState(r, from);
     return r;
+  },
+  /** Write a request only from the states it may leave; null when it moved on. */
+  updatePaymentRequestFrom(id: string, from: readonly PaymentRequest["state"][], patch: Partial<PaymentRequest>) {
+    const r = db.paymentRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown payment request ${id}`);
+    if (!from.includes(r.state)) return null;
+    return jsonCore.updatePaymentRequest(id, patch);
+  },
+  /** Cancel an open request nothing has paid (rules.ts cancelUnpaidOnRow); null otherwise. */
+  cancelUnpaidPaymentRequest(id: string, now = new Date(), evenIfExpired = false) {
+    const r = db.paymentRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown payment request ${id}`);
+    const patch = cancelUnpaidOnRow(r, now, evenIfExpired);
+    return patch ? jsonCore.updatePaymentRequest(id, patch) : null;
+  },
+  /**
+   * Record a payment on the stored request: `apply` runs on the row as
+   * stored (payment-requests.ts applyPayment) and returns the patch, or null
+   * when there is nothing to write. Returns the row and its state before.
+   */
+  recordPaymentRequestPayment(id: string, apply: (r: PaymentRequest) => Partial<PaymentRequest> | null) {
+    const r = db.paymentRequests.find((x) => x.id === id);
+    if (!r) throw new Error(`unknown payment request ${id}`);
+    const from = r.state;
+    // Cloned: the callback's own object must not be the stored one.
+    const patch = structuredClone(apply(structuredClone(r)));
+    return { request: patch ? jsonCore.updatePaymentRequest(id, patch) : r, from, written: !!patch };
   },
   /** Subscribe to payment request state changes (checkout-webhook.ts). */
   onPaymentRequestStateChange(listener: PaymentRequestStateListener) {
@@ -589,9 +742,6 @@ export const store = {
   },
 
   // ── Shopify connections ───────────────────────────────────────────────────
-  get shopifyConnections() {
-    return db.shopifyConnections;
-  },
   addShopifyConnection(c: ShopifyConnection) {
     db.shopifyConnections.push(c);
     persist();
@@ -619,10 +769,17 @@ export const store = {
   shopifyDelivery(id: string): ShopifyDelivery | undefined {
     return db.shopifyDeliveries.find((d) => d.id === id);
   },
-  /** Record a delivery the first time it arrives, dropping those past 72 hours. */
+  /** Record a delivery the first time it arrives, dropping those past 72
+   *  hours. Returns the stored row: `d`, or the one recorded first under
+   *  that id, whose shop the caller checks (§2, Shopify delivery dedupe). */
   recordShopifyDelivery(d: ShopifyDelivery) {
     const stale = Date.now() - 72 * 3_600_000;
     db.shopifyDeliveries = db.shopifyDeliveries.filter((x) => Date.parse(x.at) > stale);
+    const existing = db.shopifyDeliveries.find((x) => x.id === d.id);
+    if (existing) {
+      persist();
+      return existing;
+    }
     db.shopifyDeliveries.push(d);
     persist();
     return d;
@@ -660,9 +817,6 @@ export const store = {
   },
   merchantLinksForOrg(orgId: string): readonly MerchantLink[] {
     return db.merchantLinks.filter((l) => l.orgId === orgId);
-  },
-  get merchantLinks(): readonly MerchantLink[] {
-    return db.merchantLinks;
   },
   addReceiptShare(s: ReceiptShare) {
     db.receiptShares.push(s);
@@ -711,9 +865,6 @@ export const store = {
     persist();
     return s;
   },
-  get operators() {
-    return db.operators;
-  },
   findOperator(id: string) {
     return db.operators.find((o) => o.id === id);
   },
@@ -739,6 +890,8 @@ export const store = {
   addOperatorCredential(operatorId: string, credential: OperatorCredential) {
     const o = db.operators.find((x) => x.id === operatorId);
     if (!o) throw new Error(`unknown operator ${operatorId}`);
+    // On the stored row: a disable that landed after the caller's check wins.
+    if (o.disabledAt) throw new Error("this operator is disabled");
     if (db.operators.some((x) => x.credentials.some((c) => c.credentialId === credential.credentialId))) {
       throw new Error("that passkey is already registered");
     }
@@ -813,9 +966,6 @@ export const store = {
     return db.transfers.find((t) => t.id === id);
   },
 
-  get cryptoSends() {
-    return db.cryptoSends;
-  },
   findCryptoSend(id: string) {
     return db.cryptoSends.find((s) => s.id === id);
   },
@@ -838,6 +988,13 @@ export const store = {
     persist();
     return true;
   },
+  /** Write a send only from the states it may leave (§2 rule 3); null when it moved on. */
+  updateCryptoSendFrom(id: string, from: readonly CryptoSend["state"][], patch: Partial<Pick<CryptoSend, "state" | "userOpHash" | "txHash" | "error">>) {
+    const s = db.cryptoSends.find((x) => x.id === id);
+    if (!s) throw new Error(`unknown crypto send ${id}`);
+    if (!from.includes(s.state)) return null;
+    return jsonCore.updateCryptoSend(id, patch);
+  },
   updateCryptoSend(id: string, patch: Partial<Pick<CryptoSend, "state" | "userOpHash" | "txHash" | "error">>) {
     const s = db.cryptoSends.find((x) => x.id === id);
     if (!s) throw new Error(`unknown crypto send ${id}`);
@@ -846,19 +1003,17 @@ export const store = {
     return s;
   },
 
-  get cryptoDeposits() {
-    return db.cryptoDeposits;
-  },
   /** An ERC-20 transfer is identified by its tx and position in it. */
-  findCryptoDeposit(txHash: string, logIndex: number) {
+  /** The deposit of one Transfer log on one chain (§2, crypto deposits). */
+  findCryptoDeposit(chainId: number, txHash: string, logIndex: number) {
     return db.cryptoDeposits.find(
-      (d) => d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
+      (d) => d.chainId === chainId && d.txHash.toLowerCase() === txHash.toLowerCase() && d.logIndex === logIndex,
     );
   },
   /**
    * Record a deposit, once.
    *
-   * Idempotent on (txHash, logIndex) — the chain's own identity for a
+   * Idempotent on (chainId, txHash, logIndex) — the chain's own identity for a
    * transfer — because the poller's dedupe check and this write are separated
    * by an await (the receipt's rate lookup), and the poll runs on a bare
    * setInterval that does not wait for the previous tick. Two overlapping
@@ -867,9 +1022,7 @@ export const store = {
    * Returning the existing row makes the loser of that race a no-op.
    */
   addCryptoDeposit(d: CryptoDeposit) {
-    const existing = db.cryptoDeposits.find(
-      (x) => x.txHash.toLowerCase() === d.txHash.toLowerCase() && x.logIndex === d.logIndex,
-    );
+    const existing = jsonCore.findCryptoDeposit(d.chainId, d.txHash, d.logIndex);
     if (existing) return existing;
     db.cryptoDeposits.push(d);
     persist();
@@ -881,6 +1034,25 @@ export const store = {
     Object.assign(d, patch, { updatedAt: new Date().toISOString() });
     persist();
     return d;
+  },
+  /**
+   * Change a deposit from its stored value (§2 rules 2 and 5): `make` gets
+   * the stored row and returns the patch, or null to leave it. Null back when
+   * it was left. An array on the row (`partials`) is extended here, on the
+   * stored value, never written whole from a row read before an await.
+   */
+  patchCryptoDeposit(id: string, make: (d: CryptoDeposit) => Partial<CryptoDeposit> | null) {
+    const d = db.cryptoDeposits.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown crypto deposit ${id}`);
+    const patch = make(structuredClone(d));
+    return patch ? jsonCore.updateCryptoDeposit(id, structuredClone(patch)) : null;
+  },
+  /** Settle a deposit once: `decide` runs on the stored row; null when it was settled already. */
+  settleCryptoDeposit(id: string, decide: (d: CryptoDeposit) => Partial<CryptoDeposit>) {
+    const d = db.cryptoDeposits.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown crypto deposit ${id}`);
+    if (d.settledAt) return null;
+    return jsonCore.updateCryptoDeposit(id, { ...structuredClone(decide(structuredClone(d))), settledAt: new Date().toISOString() });
   },
   cryptoDepositCursor(chainId: number | string): bigint | undefined {
     const v = db.cryptoDepositCursor[String(chainId)];
@@ -898,36 +1070,6 @@ export const store = {
   // accounts, invoices or ledger entries: archival must not be reachable by a
   // code path that removes rows (see plans.ts).
 
-  get organisations() {
-    return db.organisations;
-  },
-  get members() {
-    return db.members;
-  },
-  get accounts() {
-    return db.accounts;
-  },
-  get contacts() {
-    return db.contacts;
-  },
-  get drafts() {
-    return db.drafts;
-  },
-  get invoices() {
-    return db.invoices;
-  },
-  get importedWallets() {
-    return db.importedWallets;
-  },
-  get chartAccounts() {
-    return db.chartAccounts;
-  },
-  get accountRules() {
-    return db.accountRules;
-  },
-  get ledger() {
-    return db.ledger;
-  },
 
   addOrganisation(org: Organisation, seedCoa = true) {
     db.organisations.push(org);
@@ -937,6 +1079,30 @@ export const store = {
   },
   findOrganisation(id: string) {
     return db.organisations.find((o) => o.id === id);
+  },
+  /**
+   * Write an organisation only while `ok` holds for it as stored; `patch`
+   * is computed from that row. Null when `ok` fails.
+   */
+  updateOrganisationIf(id: string, ok: (o: Organisation) => boolean, patch: (o: Organisation) => Partial<Organisation>) {
+    const o = db.organisations.find((x) => x.id === id);
+    if (!o) throw new Error(`unknown organisation ${id}`);
+    if (!ok(structuredClone(o))) return null;
+    return jsonCore.updateOrganisation(id, patch(structuredClone(o)));
+  },
+  /**
+   * The organisation, held until the transaction this runs in ends (Postgres:
+   * `FOR UPDATE`; JSON: the mutex already holds everything). For a rule over
+   * other rows of the org (§2 rule 4).
+   */
+  lockOrganisation(id: string) {
+    return db.organisations.find((o) => o.id === id);
+  },
+  /** Change `invoicing` or `integrations` from the stored value (§2 rule 2), with `patch`. */
+  patchOrgSub<K extends "invoicing" | "integrations">(id: string, key: K, fn: (current: Organisation[K]) => Organisation[K], patch: Partial<Organisation> = {}) {
+    const o = db.organisations.find((x) => x.id === id);
+    if (!o) throw new Error(`unknown organisation ${id}`);
+    return jsonCore.updateOrganisation(id, { ...patch, [key]: structuredClone(fn(structuredClone(o[key]))) } as Partial<Organisation>);
   },
   updateOrganisation(id: string, patch: Partial<Organisation>) {
     if ("safe" in patch) throw new Error("an org Safe plan is written through setOrgSafePlan only");
@@ -1005,7 +1171,34 @@ export const store = {
     return m;
   },
 
-  addAccount(a: Account) {
+  /**
+   * Change a member only if `allowed` still holds for the organisation's
+   * members as stored (an org never loses its last owner, §2 rule 4).
+   * Null when it does not.
+   */
+  updateMemberChecked(id: string, patch: Partial<Member>, allowed: (members: Member[], member: Member) => boolean) {
+    const m = db.members.find((x) => x.id === id);
+    if (!m) throw new Error(`unknown member ${id}`);
+    if (!allowed(structuredClone(db.members.filter((x) => x.orgId === m.orgId)), structuredClone(m))) return null;
+    return jsonCore.updateMember(id, patch);
+  },
+  /** Spend an invitation, once, for one user. Null when it is spent, replaced or the user is already on the org. */
+  acceptInvite(id: string, tokenHash: string, userId: string, at = new Date().toISOString()) {
+    const m = db.members.find((x) => x.id === id);
+    if (!m) return null;
+    const patch = acceptInviteOnRow(m, tokenHash, userId, db.members.filter((x) => x.orgId === m.orgId), at);
+    return patch ? jsonCore.updateMember(id, patch) : null;
+  },
+  /**
+   * Add an account, or null when it is a company Safe's (no backing user)
+   * and another unbacked account is at that address: a company Safe is one
+   * account (§2, one Safe two accounts; Postgres: the partial unique key).
+   * A person's Safe may back several, their personal and their sole-trader
+   * business's; routes/orgs.ts keeps it to one business, under a lock.
+   */
+  addAccount(a: Account): Account | null {
+    const at = a.address?.toLowerCase();
+    if (at && !a.backingUserId && db.accounts.some((x) => !x.backingUserId && x.address?.toLowerCase() === at)) return null;
     db.accounts.push(a);
     persist();
     return a;
@@ -1065,9 +1258,30 @@ export const store = {
     return db.drafts.filter((d) => d.orgId === orgId);
   },
   updateDraft(id: string, patch: Partial<DraftPayment>) {
+    refuseActivityPatch(patch);
     const d = db.drafts.find((x) => x.id === id);
     if (!d) throw new Error(`unknown draft ${id}`);
     Object.assign(d, patch, { updatedAt: new Date().toISOString() });
+    persist();
+    return d;
+  },
+  /** Append to a draft's activity on the stored row, with `patch`. */
+  appendDraftActivity(id: string, entry: DraftActivity, patch: Partial<DraftPayment> = {}) {
+    return jsonCore.updateDraftFrom(id, patch, { from: DRAFT_STATES, activity: entry })!;
+  },
+  /**
+   * Write a draft only from the states it may leave (§2 rule 3), and only if
+   * it is still the row the caller read (`expectedUpdatedAt`) or still has
+   * the drafter four eyes was checked against. Null when it moved on; the
+   * caller refuses.
+   */
+  updateDraftFrom(id: string, patch: Partial<DraftPayment>, c: DraftCondition): DraftPayment | null {
+    refuseActivityPatch(patch);
+    const d = db.drafts.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown draft ${id}`);
+    const next = draftPatchOnRow(d, patch, c);
+    if (!next) return null;
+    Object.assign(d, next, { updatedAt: new Date().toISOString() });
     persist();
     return d;
   },
@@ -1121,6 +1335,39 @@ export const store = {
     return i;
   },
 
+  /** Write an invoice only from the states it may leave; null when it moved on. */
+  updateInvoiceFrom(id: string, from: readonly Invoice["state"][], patch: Partial<Invoice>) {
+    const i = db.invoices.find((x) => x.id === id);
+    if (!i) throw new Error(`unknown invoice ${id}`);
+    if (!from.includes(i.state)) return null;
+    return jsonCore.updateInvoice(id, patch);
+  },
+  /**
+   * Put a settlement on an invoice once per ref: `update` runs on the stored
+   * row (domain/invoices.ts settlementUpdate). Null when the ref is there,
+   * unless `replace` (rules.ts settlementOnRow).
+   */
+  settleInvoice(id: string, ref: string, update: (i: Invoice) => Partial<Invoice>, replace = false) {
+    const i = db.invoices.find((x) => x.id === id);
+    if (!i) throw new Error(`unknown invoice ${id}`);
+    const patch = settlementOnRow(structuredClone(i), ref, update, replace);
+    return patch ? jsonCore.updateInvoice(id, structuredClone(patch)) : null;
+  },
+  /**
+   * Start paying an invoice: from `from` to PAYING, with the draft that pays
+   * it, as one write. Null (and no draft) when the invoice moved on.
+   */
+  startInvoicePayment(invoiceId: string, from: readonly Invoice["state"][], draft: DraftPayment) {
+    const i = db.invoices.find((x) => x.id === invoiceId);
+    if (!i) throw new Error(`unknown invoice ${invoiceId}`);
+    if (!from.includes(i.state)) return null;
+    db.drafts.push(draft);
+    i.state = "PAYING";
+    i.payment = { ...i.payment, draftId: draft.id };
+    i.updatedAt = new Date().toISOString();
+    persist();
+    return { invoice: i, draft };
+  },
   addImportedWallet(w: ImportedWallet) {
     db.importedWallets.push(w);
     persist();
@@ -1204,9 +1451,6 @@ export const store = {
 
   // ── Bookkeeping inputs the statement writer needs ─────────────────────────
 
-  get moneriumIssueOrders() {
-    return db.moneriumIssueOrders;
-  },
   /** The bank facts of a processed issue order, once per order id. */
   recordMoneriumIssue(r: MoneriumIssueRecord) {
     const existing = db.moneriumIssueOrders.find((x) => x.orderId === r.orderId);
@@ -1214,9 +1458,6 @@ export const store = {
     db.moneriumIssueOrders.push(r);
     persist();
     return r;
-  },
-  get conversionSweeps() {
-    return db.conversionSweeps;
   },
   addConversionSweep(s: ConversionSweep) {
     db.conversionSweeps.push(s);
@@ -1227,3 +1468,32 @@ export const store = {
     return db.documents.filter((d) => d.orgId === orgId);
   },
 };
+
+/** The Postgres database when STORE_BACKEND=postgres (config/env.ts). */
+const pgDatabase: Database | undefined =
+  STORE_BACKEND === "postgres" ? openPool(DATABASE_URL, { ca: DATABASE_CA, realMoney: IS_REAL_MONEY_CHAIN }) : undefined;
+
+/**
+ * The store (store/backend.ts): every method async. JSON: behind one mutex,
+ * over db.json. Postgres: one transaction per write over DATABASE_URL.
+ */
+export const store: StoreBackend = pgDatabase ? createPgStore(pgDatabase) : jsonBackend(jsonCore);
+
+/**
+ * Open the store before anything reads it. JSON: load db.json and run its
+ * load-time migrations. Postgres: refuse a schema other than the migration
+ * files make (store/pg/migrate.ts); the API never migrates.
+ */
+export async function initStore(): Promise<void> {
+  if (pgDatabase) {
+    // The data dir holds more than db.json (operators/enrolment.ts's token file).
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    await assertSchemaCurrent(pgDatabase);
+  } else await initJsonStore();
+}
+
+/** The settings of the start lock's own connection (store/pg/start-lock.ts),
+ *  or undefined on JSON, which needs none. */
+export function startLockConfig() {
+  return pgDatabase ? pgPoolConfig(DATABASE_URL, { ca: DATABASE_CA, realMoney: IS_REAL_MONEY_CHAIN }) : undefined;
+}

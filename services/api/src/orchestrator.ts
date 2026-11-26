@@ -99,7 +99,7 @@ export interface SafeExecution {
  * transfer never settles at economics the user didn't agree to.
  */
 export async function assertQuoteRateBinding(transfer: Transfer): Promise<void> {
-  const quote = store.findQuote(transfer.quoteId);
+  const quote = await store.findQuote(transfer.quoteId);
   if (!quote?.lockedSwapRate) return; // sepa quotes: nothing to bind
   const locked = BigInt(quote.lockedSwapRate);
   // Ask the provider that will actually fill the swap, not the FxSwapper
@@ -136,12 +136,12 @@ export const expiredUnsigned = (t: Transfer, nowSec = Date.now() / 1000) =>
  * transfers released their reservation, and so did a CREATED one never signed
  * before its deadline: assertDeviceAuthorization refuses it, so it can never
  * debit. A claimed one (authorizedAt) or one without terms still counts. */
-export function safeFundedEurToday(userId: string, now = new Date()): number {
+export async function safeFundedEurToday(userId: string, now = new Date()): Promise<number> {
   const day = now.toISOString().slice(0, 10);
   const nowSec = now.getTime() / 1000;
   // Transfers still being prepared hold their share of the cap before their
   // row exists — see store.holdDailyCap.
-  return store.heldEurToday(userId, day) + store.transfers
+  return (await store.heldEurToday(userId, day)) + (await store.list("transfers"))
     .filter(
       (t) =>
         t.userId === userId &&
@@ -150,7 +150,7 @@ export function safeFundedEurToday(userId: string, now = new Date()): number {
         !["FAILED", "REFUNDED"].includes(t.state) &&
         !expiredUnsigned(t, nowSec),
     )
-    .reduce((sum, t) => sum + t.sendEur, 0) + store.cryptoSends
+    .reduce((sum, t) => sum + t.sendEur, 0) + (await store.list("cryptoSends"))
     // Crypto sends share the budget; an expired unsigned one can never debit.
     // A company's send is the org Safe's budget (orgSafeSpentEurToday).
     .filter(
@@ -170,7 +170,7 @@ export async function dailyCapUsage(user: User): Promise<{
   usedEur: number;
   fromSafeEur: number;
 }> {
-  const fromSafeEur = safeFundedEurToday(user.id);
+  const fromSafeEur = await safeFundedEurToday(user.id);
   return {
     capEur: FX.DAILY_CAP_EUR,
     usedEur: fromSafeEur,
@@ -251,7 +251,7 @@ async function debitInputFunds(
   const op = await submitSafeExecution(user, execution);
   txs.push({ step: DEBIT_STEP.safe, hash: op.userOpHash });
   if (atomicStep) txs.push({ step: atomicStep, hash: op.userOpHash });
-  store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+  await store.updateTransfer(transfer.id, { state: "DEBITED", txs });
   return op;
 }
 
@@ -282,7 +282,7 @@ async function debitSafeFundedSepaFee(
     const fee = await submitSafeExecution(user, execution);
     txs.push({ step: DEBIT_STEP.safeFee, hash: fee.userOpHash });
   }
-  store.updateTransfer(transfer.id, { state: "DEBITED", txs });
+  await store.updateTransfer(transfer.id, { state: "DEBITED", txs });
 }
 
 export function safeDebitBlocker(user: User): string | null {
@@ -434,21 +434,21 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   const message = redactedMessage(err);
   // An operator owns a transfer in review: a late failure adds its steps and
   // leaves the state and the reason for the review alone.
-  if (store.findTransfer(id)?.state === "MANUAL_REVIEW") {
+  if ((await store.findTransfer(id))?.state === "MANUAL_REVIEW") {
     console.error(`late failure on ${id}, which is in review: ${message}`);
-    return store.updateTransfer(id, { txs });
+    return await store.updateTransfer(id, { txs });
   }
   // The debit was sent and may still land: whether money left the Safe is
   // unknown, so neither "nothing was debited" nor a refund is safe.
   if (err instanceof SafeOperationUncertainError) {
     console.error(`transfer ${id}: Safe operation ${err.userOpHash} unconfirmed:`, describeCause(err.cause));
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error: `${message}; check the operation on chain before any refund`,
       txs: [...txs, { step: "safe.debit.unconfirmed", hash: err.userOpHash }],
     });
   }
-  const failed = store.updateTransfer(id, {
+  const failed = await store.updateTransfer(id, {
     state: "FAILED",
     error: message,
     txs,
@@ -458,14 +458,14 @@ async function failAndCompensate(id: string, err: any, txs: Transfer["txs"]): Pr
   // The API claims an authorization before it can be submitted twice; this is
   // the backstop for any other route to the same duplicate.
   if (/duplicate transfer/i.test(message)) {
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error: `${message}; this transfer was already debited once, so no automatic refund`,
       txs,
     });
   }
   if (txs.some((x) => FUNDS_AT_BRIDGE_STEPS.has(x.step))) {
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error: `${failed.error}; funds already reached Bridge (deposit funded or destination paid), so automatic local refund is unsafe until Bridge/anchor state is reconciled`,
       txs,
@@ -560,16 +560,16 @@ async function recordVenueSwap(
   } catch (err) {
     if (err instanceof SwapSettlementError) {
       txs.push(...err.txs);
-      store.updateTransfer(id, { txs });
+      await store.updateTransfer(id, { txs });
     }
     throw err;
   }
 }
 
 /** Record an outbound intent on the transfer before the call goes out. */
-function recordOutboundIntent(id: string, txs: Transfer["txs"], step: OutboundIntent) {
+async function recordOutboundIntent(id: string, txs: Transfer["txs"], step: OutboundIntent) {
   txs.push({ step, hash: "0x" });
-  store.updateTransfer(id, { txs });
+  await store.updateTransfer(id, { txs });
 }
 
 /** writeAndWait hooks for a chain write under an intent: record the intent
@@ -580,14 +580,14 @@ function outboundWrite(
   intent: "safe.refundTransfer.pending" | "bridge.xyz.deposit.pending",
 ): WriteHooks {
   const base = intent.slice(0, -".pending".length);
-  const settle = (step: string, hash: string) => {
+  const settle = async (step: string, hash: string) => {
     txs.push({ step, hash });
-    store.updateTransfer(id, { txs });
+    await store.updateTransfer(id, { txs });
   };
   return {
-    beforeSend: () => recordOutboundIntent(id, txs, intent),
-    onNotSent: () => settle(`${base}.not-sent`, "0x"),
-    onReverted: (hash) => settle(`${base}.reverted`, hash),
+    beforeSend: async () => await recordOutboundIntent(id, txs, intent),
+    onNotSent: async () => await settle(`${base}.not-sent`, "0x"),
+    onReverted: async (hash) => await settle(`${base}.reverted`, hash),
   };
 }
 
@@ -605,7 +605,7 @@ const compensating = new Set<string>();
  * running returns the transfer as it stands. */
 export async function compensateTransfer(id: string): Promise<Transfer> {
   if (compensating.has(id)) {
-    const t = store.findTransfer(id);
+    const t = await store.findTransfer(id);
     if (!t) throw new Error(`unknown transfer ${id}`);
     return t;
   }
@@ -622,13 +622,13 @@ export async function compensateTransfer(id: string): Promise<Transfer> {
 const MAX_REFUND_ATTEMPTS = 5;
 
 async function compensateTransferOnce(id: string): Promise<Transfer> {
-  const t = store.findTransfer(id);
+  const t = await store.findTransfer(id);
   if (!t) throw new Error(`unknown transfer ${id}`);
   // An operator's resolution is the last word on a transfer that was in review.
   if (t.state === "REFUNDED" || t.state === "PAID" || t.state === "MANUAL_REVIEW" || t.refund || t.reviewResolution) {
     return t;
   }
-  const user = store.findUser(t.userId);
+  const user = await store.findUser(t.userId);
   if (!user) throw new Error(`unknown user for transfer ${id}`);
   const steps = new Set(t.txs.map((x) => x.step));
   const now = () => new Date().toISOString();
@@ -636,7 +636,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
   // A refund transaction already on record means the process stopped between
   // the chain write and the REFUNDED write. Refunding again would pay twice.
   if (steps.has("safe.refundTransfer")) {
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "REFUNDED",
       refund: {
         amountEur: 0,
@@ -648,7 +648,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
   }
   const outbound = unsettledOutbound(t.txs);
   if (outbound) {
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error:
         `${t.error ?? "transfer failed"}; ${outbound} is on record without its outcome — the call may ` +
@@ -662,7 +662,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
     (x) => x.step === "safe.refundTransfer.not-sent" || x.step === "safe.refundTransfer.reverted",
   ).length;
   if (failedRefunds >= MAX_REFUND_ATTEMPTS) {
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error:
         `${t.error ?? "transfer failed"}; ${failedRefunds} refund attempts were refused or reverted ` +
@@ -671,7 +671,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
   }
   // USDC that reached Bridge is not ours to reverse, whichever leg put it there.
   if ([...steps].some((s) => FUNDS_AT_BRIDGE_STEPS.has(s))) {
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error: `${t.error ?? "transfer failed"}; USDC already reached Bridge's deposit address, so nothing local can be refunded until Bridge/anchor state is reconciled`,
     });
@@ -679,7 +679,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
 
   if (!inputFundsMoved(t.txs)) {
     // Nothing moved — FAILED is the whole story.
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       refund: { amountEur: 0, recoveredFrom: "none", deductions: "nothing was debited", at: now() },
     });
   }
@@ -697,7 +697,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
   // address — this side holds nothing to reverse. Never guess at a custodian's
   // balance; reconcile it by hand.
   if (swapRan && t.safeSwap?.mode === "live") {
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "MANUAL_REVIEW",
       error:
         `${t.error ?? "transfer failed"}; the user-signed batch delivered USDC to Bridge deposit ` +
@@ -770,16 +770,16 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
             args: [user.address],
           })) as bigint;
         const before = await eureBalance();
-        recordOutboundIntent(id, txs, "safe.refundTransfer.pending");
+        await recordOutboundIntent(id, txs, "safe.refundTransfer.pending");
         const back = await recordVenueSwap(id, txs, () => provider.execute(rq, user.address as `0x${string}`));
         // On record before measuring: until the step names its output logs,
         // the scanner leaves every EURe log in the swap's transaction alone.
-        store.updateTransfer(id, { txs });
+        await store.updateTransfer(id, { txs });
         const swap = back.txs.find((x) => isReverseSwapStep(x.step));
         const output = await deliveredFromReceipt(swap?.hash, addrs().eure, user.address);
         if (!swap || !output) throw new Error("the reverse swap has no transaction receipt to measure what it delivered");
         swap.outputLogIndexes = output.logIndexes;
-        store.updateTransfer(id, { txs });
+        await store.updateTransfer(id, { txs });
         const receivedWei = output.wei;
         if (receivedWei <= 0n) throw new Error("reverse swap delivered no EURe to the Safe");
         const after = await balanceAfterWrite(addrs().eure, user.address as `0x${string}`, before, before + receivedWei);
@@ -795,14 +795,14 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
         if (feeBack > 0) {
           const feeHash = await returnEureToSafe(user.address, feeBack);
           txs.push({ step: "safe.refundTransfer", hash: feeHash });
-          store.updateTransfer(id, { txs }); // on record before anything else can fail
+          await store.updateTransfer(id, { txs }); // on record before anything else can fail
         }
         const total = Math.floor((eurBack + feeBack) * 100) / 100;
         const lost = Math.max(0, safeMovedEur(t) - total);
         console.log(
           `Compensation: reverse-swapped and returned €${total} to user ${user.id}'s Safe for transfer ${t.id} (post-swap)`,
         );
-        return store.updateTransfer(id, {
+        return await store.updateTransfer(id, {
           state: "REFUNDED",
           txs,
           refund: {
@@ -813,7 +813,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
           },
         });
       } catch (err: any) {
-        return store.updateTransfer(id, {
+        return await store.updateTransfer(id, {
           state: "MANUAL_REVIEW",
           error:
             `${t.error ?? "transfer failed"}; Safe-funded input was already swapped to USDC and the ` +
@@ -836,11 +836,11 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
       outboundWrite(id, txs, "safe.refundTransfer.pending"),
     );
     txs.push({ step: "safe.refundTransfer", hash: refundHash });
-    store.updateTransfer(id, { txs }); // on record before anything else can fail
+    await store.updateTransfer(id, { txs }); // on record before anything else can fail
     console.log(
       `Compensation: returned €${safeRefundEur} to user ${user.id}'s Safe for transfer ${t.id} (Safe-funded)`,
     );
-    return store.updateTransfer(id, {
+    return await store.updateTransfer(id, {
       state: "REFUNDED",
       txs,
       refund: {
@@ -852,7 +852,7 @@ async function compensateTransferOnce(id: string): Promise<Transfer> {
     });
   }
 
-  return store.updateTransfer(id, {
+  return await store.updateTransfer(id, {
     state: "MANUAL_REVIEW",
     error:
       `${t.error ?? "transfer failed"}; ${recoveredFrom} needs a Safe-native treasury ` +
@@ -868,7 +868,7 @@ export async function compensationRate(t: Transfer): Promise<bigint> {
     const rate = BigInt(t.liquidity.rate);
     if (rate > 0n) return rate;
   }
-  const quote = store.findQuote(t.quoteId);
+  const quote = await store.findQuote(t.quoteId);
   if (quote?.lockedSwapRate) {
     const rate = BigInt(quote.lockedSwapRate);
     if (rate > 0n) return rate;
@@ -908,20 +908,20 @@ export function strandedAction(t: Transfer, now: number, busy: (id: string) => b
 export async function sweepStrandedTransfers(): Promise<number> {
   const busy = (id: string) => executing.has(id) || compensating.has(id);
   let n = 0;
-  for (const t of [...store.transfers]) {
+  for (const t of [...await store.list("transfers")]) {
     try {
       const action = strandedAction(t, Date.now(), busy);
       if (action === "compensate") {
         await compensateTransfer(t.id);
         n++;
       } else if (action === "fail-and-compensate") {
-        store.updateTransfer(t.id, { state: "FAILED", error: "stranded mid-flow — auto-compensating" });
+        await store.updateTransfer(t.id, { state: "FAILED", error: "stranded mid-flow — auto-compensating" });
         await compensateTransfer(t.id);
         n++;
       } else if (action === "review-outbound") {
         // A redeem order or a Bridge deposit went out (or was about to) before
         // the restart, and its outcome was never recorded.
-        store.updateTransfer(t.id, {
+        await store.updateTransfer(t.id, {
           state: "MANUAL_REVIEW",
           error:
             `stranded mid-flow after ${unsettledOutbound(t.txs)} — the outbound call may have moved money; ` +
@@ -934,7 +934,7 @@ export async function sweepStrandedTransfers(): Promise<number> {
         // the operation may or may not have landed. A refund would pay twice
         // if it did, and CREATED would hide a possible debit, so an operator
         // checks the chain.
-        store.updateTransfer(t.id, {
+        await store.updateTransfer(t.id, {
           state: "MANUAL_REVIEW",
           error:
             "authorization was claimed but no debit was recorded before a restart — " +
@@ -952,7 +952,7 @@ export async function sweepStrandedTransfers(): Promise<number> {
 /** Drive anchor-backed payouts that no browser is polling anymore. */
 export async function sweepAnchorPayouts(): Promise<number> {
   let n = 0;
-  for (const t of [...store.transfers]) {
+  for (const t of [...await store.list("transfers")]) {
     try {
       // PAYOUT_READY waits on the recipient, unless a lost payment needs an operator.
       if (
@@ -1053,7 +1053,7 @@ export async function executeTransfer(
       }
       expectedOut = delivered;
       usdcOut = usd.fromUnits(delivered);
-      store.updateTransfer(transfer.id, {
+      await store.updateTransfer(transfer.id, {
         state: "SWAPPED",
         txs,
         usdcOut,
@@ -1070,8 +1070,8 @@ export async function executeTransfer(
       //    The fixed fee stays at the orchestrator address as revenue.
       await assertQuoteRateBinding(transfer);
       const liquidityPlan = await prepareTransferLiquidity(transfer);
-      store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
-      recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending");
+      await store.updateTransfer(transfer.id, { liquidity: liquidityPlan });
+      await recordOutboundIntent(transfer.id, txs, "liquidity.swap.pending");
       const liquidity = await recordVenueSwap(transfer.id, txs, () =>
         executeTransferLiquidity({ ...transfer, liquidity: liquidityPlan }),
       );
@@ -1079,7 +1079,7 @@ export async function executeTransfer(
       // What the swap delivered, as the batch records it: compensation
       // reverse-swaps this from the shared wallet, so never the quote's figure.
       usdcOut = usd.fromUnits(liquidity.amountOut);
-      store.updateTransfer(transfer.id, {
+      await store.updateTransfer(transfer.id, {
         state: "SWAPPED",
         txs,
         usdcOut,
@@ -1150,7 +1150,7 @@ export async function executeTransfer(
         txs.push({ step: "bridge.xyz.deposit.transfer", hash: depositHash });
       }
     }
-    store.updateTransfer(transfer.id, { state: "BRIDGED", txs });
+    await store.updateTransfer(transfer.id, { state: "BRIDGED", txs });
 
     // 4. Open the cash pickup at the anchor. The anchor withdraws USDC and does
     //    its own FX to cash at the counter — passing the KES figure here would
@@ -1169,7 +1169,7 @@ export async function executeTransfer(
       });
     } catch (err: any) {
       // Fail closed: a failed real payout must not masquerade as success.
-      return failAndCompensate(
+      return await failAndCompensate(
         transfer.id,
         new Error(`anchor payout failed: ${redactedMessage(err).slice(0, 200)}`),
         txs,
@@ -1195,12 +1195,12 @@ export async function executeTransfer(
         bridgeDepositMemo: bridgePlan.sourceDepositInstructions?.blockchain_memo,
         bridgeDestinationTxHash: bridgePlan.destinationTxHash,
       };
-    return store.updateTransfer(transfer.id, {
+    return await store.updateTransfer(transfer.id, {
       state: cashPayoutState(storedPickup),
       pickup: storedPickup,
     });
   } catch (err: any) {
-    return failAndCompensate(transfer.id, err, txs);
+    return await failAndCompensate(transfer.id, err, txs);
   } finally {
     executing.delete(transfer.id);
   }
@@ -1260,7 +1260,7 @@ export async function executeSepaTransfer(
 
     {
       try {
-        recordOutboundIntent(transfer.id, txs, "monerium.redeem.pending");
+        await recordOutboundIntent(transfer.id, txs, "monerium.redeem.pending");
         const order = await redeemToIban(
           user,
           payoutEur,
@@ -1278,7 +1278,7 @@ export async function executeSepaTransfer(
           throw new Error("Monerium accepted the redeem but returned no usable order id");
         }
         txs.push({ step: "monerium.redeem.placed", hash: order.id });
-        return store.updateTransfer(transfer.id, {
+        return await store.updateTransfer(transfer.id, {
           state: "PAYOUT_SUBMITTED",
           txs,
           sepa: {
@@ -1299,14 +1299,14 @@ export async function executeSepaTransfer(
           err instanceof MoneriumAccessError ||
           (err instanceof MoneriumApiError && (err.status === 401 || err.status === 403));
         if (!refused) {
-          return store.updateTransfer(transfer.id, {
+          return await store.updateTransfer(transfer.id, {
             state: "MANUAL_REVIEW",
             error: `redeem order outcome unknown: ${redactedMessage(err).slice(0, 200)}; Monerium may have accepted it, so no automatic refund`,
             txs,
           });
         }
         txs.push({ step: "monerium.redeem.refused", hash: "0x" });
-        return failAndCompensate(
+        return await failAndCompensate(
           transfer.id,
           err instanceof MoneriumAccessError
             ? new Error("Monerium refused Zold's access to your Monerium account, so no payment was sent. Connect Monerium again, then send it again.")
@@ -1316,7 +1316,7 @@ export async function executeSepaTransfer(
       }
     }
   } catch (err: any) {
-    return failAndCompensate(transfer.id, err, txs);
+    return await failAndCompensate(transfer.id, err, txs);
   } finally {
     executing.delete(transfer.id);
   }
@@ -1328,7 +1328,7 @@ export async function settlePickup(transfer: Transfer): Promise<Transfer> {
   if (!["PAYOUT_READY", "PAYOUT_FUNDED"].includes(transfer.state)) {
     throw new Error(`transfer is ${transfer.state}, expected PAYOUT_READY/PAYOUT_FUNDED`);
   }
-  return store.updateTransfer(transfer.id, {
+  return await store.updateTransfer(transfer.id, {
     state: "PAID",
     pickup: { ...transfer.pickup!, status: "PAID" },
   });
@@ -1377,7 +1377,7 @@ async function refreshPayoutUnlocked(
   // A payment went out (or was about to) before the restart and its hash never
   // reached the disk. The anchor may not show it yet, so asking would pay again.
   if (intentUnsettled(transfer.txs, "anchor.payment.pending")) {
-    return store.updateTransfer(transfer.id, {
+    return await store.updateTransfer(transfer.id, {
       state: "MANUAL_REVIEW",
       error:
         "a Stellar payment to the anchor may have gone out before a restart and its hash was never recorded; " +
@@ -1397,17 +1397,17 @@ async function refreshPayoutUnlocked(
       // Persist the payment hash the moment it exists. Without this, a crash
       // during the poll loop below loses the record and the next call pays
       // the anchor a second time.
-      (funded, hash) => {
+      async (funded, hash) => {
         transfer.txs.push({ step: "anchor.payment.sent", hash });
-        store.updateTransfer(transfer.id, {
+        await store.updateTransfer(transfer.id, {
           pickup: { ...transfer.pickup, ...funded },
           txs: transfer.txs,
         });
       },
-      () => recordOutboundIntent(transfer.id, transfer.txs, "anchor.payment.pending"),
+      async () => await recordOutboundIntent(transfer.id, transfer.txs, "anchor.payment.pending"),
     );
     if (!pickup) return transfer;
-    const updated = store.updateTransfer(transfer.id, {
+    const updated = await store.updateTransfer(transfer.id, {
       state: pickup.status === "PAID" ? "PAYOUT_FUNDED" : cashPayoutState({ ...transfer.pickup, ...pickup }),
       pickup: { ...transfer.pickup, ...pickup },
     });
@@ -1416,7 +1416,7 @@ async function refreshPayoutUnlocked(
   } catch (err: any) {
     // A failure that may have moved money must never auto-refund the sender:
     // that would pay twice. Same reasoning as a completed Bridge destination leg.
-    const latest = store.findTransfer(transfer.id);
+    const latest = await store.findTransfer(transfer.id);
     const maybePaid = anchorPaymentMayHaveLeft(err, latest);
     // A transport failure says nothing about the payout; the next refresh
     // asks again. Only the anchor's own verdict may fail the transfer.
@@ -1426,14 +1426,14 @@ async function refreshPayoutUnlocked(
       return transfer;
     }
     if (maybePaid) {
-      return store.updateTransfer(transfer.id, {
+      return await store.updateTransfer(transfer.id, {
         state: "MANUAL_REVIEW",
         error:
           `anchor settlement unresolved: ${redactedMessage(err).slice(0, 200)}; ` +
           `a Stellar payment may already have been sent, so no automatic refund; ${STELLAR_REVIEW_STEP}`,
       });
     }
-    return failAndCompensate(
+    return await failAndCompensate(
       transfer.id,
       new Error(`anchor settlement failed: ${redactedMessage(err).slice(0, 200)}`),
       transfer.txs,

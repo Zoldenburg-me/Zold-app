@@ -11,11 +11,11 @@ import type { Operator, OperatorSession } from "../store/types.js";
 
 export const OPERATOR_TOKEN_PREFIX = "zop_";
 
-export function issueOperatorSession(operatorId: string): string {
+export async function issueOperatorSession(operatorId: string): Promise<string> {
   const token = `${OPERATOR_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
-  store.addOperatorSession({
+  await store.addOperatorSession({
     id: randomUUID(),
     operatorId,
     tokenHash: tokenHash(token),
@@ -27,17 +27,17 @@ export function issueOperatorSession(operatorId: string): string {
 }
 
 /** The live session and its operator for a bearer, or why there is none. */
-export function operatorSessionFor(
+export async function operatorSessionFor(
   token: string | undefined,
-): { session: OperatorSession; operator: Operator } | { refused: string } {
+): Promise<{ session: OperatorSession; operator: Operator } | { refused: string }> {
   if (!token?.startsWith(OPERATOR_TOKEN_PREFIX)) return { refused: "operator sign-in required" };
-  const session = store.findOperatorSessionByTokenHash(tokenHash(token));
+  const session = await store.findOperatorSessionByTokenHash(tokenHash(token));
   if (!session) return { refused: "invalid operator session" };
   const now = Date.now();
   if (session.revokedAt || now >= Date.parse(session.expiresAt) || now - Date.parse(session.lastUsedAt) > OPERATOR.sessionIdleMs) {
     return { refused: "operator session expired: sign in again" };
   }
-  const operator = store.findOperator(session.operatorId);
+  const operator = await store.findOperator(session.operatorId);
   if (!operator || operator.disabledAt) return { refused: "this operator is disabled" };
   return { session, operator };
 }

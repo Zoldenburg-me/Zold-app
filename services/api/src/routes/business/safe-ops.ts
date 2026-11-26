@@ -34,13 +34,14 @@ import { companySendSignRefusal } from "../crypto-sends.js";
 import { guardianSetupSignRefusal, liveOrgRecoveryChain, type OrgRecoveryChain } from "../../wallet/org-recovery.js";
 import { wrap } from "../util.js";
 import type { OrgRoutes } from "./drafts.js";
+import { mapSeq } from "../../seq.js";
 
-const userOf = (m: { userId?: string } | undefined) => (m?.userId ? store.findUser(m.userId) : undefined);
-const nameOf = (memberId: string) => userOf(store.findMember(memberId))?.name;
+const userOf = async (m: { userId?: string } | undefined) => (m?.userId ? (await store.findUser(m.userId)) : undefined);
+const nameOf = async (memberId: string) => (await userOf(await store.findMember(memberId)))?.name;
 
 /** The op as the org sees it: an allowlist. Assertions and the UserOperation
  *  never leave the server. */
-export function publicSafeOp(op: PendingSafeOp) {
+export async function publicSafeOp(op: PendingSafeOp) {
   return {
     id: op.id,
     kind: op.kind,
@@ -49,12 +50,12 @@ export function publicSafeOp(op: PendingSafeOp) {
     ...(op.reason ? { reason: op.reason } : {}),
     safeAddress: op.safeAddress,
     chainId: op.chainId,
-    createdBy: { memberId: op.createdByMemberId, name: nameOf(op.createdByMemberId) },
+    createdBy: { memberId: op.createdByMemberId, name: await nameOf(op.createdByMemberId) },
     createdAt: op.createdAt,
     updatedAt: op.updatedAt,
     expiresAt: op.expiresAt,
-    signatures: op.signatures.map((s) => ({ memberId: s.memberId, name: nameOf(s.memberId), ownerAddress: s.ownerAddress, signedAt: s.signedAt })),
-    dropped: op.dropped.map((d) => ({ ...d, name: nameOf(d.memberId) })),
+    signatures: await mapSeq(op.signatures, async (s) => ({ memberId: s.memberId, name: await nameOf(s.memberId), ownerAddress: s.ownerAddress, signedAt: s.signedAt })),
+    dropped: await mapSeq(op.dropped, async (d) => ({ ...d, name: await nameOf(d.memberId) })),
     ...(op.userOpHash ? { userOpHash: op.userOpHash } : {}),
     ...(op.txHash ? { txHash: op.txHash } : {}),
   };
@@ -62,10 +63,10 @@ export function publicSafeOp(op: PendingSafeOp) {
 
 /** The live part: the Safe's owners as the chain has them, matched to the
  *  org's owner members (domain/org-signers.ts), and the threshold. */
-function signerView(ctx: OrgContext, op: PendingSafeOp, view: SafeChainView) {
+async function signerView(ctx: OrgContext, op: PendingSafeOp, view: SafeChainView) {
   return {
     threshold: view.threshold,
-    owners: opSigners(signerMembersOf(ctx.org.id), view.owners, op.signatures.map((s) => s.ownerAddress)),
+    owners: opSigners(await signerMembersOf(ctx.org.id), view.owners, op.signatures.map((s) => s.ownerAddress)),
   };
 }
 
@@ -86,7 +87,7 @@ export function createSafeOpRoutes(
   const r = express.Router();
 
   /** Flag, org, role and the op, or the refusal. */
-  const load = (req: express.Request, res: express.Response): { ctx: OrgContext; op?: PendingSafeOp } | undefined => {
+  const load = async (req: express.Request, res: express.Response): Promise<{ ctx: OrgContext; op?: PendingSafeOp } | undefined> => {
     try {
       assertQueueOpen();
     } catch (err) {
@@ -94,11 +95,11 @@ export function createSafeOpRoutes(
       res.status(e.status).json({ error: e.message, code: e.code });
       return undefined;
     }
-    const ctx = deps.ctxOf(req, res);
+    const ctx = await deps.ctxOf(req, res);
     if (!ctx) return undefined;
     if (!requirePermission(ctx, res, "drafts.read")) return undefined;
     if (!req.params.opId) return { ctx };
-    const op = store.findSafeOp(String(req.params.opId));
+    const op = await store.findSafeOp(String(req.params.opId));
     if (!op || op.orgId !== ctx.org.id) {
       res.status(404).json({ error: "no such operation" });
       return undefined;
@@ -114,26 +115,26 @@ export function createSafeOpRoutes(
     return false;
   };
 
-  r.get("/:orgId/safe-ops", (req, res) => {
-    const loaded = load(req, res);
+  r.get("/:orgId/safe-ops", async (req, res) => {
+    const loaded = await load(req, res);
     if (!loaded) return;
-    const ops = store.safeOpsOf(loaded.ctx.org.id).map(publicSafeOp);
+    const ops = await mapSeq(await store.safeOpsOf(loaded.ctx.org.id), publicSafeOp);
     res.json({ ops: ops.sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
   });
 
   r.get(
     "/:orgId/safe-ops/:opId",
     wrap(async (req, res) => {
-      const loaded = load(req, res);
+      const loaded = await load(req, res);
       if (!loaded) return;
       const { ctx, op } = loaded;
-      if (op!.state !== "PENDING") return res.json({ op: publicSafeOp(op!) });
-      const passkey = store.findUser(ctx.userId)?.passkey;
+      if (op!.state !== "PENDING") return res.json({ op: await publicSafeOp(op!) });
+      const passkey = (await store.findUser(ctx.userId))?.passkey;
       try {
         const fresh = await refreshSafeOp(op!, chain);
         res.json({
-          op: publicSafeOp(fresh.op),
-          ...signerView(ctx, fresh.op, fresh.view),
+          op: await publicSafeOp(fresh.op),
+          ...(await signerView(ctx, fresh.op, fresh.view)),
           ...(fresh.op.state === "PENDING" ? { challenge: challengeOf(fresh.op), waitingForEarlierOp: fresh.check.waitingForEarlierOp } : {}),
           ...(passkey ? { signWith: { credentialId: passkey.credentialId, rpId: passkey.rpId ?? SECURITY.rpId } } : {}),
         });
@@ -146,13 +147,13 @@ export function createSafeOpRoutes(
   r.post(
     "/:orgId/safe-ops/:opId/signatures",
     wrap(async (req, res) => {
-      const loaded = load(req, res);
+      const loaded = await load(req, res);
       if (!loaded) return;
       const { ctx } = loaded;
       let op = loaded.op!;
-      const notPending = () => res.status(409).json({ error: `This operation is ${op.state.toLowerCase()}; it takes no more signatures.`, code: "NOT_PENDING", op: publicSafeOp(op) });
-      if (op.state !== "PENDING") return notPending();
-      const user = store.findUser(ctx.userId);
+      const notPending = async () => res.status(409).json({ error: `This operation is ${op.state.toLowerCase()}; it takes no more signatures.`, code: "NOT_PENDING", op: await publicSafeOp(op) });
+      if (op.state !== "PENDING") return await notPending();
+      const user = await store.findUser(ctx.userId);
       const jwk = user?.passkey?.publicKey?.jwk;
       const owner = jwk ? webauthnOwnerFromJwk(jwk) : null;
       const ownerAddress = jwk ? passkeyOwnerAddressOfJwk(jwk) : null;
@@ -165,7 +166,7 @@ export function createSafeOpRoutes(
         if (answerRefusal(res, err)) return;
         throw err;
       }
-      if (op.state !== "PENDING") return notPending();
+      if (op.state !== "PENDING") return await notPending();
       const refusal = signerRefusal(ctx.member, ownerAddress, view.owners);
       if (refusal) return res.status(refusal.status).json({ error: refusal.error, code: refusal.code });
       if (op.signatures.some((s) => s.memberId === ctx.member.id || s.ownerAddress.toLowerCase() === ownerAddress!.toLowerCase())) {
@@ -173,11 +174,11 @@ export function createSafeOpRoutes(
       }
       const blocked = await beforeSign(op);
       if (blocked) {
-        if (blocked.invalidate) store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: blocked.invalidate });
+        if (blocked.invalidate) await store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: blocked.invalidate });
         return res.status(blocked.status).json({ error: blocked.error, code: blocked.code });
       }
       if (!(await checkOpAssertion(user!, req.body, challengeOf(op), res))) return;
-      const added = store.addSafeOpSignature(op.id, {
+      const added = await store.addSafeOpSignature(op.id, {
         memberId: ctx.member.id,
         userId: ctx.userId,
         ownerAddress: ownerAddress!,
@@ -188,27 +189,29 @@ export function createSafeOpRoutes(
         signedAt: new Date().toISOString(),
       });
       if (!added) {
-        op = store.findSafeOp(op.id)!;
+        op = (await store.findSafeOp(op.id))!;
         return op.state === "PENDING"
           ? res.status(409).json({ error: "You have signed this operation already.", code: "ALREADY_SIGNED" })
-          : notPending();
+          : (await notPending());
       }
       const after = await relayIfReady(added, chain);
-      const fresh = after.state === "PENDING" ? signerView(ctx, after, view) : {};
-      res.status(after.state === "FAILED" || after.state === "MANUAL_REVIEW" ? 502 : 201).json({ op: publicSafeOp(after), ...fresh });
+      const fresh = after.state === "PENDING" ? (await signerView(ctx, after, view)) : {};
+      res.status(after.state === "FAILED" || after.state === "MANUAL_REVIEW" ? 502 : 201).json({ op: await publicSafeOp(after), ...fresh });
     }),
   );
 
-  r.post("/:orgId/safe-ops/:opId/cancel", (req, res) => {
-    const loaded = load(req, res);
-    if (!loaded) return;
-    const { ctx, op } = loaded;
-    if (!canCancelSafeOp(ctx.member, op!)) {
-      return res.status(403).json({ error: "Only the person who queued this operation, or an owner, can withdraw it.", code: "CANNOT_CANCEL" });
-    }
-    const ended = store.endPendingSafeOp(op!.id, { state: "CANCELLED", reason: `withdrawn by ${nameOf(ctx.member.id) ?? "a member"}` });
-    if (!ended) return res.status(409).json({ error: `This operation is ${op!.state.toLowerCase()}; it can no longer be withdrawn.`, code: "NOT_PENDING" });
-    res.json({ op: publicSafeOp(ended) });
+  r.post("/:orgId/safe-ops/:opId/cancel", async (req, res) => {
+    return store.tx(async () => {
+      const loaded = await load(req, res);
+      if (!loaded) return;
+      const { ctx, op } = loaded;
+      if (!canCancelSafeOp(ctx.member, op!)) {
+        return res.status(403).json({ error: "Only the person who queued this operation, or an owner, can withdraw it.", code: "CANNOT_CANCEL" });
+      }
+      const ended = await store.endPendingSafeOp(op!.id, { state: "CANCELLED", reason: `withdrawn by ${(await nameOf(ctx.member.id)) ?? "a member"}` });
+      if (!ended) return res.status(409).json({ error: `This operation is ${op!.state.toLowerCase()}; it can no longer be withdrawn.`, code: "NOT_PENDING" });
+      res.json({ op: await publicSafeOp(ended) });
+    });
   });
 
   return r;

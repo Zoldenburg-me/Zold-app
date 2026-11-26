@@ -27,7 +27,7 @@ import type { Organisation } from "../../domain/types.js";
 import { redactedMessage } from "../../http/log-cause.js";
 
 export interface OrgRoutes {
-  ctxOf: (req: express.Request, res: express.Response) => OrgContext | undefined;
+  ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
 
 export const gmiAvailable = () => dataEncryptionProblem() === null;
@@ -121,8 +121,8 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
 
-  r.get("/:orgId/integrations", (req, res) => {
-    const ctx = ctxOf(req, res);
+  r.get("/:orgId/integrations", async (req, res) => {
+    const ctx = await ctxOf(req, res);
     if (!ctx) return;
     if (!requirePermission(ctx, res, "org.read")) return;
     res.json({ integrations: publicIntegrations(ctx.org), available: gmiAvailable() });
@@ -130,7 +130,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
 
   r.post("/:orgId/integrations/getmyinvoices", async (req, res, next) => {
     try {
-      const ctx = ctxOf(req, res);
+      const ctx = await ctxOf(req, res);
       if (!ctx) return;
       if (!requireCapability(ctx, res, "integrations.accounting")) return;
       if (!requirePermission(ctx, res, "org.update")) return;
@@ -147,7 +147,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         account = await new GetMyInvoicesClient({ apiKey, userAgent: gmiUserAgent() }).account();
       } catch (err: any) {
         if (err instanceof GmiApiError && err.status >= 400 && err.status < 500) {
-          store.audit(auditEntry("partner.call_refused", { partner: "getmyinvoices", status: err.status, orgId: ctx.org.id }, ctx.userId));
+          await store.audit(auditEntry("partner.call_refused", { partner: "getmyinvoices", status: err.status, orgId: ctx.org.id }, ctx.userId));
           return res.status(400).json({ error: "GetMyInvoices did not accept that key" });
         }
         return res.status(503).json({ error: `GetMyInvoices could not be reached to verify the key: ${redactedMessage(err).slice(0, 160)}` });
@@ -159,42 +159,42 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
         if (err instanceof EncryptionUnavailableError) return res.status(503).json({ error: err.message });
         throw err;
       }
-      const org = store.updateOrganisation(ctx.org.id, {
-        integrations: {
-          ...(ctx.org.integrations ?? {}),
-          getmyinvoices: {
-            apiKeyEnc,
-            accountName: account.organization || account.name || undefined,
-            accountEmail: account.email,
-            ...(account.accountId ? { accountId: String(account.accountId) } : {}),
-            connectedAt: new Date().toISOString(),
-            connectedByMemberId: ctx.member.id,
-            ...(companyId !== undefined ? { companyId } : {}),
-          },
+      const org = await store.patchOrgSub(ctx.org.id, "integrations", (cur) => ({
+        ...(cur ?? {}),
+        getmyinvoices: {
+          apiKeyEnc,
+          accountName: account.organization || account.name || undefined,
+          accountEmail: account.email,
+          ...(account.accountId ? { accountId: String(account.accountId) } : {}),
+          connectedAt: new Date().toISOString(),
+          connectedByMemberId: ctx.member.id,
+          ...(companyId !== undefined ? { companyId } : {}),
         },
-      });
-      store.audit(auditEntry("partner.credentials_connected", { partner: "getmyinvoices", orgId: org.id, account: account.organization ?? account.name }, ctx.userId));
+      }));
+      await store.audit(auditEntry("partner.credentials_connected", { partner: "getmyinvoices", orgId: org.id, account: account.organization ?? account.name }, ctx.userId));
       res.status(201).json({ integrations: publicIntegrations(org), account: { name: account.name, organization: account.organization, email: account.email, hasBankingAccess: account.hasBankingAccess } });
     } catch (err) {
       next(err);
     }
   });
 
-  r.delete("/:orgId/integrations/getmyinvoices", (req, res) => {
-    const ctx = ctxOf(req, res);
-    if (!ctx) return;
-    if (!requirePermission(ctx, res, "org.update")) return;
-    if (!ctx.org.integrations?.getmyinvoices) return res.status(409).json({ error: "no GetMyInvoices key is connected" });
-    const { getmyinvoices: _gone, ...rest } = ctx.org.integrations;
-    const org = store.updateOrganisation(ctx.org.id, { integrations: rest });
-    store.audit(auditEntry("partner.credentials_removed", { partner: "getmyinvoices", orgId: org.id }, ctx.userId));
-    res.json({ integrations: publicIntegrations(org) });
+  r.delete("/:orgId/integrations/getmyinvoices", async (req, res) => {
+    return store.tx(async () => {
+      const ctx = await ctxOf(req, res);
+      if (!ctx) return;
+      if (!requirePermission(ctx, res, "org.update")) return;
+      if (!ctx.org.integrations?.getmyinvoices) return res.status(409).json({ error: "no GetMyInvoices key is connected" });
+      const { getmyinvoices: _gone, ...rest } = ctx.org.integrations;
+      const org = await store.updateOrganisation(ctx.org.id, { integrations: rest });
+      await store.audit(auditEntry("partner.credentials_removed", { partner: "getmyinvoices", orgId: org.id }, ctx.userId));
+      res.json({ integrations: publicIntegrations(org) });
+    });
   });
 
   /** Their bank accounts, so an operator can pick where lines should go. Read only. */
   r.get("/:orgId/integrations/getmyinvoices/bank-accounts", async (req, res, next) => {
     try {
-      const ctx = ctxOf(req, res);
+      const ctx = await ctxOf(req, res);
       if (!ctx) return;
       if (!requireCapability(ctx, res, "integrations.accounting")) return;
       if (!requirePermission(ctx, res, "ledger.read")) return;
@@ -215,7 +215,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
   r.post("/:orgId/integrations/getmyinvoices/push", async (req, res, next) => {
     let held: string | undefined;
     try {
-      const ctx = ctxOf(req, res);
+      const ctx = await ctxOf(req, res);
       if (!ctx) return;
       if (!requireCapability(ctx, res, "integrations.accounting")) return;
       if (!requirePermission(ctx, res, "reports.run")) return;
@@ -226,9 +226,9 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       if (!client) return res.status(409).json({ error: "connect a GetMyInvoices API key first" });
       const month = String(req.body?.month ?? "");
       if (!isMonth(month)) return res.status(400).json({ error: "month must be YYYY-MM" });
-      const lines = linesInMonth(statementLinesOf(ctx.org.id), month);
       pushing.add(ctx.org.id);
       held = ctx.org.id;
+      const lines = linesInMonth(await statementLinesOf(ctx.org.id), month);
       // Where the bank lines go: the account asked for, else the one picked
       // last time, else the only manual account there is. None of those: the
       // Belege still go up, and the answer says a bank account is needed.
@@ -251,7 +251,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
       const bankAccountUid = bankAccountsError ? undefined
         : asked ?? (manual.some((b) => b.bankAccountUid === gmi.bankAccountUid) ? gmi.bankAccountUid : manual.length === 1 ? manual[0].bankAccountUid : undefined);
       if (bankAccountUid !== undefined && bankAccountUid !== gmi.bankAccountUid) {
-        store.updateOrganisation(ctx.org.id, { integrations: { ...ctx.org.integrations, getmyinvoices: { ...gmi, bankAccountUid } } });
+        await store.patchOrgSub(ctx.org.id, "integrations", (cur) => ({ ...cur, getmyinvoices: { ...cur!.getmyinvoices!, bankAccountUid } }));
       }
       const results: { lineId: string; code?: string; outcome: "uploaded" | "exists" | "unknown" | "no-beleg" | "failed"; stale?: true; documentUid?: number; verifiedAfterTimeout?: true; tagsMayBeMissing?: true; error?: string; bankLine?: GmiBankLineResult | { outcome: "failed"; error: string } }[] = [];
       for (const line of lines) {
@@ -269,7 +269,7 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
           continue;
         }
         // The export's rule: a Beleg that stopped verifying is replaced, not sent.
-        const agree = belegRecordsAgree(doc.snapshot);
+        const agree = await belegRecordsAgree(doc.snapshot);
         if (!agree.ok) {
           results.push({ lineId: line.id, outcome: "no-beleg", stale: true, error: `the receipt no longer matches the books (${agree.detail}); replace it in Books` });
           continue;
@@ -282,30 +282,34 @@ export function createIntegrationRoutes(deps: OrgRoutes): express.Router {
           pushed = { lineId: line.id, code: doc.code, outcome: "failed", error: redactedMessage(err).slice(0, 200) };
         }
         // Written only when it changes: each write persists the whole store.
-        const hold = (patch: NonNullable<NonNullable<typeof doc.sentTo>["getmyinvoices"]>) => {
-          const was = store.findDocumentByCode(doc.code)?.sentTo?.getmyinvoices ?? {};
-          if (Object.entries(patch).some(([k, v]) => (was as Record<string, unknown>)[k] !== v)) store.updateDocument(doc.id, { sentTo: { getmyinvoices: { ...was, ...patch } } });
+        const hold = async (patch: NonNullable<NonNullable<typeof doc.sentTo>["getmyinvoices"]>) => {
+          return store.tx(async () => {
+            // Held: two pushes of one Beleg never merge into a stale copy.
+            await store.lockKey(`document:${doc.id}`);
+            const was = (await store.findDocumentByCode(doc.code))?.sentTo?.getmyinvoices ?? {};
+            if (Object.entries(patch).some(([k, v]) => (was as Record<string, unknown>)[k] !== v)) await store.updateDocument(doc.id, { sentTo: { getmyinvoices: { ...was, ...patch } } });
+          });
         };
-        if (pushed.documentUid) hold({ documentUid: pushed.documentUid });
+        if (pushed.documentUid) await hold({ documentUid: pushed.documentUid });
         if (bankAccountUid !== undefined) {
           try {
             // Current code first; an earlier one finds a line sent before a
             // replace. Only codes GetMyInvoices already holds go up: a revoked
             // code still opens its snapshot at /v.
-            const earlier = belegeOfLine(ctx.org.id, line.id).filter((d) => d.id !== doc.id && d.sentTo?.getmyinvoices);
+            const earlier = (await belegeOfLine(ctx.org.id, line.id)).filter((d) => d.id !== doc.id && d.sentTo?.getmyinvoices);
             const markers = [doc.code, ...earlier.filter((d) => d.sentTo!.getmyinvoices!.transactionUid || d.sentTo!.getmyinvoices!.bankLine).map((d) => d.code)];
             const superseded = earlier.map((d) => d.sentTo!.getmyinvoices!.documentUid).filter((n): n is number => !!n);
             // Recorded before the add goes out: one that fails or gets no
             // answer may still have landed, and a replace must find it.
             pushed.bankLine = await client.pushBankLine(bankAccountUid, bankLineFor(doc.snapshot, doc.code), markers, pushed.documentUid, superseded,
-              (transactionUid) => hold(transactionUid ? { transactionUid } : { bankLine: true }));
+              async (transactionUid) => await hold(transactionUid ? { transactionUid } : { bankLine: true }));
           } catch (err: any) {
             pushed.bankLine = { outcome: "failed", error: redactedMessage(err).slice(0, 200) };
           }
         }
         results.push(pushed);
       }
-      store.audit(auditEntry("partner.documents_pushed", { partner: "getmyinvoices", orgId: ctx.org.id, month, uploaded: results.filter((x) => x.outcome === "uploaded").length, existing: results.filter((x) => x.outcome === "exists").length, unknown: results.filter((x) => x.outcome === "unknown").length, failed: results.filter((x) => x.outcome === "failed").length }, ctx.userId));
+      await store.audit(auditEntry("partner.documents_pushed", { partner: "getmyinvoices", orgId: ctx.org.id, month, uploaded: results.filter((x) => x.outcome === "uploaded").length, existing: results.filter((x) => x.outcome === "exists").length, unknown: results.filter((x) => x.outcome === "unknown").length, failed: results.filter((x) => x.outcome === "failed").length }, ctx.userId));
       res.json({ month, results, bankAccountUid: bankAccountUid ?? null, ...(bankAccountUid === undefined ? { bankAccounts: manual } : {}), ...(bankAccountsError ? { bankAccountsError } : {}) });
     } catch (err) {
       next(err);

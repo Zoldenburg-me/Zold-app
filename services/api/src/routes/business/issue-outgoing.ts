@@ -25,7 +25,7 @@ import {
 } from "../../domain/invoicing.js";
 import { vatIdShape } from "../../domain/vat-ids.js";
 import { checkVatId } from "../../adapters/vies.js";
-import { assertTransition, newLinkToken, ownerInvoiceView, settlementUpdate } from "../../domain/invoices.js";
+import { assertTransition, newLinkToken, ownerInvoiceView, settlementRef, settlementUpdate } from "../../domain/invoices.js";
 import type { Invoice } from "../../domain/types.js";
 import type { OrgContext } from "../org-context.js";
 import {
@@ -49,7 +49,7 @@ export async function issueOutgoing(
   fromDraft?: Invoice,
   /** Run with nothing awaited before the write: a reason the draft may no
    *  longer be issued (what it bills changed during the lookups), or none. */
-  stillIssuable?: () => string | undefined,
+  stillIssuable?: () => Promise<string | undefined>,
 ): Promise<IssueAnswer> {
   const body = fromDraft ? { ...requestBody, issueDate: undefined, dueDate: undefined } : requestBody;
   // Taken now: the store hands out the row itself, so after the lookups below
@@ -60,7 +60,7 @@ export async function issueOutgoing(
   let dueDate: string | undefined;
   let report;
   try {
-    draft = await withConversion(draftFrom(ctx.org, body));
+    draft = await withConversion(await draftFrom(ctx.org, body));
     // Chosen per invoice; the profile's language and payment terms are the
     // defaults.
     language = invoiceLanguage(body.language, languageOf(ctx.org));
@@ -106,136 +106,142 @@ export async function issueOutgoing(
     }
   }
 
-  // §14 Abs. 4 Nr. 4: one number, once. Everything from here to the write is
-  // synchronous, so the number is picked against what is issued right now: a
-  // request that awaited alongside this one cannot have taken it meanwhile. A
-  // number the caller supplied is refused if issued; an automatic one steps
-  // over any number already issued, say one typed by hand.
-  const numberSupplied = typeof body.number === "string" && body.number.trim() !== "";
-  const picked = numberSupplied ? undefined : nextNumberOf(ctx.org, draft.issueDate!);
-  const number = picked?.number ?? draft.number!;
-  if (numberSupplied && issuedNumbersOf(ctx.org.id).has(number)) {
-    return refusal(409, `Invoice number ${number} has already been issued.`);
-  }
-  if (fromDraft) {
-    // The lookups above awaited: the draft must still be the one that was read.
-    const current = store.findInvoice(fromDraft.id);
-    if (!current || current.state !== "DRAFT" || current.updatedAt !== draftReadAt) {
-      return refusal(409, "This draft changed while it was being issued. Nothing was issued; look at it again.");
+  // §14 Abs. 4 Nr. 4: one number, once. Everything from here to the series
+  // bump is one transaction that holds the organisation row, so the number is
+  // picked against what is issued right now: another issue of this org waits
+  // for it (§2 rule 4), and UNIQUE(org_id, number) refuses a duplicate on
+  // Postgres whatever the code does. A number the caller supplied is refused
+  // if issued; an automatic one steps over any number already issued, say one
+  // typed by hand. No partner call runs in here.
+  return store.tx(async () => {
+    const org = (await store.lockOrganisation(ctx.org.id)) ?? ctx.org;
+    const numberSupplied = typeof body.number === "string" && body.number.trim() !== "";
+    const picked = numberSupplied ? undefined : (await nextNumberOf(org, draft.issueDate!));
+    const number = picked?.number ?? draft.number!;
+    if (numberSupplied && (await issuedNumbersOf(ctx.org.id)).has(number)) {
+      return refusal(409, `Invoice number ${number} has already been issued.`);
     }
-    const changed = stillIssuable?.();
-    if (changed) return refusal(409, changed);
-  }
-  const now = new Date();
-  const { token, hash } = newLinkToken();
-  const display: Record<string, boolean> = {
-    ...DEFAULT_DISPLAY,
-    ...(ctx.org.invoicing?.display as Record<string, boolean> | undefined),
-  };
+    if (fromDraft) {
+      // The lookups above awaited: the draft must still be the one that was read.
+      const current = await store.findInvoice(fromDraft.id);
+      if (!current || current.state !== "DRAFT" || current.updatedAt !== draftReadAt) {
+        return refusal(409, "This draft changed while it was being issued. Nothing was issued; look at it again.");
+      }
+      const changed = await stillIssuable?.();
+      if (changed) return refusal(409, changed);
+    }
+    const now = new Date();
+    const { token, hash } = newLinkToken();
+    const display: Record<string, boolean> = {
+      ...DEFAULT_DISPLAY,
+      ...(ctx.org.invoicing?.display as Record<string, boolean> | undefined),
+    };
 
-  const document: Pick<Invoice, "lines" | "currency" | "total" | "dueDate" | "supplier" | "issued" | "submittedAt"> = {
-    lines: report.totals.lines.map((l, i) => ({
-      description: l.description,
-      quantity: l.quantity,
-      unitPrice: l.unitPriceNet,
-      amount: fromCents(l.netCents),
-      ...(fromDraft?.lines[i]?.receipt ? { receipt: fromDraft.lines[i].receipt } : {}),
-    })),
-    currency: draft.currency ?? SETTLEMENT_CURRENCY,
-    total: fromCents(report.totals.grossCents),
-    dueDate,
-    supplier: {
-      orgName: draft.issuer.name ?? ctx.org.name,
-      email: ctx.org.email ?? "",
-      invoiceNumber: number,
-    },
-    issued: {
-      number,
-      issueDate: draft.issueDate!,
-      supplyDate: draft.supplyDate,
-      supplyPeriod: draft.supplyPeriod,
-      issuer: draft.issuer,
-      recipient: draft.recipient,
-      vatTreatment: draft.treatment,
-      // The org's own rules carry their note; without them it would print blank.
-      vatNote: vatNoteFor(draft.treatment, language, customReasonsOf(ctx.org)),
-      netCents: report.totals.netCents,
-      vatCents: report.totals.vatCents,
-      grossCents: report.totals.grossCents,
-      buckets: report.totals.buckets,
-      // The document's own currency, and its settlement-currency restatement
-      // at the rate that was live when it was issued. Frozen, never re-derived.
+    const document: Pick<Invoice, "lines" | "currency" | "total" | "dueDate" | "supplier" | "issued" | "submittedAt"> = {
+      lines: report.totals.lines.map((l, i) => ({
+        description: l.description,
+        quantity: l.quantity,
+        unitPrice: l.unitPriceNet,
+        amount: fromCents(l.netCents),
+        ...(fromDraft?.lines[i]?.receipt ? { receipt: fromDraft.lines[i].receipt } : {}),
+      })),
       currency: draft.currency ?? SETTLEMENT_CURRENCY,
-      ...(draft.conversion ? { conversion: draft.conversion } : {}),
-      purchaseOrder: str(body.purchaseOrder),
-      paymentTerms: str(body.paymentTerms) ?? (fromDraft ? undefined : ctx.org.invoicing?.paymentTermsNote),
-      notes: str(body.notes),
-      display,
-      customFields: ctx.org.invoicing?.customFields,
-      language,
-      acceptedWarnings: [
-        ...report.warnings.map((w) => `${w.field}: ${w.message}`),
-        // A draft known to be possibly incomplete is issued only on acceptance.
-        ...(fromDraft?.fromReceipts?.syncWarnings ?? []).map((message) => `receipts: ${message}`),
-      ],
-      ...(draft.recipientIsBusiness !== undefined ? { recipientIsBusiness: draft.recipientIsBusiness } : {}),
-      ...(draft.supplyKind ? { supplyKind: draft.supplyKind } : {}),
-      ...(draft.recipientVatCheck ? { recipientVatCheck: draft.recipientVatCheck } : {}),
-      // Frozen with the document: which rules ran, and how far they went.
-      jurisdiction: report.jurisdiction,
-    },
-    submittedAt: now.toISOString(),
-  };
-
-  const invoice = fromDraft
-    ? issueDraft(fromDraft, document, hash)
-    : store.addInvoice({
-        id: `inv_${randomUUID()}`,
-        direction: "outgoing",
-        orgId: ctx.org.id,
-        linkTokenHash: hash,
-        state: "SUBMITTED", // issued and locked; nothing for a supplier to fill in
-        ...document,
-        createdByMemberId: ctx.member.id,
-        createdAt: now.toISOString(),
-        updatedAt: now.toISOString(),
-      });
-
-  // Burn the number only once the invoice exists: §14 Abs. 4 Nr. 4 wants each
-  // number assigned once, and advancing before the write would leave a gap
-  // pointing at an invoice that was never issued. The language is resolved the
-  // same way: once an invoice has been issued under the country's default, it
-  // is saved on the org, so a later move of country doesn't silently flip the
-  // language new invoices are written in. The default frozen is the country's,
-  // not this invoice's: a one-off override — say a customer's payer rule —
-  // stays on its own invoice.
-  if (!numberSupplied || !ctx.org.invoicing?.language) {
-    store.updateOrganisation(ctx.org.id, {
-      invoicing: {
-        ...(ctx.org.invoicing ?? {}),
-        ...(picked ? { numberSeries: { ...seriesOf(ctx.org), next: picked.at + 1 } } : {}),
-        ...(ctx.org.invoicing?.language ? {} : { language: languageOf(ctx.org) }),
+      total: fromCents(report.totals.grossCents),
+      dueDate,
+      supplier: {
+        orgName: draft.issuer.name ?? ctx.org.name,
+        email: ctx.org.email ?? "",
+        invoiceNumber: number,
       },
-    });
-  }
+      issued: {
+        number,
+        issueDate: draft.issueDate!,
+        supplyDate: draft.supplyDate,
+        supplyPeriod: draft.supplyPeriod,
+        issuer: draft.issuer,
+        recipient: draft.recipient,
+        vatTreatment: draft.treatment,
+        // The org's own rules carry their note; without them it would print blank.
+        vatNote: vatNoteFor(draft.treatment, language, customReasonsOf(ctx.org)),
+        netCents: report.totals.netCents,
+        vatCents: report.totals.vatCents,
+        grossCents: report.totals.grossCents,
+        buckets: report.totals.buckets,
+        // The document's own currency, and its settlement-currency restatement
+        // at the rate that was live when it was issued. Frozen, never re-derived.
+        currency: draft.currency ?? SETTLEMENT_CURRENCY,
+        ...(draft.conversion ? { conversion: draft.conversion } : {}),
+        purchaseOrder: str(body.purchaseOrder),
+        paymentTerms: str(body.paymentTerms) ?? (fromDraft ? undefined : ctx.org.invoicing?.paymentTermsNote),
+        notes: str(body.notes),
+        display,
+        customFields: ctx.org.invoicing?.customFields,
+        language,
+        acceptedWarnings: [
+          ...report.warnings.map((w) => `${w.field}: ${w.message}`),
+          // A draft known to be possibly incomplete is issued only on acceptance.
+          ...(fromDraft?.fromReceipts?.syncWarnings ?? []).map((message) => `receipts: ${message}`),
+        ],
+        ...(draft.recipientIsBusiness !== undefined ? { recipientIsBusiness: draft.recipientIsBusiness } : {}),
+        ...(draft.supplyKind ? { supplyKind: draft.supplyKind } : {}),
+        ...(draft.recipientVatCheck ? { recipientVatCheck: draft.recipientVatCheck } : {}),
+        // Frozen with the document: which rules ran, and how far they went.
+        jurisdiction: report.jurisdiction,
+      },
+      submittedAt: now.toISOString(),
+    };
 
-  return {
-    status: 201,
-    body: {
-      invoice: ownerInvoiceView(invoice),
-      linkToken: token,
-      linkPath: `/invoice/${token}`,
-      warnings: report.warnings,
-    },
-  };
+    const invoice = fromDraft
+      ? (await issueDraft(fromDraft, document, hash))
+      : (await store.addInvoice({
+          id: `inv_${randomUUID()}`,
+          direction: "outgoing",
+          orgId: ctx.org.id,
+          linkTokenHash: hash,
+          state: "SUBMITTED", // issued and locked; nothing for a supplier to fill in
+          ...document,
+          createdByMemberId: ctx.member.id,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        }));
+
+    // Burn the number only once the invoice exists: §14 Abs. 4 Nr. 4 wants each
+    // number assigned once, and advancing before the write would leave a gap
+    // pointing at an invoice that was never issued. The language is resolved the
+    // same way: once an invoice has been issued under the country's default, it
+    // is saved on the org, so a later move of country doesn't silently flip the
+    // language new invoices are written in. The default frozen is the country's,
+    // not this invoice's: a one-off override — say a customer's payer rule —
+    // stays on its own invoice.
+    if (!numberSupplied || !org.invoicing?.language) {
+      await store.patchOrgSub(org.id, "invoicing", (cur) => ({
+        ...(cur ?? {}),
+        ...(picked ? { numberSeries: { ...seriesOf(org), next: picked.at + 1 } } : {}),
+        ...(cur?.language ? {} : { language: languageOf(org) }),
+      }));
+    }
+
+    return {
+      status: 201,
+      body: {
+        invoice: ownerInvoiceView(invoice),
+        linkToken: token,
+        linkPath: `/invoice/${token}`,
+        warnings: report.warnings,
+      },
+    };
+  });
 }
 
 /** Turn the draft into the issued document, then close it with the receipts
  *  it already carries. */
-function issueDraft(draft: Invoice, document: Partial<Invoice>, linkTokenHash: string): Invoice {
-  assertTransition(draft.state, "SUBMITTED");
-  const submitted = store.updateInvoice(draft.id, { ...document, state: "SUBMITTED", linkTokenHash });
-  const settlements = submitted.settlements ?? [];
-  const last = settlements[settlements.length - 1];
-  return last ? store.updateInvoice(draft.id, settlementUpdate(submitted, last)) : submitted;
+async function issueDraft(draft: Invoice, document: Partial<Invoice>, linkTokenHash: string): Promise<Invoice> {
+  return store.tx(async () => {
+    assertTransition(draft.state, "SUBMITTED");
+    const submitted = await store.updateInvoice(draft.id, { ...document, state: "SUBMITTED", linkTokenHash });
+    const settlements = submitted.settlements ?? [];
+    const last = settlements[settlements.length - 1];
+    if (!last) return submitted;
+    return (await store.settleInvoice(draft.id, settlementRef(last), (row) => settlementUpdate(row, last), true))!;
+  });
 }
