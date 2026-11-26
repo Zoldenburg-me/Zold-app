@@ -14,6 +14,7 @@ import { META, RENDER, setExportMonth } from "./views.js";
 import { checkCustomerVatId, readInvoiceEditor, refreshInvoiceCheck } from "./invoice.js";
 import { ACTIONS } from "./actions.js";
 import { initSearch } from "./search.js";
+import { seaFor } from "./sea.js";
 
 // Elements whose action is still running. The element is also disabled, but
 // the set covers anything without a `disabled` property and a click that
@@ -71,6 +72,8 @@ let seq = 0;
 export async function render({ focus = false } = {}) {
   if (!org) return;
   const mine = ++seq;
+  // Leaving Home: the sea goes now, not once the next screen has loaded.
+  if (view !== "overview") seaFor(view);
   renderNav();
   refreshSide().catch(() => { /* the sidebar keeps what it had */ });
   paintBanner();
@@ -132,6 +135,8 @@ export async function render({ focus = false } = {}) {
     $("#view-title").setAttribute("tabindex", "-1");
     $("#view-title").focus({ preventScroll: true });
   }
+  // After the scroll reset, so the sea measures the command section where it now is.
+  if (mine === seq) seaFor(view);
 }
 
 export async function loadOrg(id) {
