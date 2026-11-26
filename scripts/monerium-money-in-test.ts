@@ -191,8 +191,9 @@ await check("a SEPA credit to a sole trader's Safe is booked under the user, on 
   const id = issue(addr("b"));
   assert.equal(await mirrorOrderById(id), "recorded");
   assert.equal((await recordOf(id))!.userId, "u_st");
-  await writeStatementLines();
-  assert.ok(await lineOf("org_st", id));
+  // Two statement sweeps in parallel write what one does (§2, ledger).
+  await Promise.all([writeStatementLines(), writeStatementLines()]);
+  assert.equal((await store.ledgerOf("org_st")).filter((e) => e.statement?.links.orderId === id).length, 1, "one line, whichever sweep wrote it");
   assert.equal(await lineOf("org_st_personal", id), undefined);
 });
 
