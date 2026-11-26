@@ -5,9 +5,9 @@
  * recorded version with no file. We roll forward: there are no down files.
  *
  * Every transaction takes one advisory lock first, so two runners on one
- * database queue and a file is never applied twice. The key carries the
- * database name: advisory locks are cluster-wide, and two databases on one
- * server (parallel test runs) must not queue behind each other.
+ * database queue and a file is never applied twice. Advisory locks are per
+ * database, so two databases on one server (parallel test runs) do not queue
+ * behind each other.
  *
  * A file runs inside our transaction, so it may not hold its own BEGIN,
  * COMMIT or ROLLBACK (refused: it would commit half the file), and anything
@@ -33,9 +33,13 @@ const STATEMENT_TIMEOUT = "2min";
 const TX_CONTROL = /^(begin|commit|rollback|abort|end|start\s+transaction|savepoint|release|prepare\s+transaction)\b/i;
 
 export function transactionControl(sql: string): string | undefined {
-  const bare = sql
-    .replace(/\$([a-z_][a-z0-9_]*)?\$[\s\S]*?\$\1\$/gi, "''")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
+  let bare = sql.replace(/\$([a-z_][a-z0-9_]*)?\$[\s\S]*?\$\1\$/gi, "''");
+  // Postgres nests block comments: strip the innermost until none is left.
+  for (let prev = ""; prev !== bare; ) {
+    prev = bare;
+    bare = bare.replace(/\/\*(?:(?!\/\*)[\s\S])*?\*\//g, " ");
+  }
+  bare = bare
     .replace(/--[^\n]*/g, " ")
     .replace(/'(?:[^']|'')*'/g, "''")
     .replace(/"(?:[^"]|"")*"/g, '""');

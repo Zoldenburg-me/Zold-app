@@ -59,7 +59,7 @@ console.log("ok - store suite on the JSON backend");
   assert.equal((await db.query("SELECT 1 FROM pg_tables WHERE tablename = 'half_done'")).rows.length, 0, "the failed file rolled back");
   assert.deepEqual((await db.query<{ version: number }>("SELECT version FROM schema_migrations")).rows.map((r) => r.version), [1]);
   // A file that ends our transaction early is refused before anything runs.
-  for (const sql of ["CREATE TABLE a (id text);\nCOMMIT;\nCREATE TABLE b (id text);", "begin;\nSELECT 1;", "SELECT 1; ROLLBACK", "START TRANSACTION; SELECT 1;"]) {
+  for (const sql of ["CREATE TABLE a (id text);\nCOMMIT;\nCREATE TABLE b (id text);", "begin;\nSELECT 1;", "SELECT 1; ROLLBACK", "START TRANSACTION; SELECT 1;", "/* a /* nested */ still a comment */ ROLLBACK;"]) {
     const early = { version: 2, name: "0002_early.sql", sql, sha256: "c".repeat(64) };
     await assert.rejects(() => migrate(db, [...files, early]), /0002_early.sql contains (COMMIT|BEGIN|ROLLBACK|START TRANSACTION)/);
   }
