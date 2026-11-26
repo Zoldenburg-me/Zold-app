@@ -93,9 +93,25 @@ const PASSKEY_WAIT_MS = 60 * 60_000;
  *  it ends, and a passkey costs a stranger nothing: this many holding one
  *  refuse every new start until one ends (docs/recovery-and-signers.md). */
 const MAX_OPEN_REQUESTS = 10;
-const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"] as const;
+const OPEN = ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD", "RELAYING"] as const;
 /** A request no one has signed: the owner or the reviewer may still end it. */
 const CANCELLABLE = ["PASSKEY_PENDING", "REVIEW_PENDING"] as const;
+
+/**
+ * How long a relay may hold RELAYING before the sweep asks the chain. A relay
+ * waits up to 90 s for its receipt (recovery/zoldenburg-guardian.ts), so one
+ * still RELAYING after this was cut off (a restart, a crash).
+ */
+export const RELAY_TIMEOUT_MS = 10 * 60_000;
+
+/** The reserve a relay claims before its chain call (§2 rule 5). */
+const relayFrom = (from: "REVIEW_PENDING" | "GRACE_PERIOD") => ({ status: "RELAYING" as const, relaying: { from, at: new Date().toISOString() } });
+
+/** A relay that ended with nothing on chain gives the request back to the
+ *  status it came from. A no-op once the relay's outcome moved it on. */
+async function releaseRelay(id: string, from: "REVIEW_PENDING" | "GRACE_PERIOD", patch: Partial<RecoveryRequest> = {}) {
+  return store.updateRecoveryRequestFrom(id, ["RELAYING"], { ...patch, status: from, relaying: undefined });
+}
 
 const pendingOps = new Map<string, { userId: string; kind: "add" | "remove"; userOperation: any; expiresAt: number; challenge: string }>();
 const prune = (now = Date.now()) => {
@@ -248,9 +264,9 @@ async function closeOtherRequests(signed: RecoveryRequest, now: Date): Promise<v
   return store.tx(async () => {
     await store.lockUser(signed.userId);
     for (const r of (await store.recoveryRequestsForUser(signed.userId))) {
-      if (r.id === signed.id || r.mode !== "zoldenburg" || !["PASSKEY_PENDING", "REVIEW_PENDING"].includes(r.status)) continue;
+      if (r.id === signed.id || r.mode !== "zoldenburg" || !["PASSKEY_PENDING", "REVIEW_PENDING", "RELAYING"].includes(r.status)) continue;
       // Its signature is being relayed: closing it would hide what lands on chain.
-      if (relaying.has(r.id)) {
+      if (r.status === "RELAYING") {
         console.warn(`RECOVERY: ${r.id} left open while its signature is relayed (${signed.id} reached the chain)`);
         sparedWhileRelaying.add(r.id);
         continue;
@@ -272,11 +288,14 @@ export async function syncZoldenburgFromChain(request: RecoveryRequest, now = ne
       const executeAfter = new Date(state.pending.executeAfter * 1000);
       console.log(`RECOVERY: ${request.id} seen executed on chain; finalizable after ${executeAfter.toISOString()}`);
       await closeOtherRequests(request, now);
-      return await store.updateRecoveryRequest(request.id, {
+      // From the status it was read in, or from a relay the sweep reconciles.
+      const moved = await store.updateRecoveryRequestFrom(request.id, ["REVIEW_PENDING", "RELAYING"], {
         status: "GRACE_PERIOD",
+        relaying: undefined,
         factors: { ...request.factors, kyc: "passed", manualReview: "passed" },
         zoldenburg: { ...(await zoldenburgNow(request.id)), executedAt: z.executedAt ?? now.toISOString(), finalizeAfter: executeAfter.toISOString() },
       });
+      return moved ?? (await store.findRecoveryRequest(request.id)) ?? request;
     }
   }
   const owners = await safeOwners(request.safeAddress);
@@ -287,12 +306,18 @@ export async function syncZoldenburgFromChain(request: RecoveryRequest, now = ne
 async function bindAndFinish(request: RecoveryRequest, user: User, now: Date, txHash: `0x${string}` | undefined): Promise<RecoveryRequest> {
   return store.tx(async () => {
     const z = request.zoldenburg!;
-    await bindRecoveredPasskey((await store.lockUser(request.userId)) ?? user, z.newPasskey!, now);
+    const locked = await store.lockUser(request.userId);
+    // Bound once: a second finaliser or sync finds it finalised (or ended) and
+    // binds nothing, so the recovered device's session is not revoked again.
+    const current = await store.findRecoveryRequest(request.id);
+    if (!current || !["REVIEW_PENDING", "GRACE_PERIOD", "RELAYING"].includes(current.status)) return current ?? request;
+    await bindRecoveredPasskey(locked ?? user, z.newPasskey!, now);
     // Also reached without a grace period seen here (finalised in Safe Cover).
     await closeOtherRequests(request, now);
     console.log(`RECOVERY: ${request.id} finalized — ${user.id}'s Safe ${request.safeAddress} now owned by the new passkey`);
     return await store.updateRecoveryRequest(request.id, {
       status: "FINALIZED",
+      relaying: undefined,
       finalizedAt: now.toISOString(),
       zoldenburg: { ...(await zoldenburgNow(request.id)), ...(txHash ? { finalizeTxHash: txHash } : {}), finalizeError: undefined },
     });
@@ -309,33 +334,56 @@ export async function finalizeZoldenburgRecovery(request: RecoveryRequest, now =
   }
   const user = await store.findUser(request.userId);
   if (!user?.passkeySafe) throw new ZoldenburgRecoveryError("the account behind this recovery no longer exists", 410, "GONE");
-  let finalizeError: string | undefined;
-  let txHash: `0x${string}` | undefined;
+  // One finaliser relays: the claim is committed before the chain call, and a
+  // second finaliser (the sweep, an operator, the person) finds it RELAYING.
+  const claimed = await store.tx(async () => {
+    await store.lockUser(request.userId);
+    return await store.updateRecoveryRequestFrom(request.id, ["GRACE_PERIOD"], relayFrom("GRACE_PERIOD"));
+  });
+  if (!claimed) return (await store.findRecoveryRequest(request.id)) ?? request;
   try {
-    txHash = (await zoldenburgChain.relayFinalize(request.recoveryModuleAddress, request.safeAddress)).txHash;
-  } catch (err: any) {
-    // Safe Cover (or anyone) may have finalised already; the owner read decides.
-    finalizeError = redactedMessage(err).slice(0, 200);
-  }
-  let owners: string[] = [];
-  if (HARNESS.enabled) owners = finalizeError ? [] : z.newOwners;
-  else {
-    try { owners = await safeOwners(request.safeAddress); } catch (err: any) {
-      finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
+    let finalizeError: string | undefined;
+    let txHash: `0x${string}` | undefined;
+    try {
+      txHash = (await zoldenburgChain.relayFinalize(request.recoveryModuleAddress, request.safeAddress)).txHash;
+    } catch (err: any) {
+      // Safe Cover (or anyone) may have finalised already; the owner read decides.
+      finalizeError = redactedMessage(err).slice(0, 200);
     }
+    let owners: string[] = [];
+    if (HARNESS.enabled) owners = finalizeError ? [] : z.newOwners;
+    else {
+      try { owners = await safeOwners(request.safeAddress); } catch (err: any) {
+        finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
+      }
+    }
+    if (!sameSet(owners, z.newOwners)) {
+      const back = await releaseRelay(request.id, "GRACE_PERIOD", {
+        zoldenburg: { ...(await zoldenburgNow(request.id)), finalizeAttempts: ((await zoldenburgNow(request.id)).finalizeAttempts ?? 0) + 1, finalizeError: finalizeError ?? "the Safe's owners do not show the recovered set yet" },
+      });
+      return back ?? (await store.findRecoveryRequest(request.id)) ?? request;
+    }
+    return await bindAndFinish(request, user, now, txHash);
+  } finally {
+    // A throw: nothing recorded; the sweep or an operator finalises again.
+    await releaseRelay(request.id, "GRACE_PERIOD");
   }
-  if (!sameSet(owners, z.newOwners)) {
-    return await store.updateRecoveryRequest(request.id, {
-      zoldenburg: { ...(await zoldenburgNow(request.id)), finalizeAttempts: ((await zoldenburgNow(request.id)).finalizeAttempts ?? 0) + 1, finalizeError: finalizeError ?? "the Safe's owners do not show the recovered set yet" },
-    });
-  }
-  return await bindAndFinish(request, user, now, txHash);
 }
 
-/** Requests whose guardian signature is being relayed now. The owner's cancel
- *  and the expiry wait for it: either written meanwhile would leave a
- *  recovery pending on chain under a closed row that nothing syncs again. */
-const relaying = new Set<string>();
+/**
+ * A RELAYING request whose relay outlived RELAY_TIMEOUT_MS: what the chain
+ * shows decides. A recovery or finalisation on chain moves it on; nothing on
+ * chain gives it back to the status it came from, so the next sweep or an
+ * operator relays again. A chain that cannot be read leaves it for the next
+ * sweep.
+ */
+export async function reconcileRelay(r: RecoveryRequest, now = new Date(), sync = syncZoldenburgFromChain): Promise<RecoveryRequest> {
+  const from = r.relaying?.from ?? "REVIEW_PENDING";
+  const seen = await sync({ ...r, status: from }, now);
+  if (seen.status !== from && seen.status !== "RELAYING") return seen;
+  console.warn(`RECOVERY: ${r.id} was RELAYING past the relay timeout with nothing on chain; back to ${from}`);
+  return (await releaseRelay(r.id, from)) ?? (await store.findRecoveryRequest(r.id)) ?? r;
+}
 
 export async function sweepZoldenburgRecoveries(now = new Date(), sync = syncZoldenburgFromChain): Promise<number> {
   if (!zoldenburgRecoveryEnabled()) return 0;
@@ -346,7 +394,14 @@ export async function sweepZoldenburgRecoveries(now = new Date(), sync = syncZol
     const r = (await store.findRecoveryRequest(snap.id)) ?? snap;
     const before = r.status;
     try {
-      if (relaying.has(r.id)) continue;
+      // A relay running: the owner's cancel and the expiry wait for it, since
+      // either would leave a recovery pending on chain under a closed row.
+      // One cut off is reconciled from the chain.
+      if (r.status === "RELAYING") {
+        // Measured on the wall clock: `now` may be a sweep's notion of time.
+        if (Date.now() - Date.parse(r.relaying?.at ?? r.requestedAt) >= RELAY_TIMEOUT_MS) await reconcileRelay(r, now, sync);
+        continue;
+      }
       // Ask the chain before expiring: a signature relayed outside /admin
       // must still reach its grace period, or the owner is never alerted.
       let cur = r.status === "REVIEW_PENDING" ? await sync(r, now) : r;
@@ -354,7 +409,7 @@ export async function sweepZoldenburgRecoveries(now = new Date(), sync = syncZol
         // Only from the status it was read in, and not once a relay has claimed it.
         await store.tx(async () => {
           await store.lockUser(r.userId);
-          if (!relaying.has(r.id)) await store.updateRecoveryRequestFrom(r.id, CANCELLABLE, { status: "EXPIRED" });
+          await store.updateRecoveryRequestFrom(r.id, CANCELLABLE, { status: "EXPIRED" });
         });
         continue;
       }
@@ -596,12 +651,12 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         await store.lockUser(user.id);
         const r = await store.findRecoveryRequest(req.params.rid);
         if (!r || r.userId !== user.id || r.mode !== "zoldenburg") return { status: 404, body: { error: "recovery not found" } };
+        // Its signature is being relayed now: once on chain, the passkey cancels it.
+        if (r.status === "RELAYING") {
+          return { status: 409, body: { error: "this recovery is being signed right now — cancel it with your passkey in a moment", code: "BEING_SIGNED" } };
+        }
         if (!(CANCELLABLE as readonly string[]).includes(r.status)) {
           return { status: 409, body: { error: `recovery is ${r.status} — a started recovery is cancelled on chain with your passkey` } };
-        }
-        // Its signature is being relayed now: once on chain, the passkey cancels it.
-        if (relaying.has(r.id)) {
-          return { status: 409, body: { error: "this recovery is being signed right now — cancel it with your passkey in a moment", code: "BEING_SIGNED" } };
         }
         const canceled = await store.updateRecoveryRequestFrom(r.id, CANCELLABLE, { status: "CANCELED", canceledAt: new Date().toISOString(), cancelReason: "cancelled by the account owner" });
         return canceled ? undefined : { status: 409, body: { error: "recovery moved on — reload" } };
@@ -627,7 +682,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       return undefined;
     }
     const expired = (x: RecoveryRequest) => ["PASSKEY_PENDING", "REVIEW_PENDING"].includes(x.status) && Date.now() >= Date.parse(x.expiresAt);
-    if (expired(r) && relaying.has(r.id)) {
+    if (r.status === "RELAYING" && Date.now() >= Date.parse(r.expiresAt)) {
       // Neither expired nor open: its signature is being relayed now.
       res.status(409).json({ error: "this recovery is being signed right now — try again in a moment", code: "BEING_SIGNED" });
       return undefined;
@@ -667,7 +722,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         const now = new Date();
         const live = (await store
           .recoveryRequestsForUser(user.id))
-          .filter((r) => r.mode === "zoldenburg" && (OPEN as readonly string[]).includes(r.status) && (r.status === "GRACE_PERIOD" || Date.now() < Date.parse(r.expiresAt)));
+          .filter((r) => r.mode === "zoldenburg" && (OPEN as readonly string[]).includes(r.status) && (r.status === "GRACE_PERIOD" || r.status === "RELAYING" || Date.now() < Date.parse(r.expiresAt)));
         // Only the starting browser may resume its request. Anyone else gets a
         // request of their own: several wait side by side, since the 1 € can
         // take days, and only the one whose own code is paid can be signed.
@@ -679,7 +734,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             code: "RECOVERY_IN_PROGRESS",
           });
           // One is on chain: the owner's cancel or its end comes first.
-          if (live.some((r) => r.status === "GRACE_PERIOD" || relaying.has(r.id))) return refuse();
+          if (live.some((r) => r.status === "GRACE_PERIOD" || r.status === "RELAYING")) return refuse();
           if (live.length >= MAX_OPEN_REQUESTS) {
             // Full: the oldest with nothing invested gives way, once it is past
             // its passkey ceremony, so a flood cannot push out someone mid-way;
@@ -931,7 +986,7 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
     }
     const other = (await store
       .recoveryRequestsForUser(r.userId))
-      .find((x) => x.id !== r.id && x.mode === "zoldenburg" && (x.status === "GRACE_PERIOD" || relaying.has(x.id)));
+      .find((x) => x.id !== r.id && x.mode === "zoldenburg" && (x.status === "GRACE_PERIOD" || x.status === "RELAYING"));
     if (other) {
       return { error: `another recovery for this account (${other.zoldenburg?.reference}) is on chain or being signed`, code: "OTHER_RECOVERY" };
     }
@@ -1075,16 +1130,16 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       // Read again after the awaits above: the owner may have cancelled, or a
       // re-enrolment voided the 1 € check, meanwhile.
       // The re-read, the checks and the claim are one transaction: a cancel or
-      // a reject either lands before it (seen here) or after it (and sees
-      // `relaying`).
+      // a reject either lands before it (seen here) or after it (and finds
+      // it RELAYING). The claim is committed before the chain call.
       const claim = await store.tx(async () => {
         await store.lockUser(r.userId);
         const current = (await store.findRecoveryRequest(r.id))!;
+        if (current.status === "RELAYING") return { error: "this recovery is already being signed", code: "BUSY" };
         if (current.status !== "REVIEW_PENDING") return { error: `recovery is ${current.status}` };
         const refusalNow = await refusalFor(current);
         if (refusalNow) return refusalNow;
-        if (relaying.has(r.id)) return { error: "this recovery is already being signed", code: "BUSY" };
-        relaying.add(r.id);
+        if (!(await store.updateRecoveryRequestFrom(r.id, ["REVIEW_PENDING"], relayFrom("REVIEW_PENDING")))) return { error: "this recovery moved on — reload", code: "BUSY" };
         return undefined;
       });
       if (claim) return res.status(409).json(claim);
@@ -1113,8 +1168,9 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
         } catch (err: any) {
           console.error(`recovery ${r.id}: verifier deploy failed (the verifier sweep retries it): ${describeCause(err)}`);
         }
-        const updated = await store.updateRecoveryRequest(r.id, {
+        const moved = await store.updateRecoveryRequestFrom(r.id, ["RELAYING"], {
           status: "GRACE_PERIOD",
+          relaying: undefined,
           reviewedBy: operatorLabel(req),
           reviewReason: note,
           factors: { ...r.factors, kyc: "passed", manualReview: "passed" },
@@ -1129,11 +1185,15 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
             ...(verifierDeployTxHash ? { verifierDeployTxHash } : {}),
           },
         });
+        // Reconciled from the chain meanwhile (a relay past its timeout): that stands.
+        const updated = moved ?? (await store.findRecoveryRequest(r.id))!;
         await closeOtherRequests(r, now);
         console.log(`RECOVERY: ${r.id} signed by ${operatorLabel(req)} and executed (${txHash}); finalizable after ${finalizeAfter.toISOString()}`);
         res.json(await adminView(updated));
       } finally {
-        relaying.delete(r.id);
+        // Nothing recorded (a throw, or no matching recovery on chain): back to
+        // REVIEW_PENDING, where the sweep follows the chain as before.
+        await releaseRelay(r.id, "REVIEW_PENDING");
         await settleSpared(r.id);
       }
     }),
@@ -1198,11 +1258,11 @@ export function createZoldenburgRecoveryRouter(deps: ZoldenburgRecoveryDeps) {
       const out = await store.tx(async () => {
         await store.lockUser(r0.userId);
         const r = (await store.findRecoveryRequest(r0.id))!;
+        if (r.status === "RELAYING") {
+          return { status: 409, body: { error: "this recovery is being signed right now — once on chain only the owner's passkey can cancel it", code: "BEING_SIGNED" } };
+        }
         if (!(CANCELLABLE as readonly string[]).includes(r.status)) {
           return { status: 409, body: { error: `recovery is ${r.status} — once executed only the owner's passkey can cancel it` } };
-        }
-        if (relaying.has(r.id)) {
-          return { status: 409, body: { error: "this recovery is being signed right now — once on chain only the owner's passkey can cancel it", code: "BEING_SIGNED" } };
         }
         if (!reason) return { status: 400, body: { error: "give a reason — the person sees it" } };
         const updated = await store.updateRecoveryRequestFrom(r.id, CANCELLABLE, {

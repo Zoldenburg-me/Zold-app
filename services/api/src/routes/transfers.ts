@@ -22,7 +22,6 @@ import {
 import { store } from "../store.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../adapters/monerium-connection.js";
 import { requireCapability, requireKycApproved } from "../http/guards.js";
-import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { buildTransferFromQuote } from "../transfers/build.js";
 import { userTransfer } from "../transfers/user-transfer.js";
 import { buildActivity } from "../transfers/activity.js";
@@ -340,8 +339,7 @@ export function createTransferRouter(deps: TransferDeps) {
       // signature counter the redeem assertion has the higher count; checking
       // it first would make the execution assertion look like a cloned
       // authenticator and fail every Safe-funded SEPA send.
-      prunePendingTransferExecutions();
-      const pendingExecution = pendingTransferExecutions.get(transfer.id);
+      const pendingExecution = await store.findPendingExecution("transfer", transfer.id);
       if (pendingExecution && pendingExecution.userId !== user.id) {
         return res.status(403).json({ error: "Safe execution belongs to a different account" });
       }
@@ -446,7 +444,14 @@ export function createTransferRouter(deps: TransferDeps) {
       // same signature both clear the CREATED check above, and both could submit
       // the same spend. claimAuthorization is the atomic boundary: after it
       // succeeds once, every other caller sees the authorizedAt marker and stops.
-      if (!(await store.claimAuthorization(transfer.id))) {
+      // The prepared operation goes with the claim, in one transaction: a
+      // replayed approval finds neither.
+      const claimed = await store.tx(async () => {
+        if (!(await store.claimAuthorization(transfer.id))) return false;
+        await store.dropPendingExecution("transfer", transfer.id);
+        return true;
+      });
+      if (!claimed) {
         return res.status(409).json({ error: "authorization already submitted for this transfer" });
       }
       // Hand the user-approved execution to the orchestrator. The claim above
@@ -465,7 +470,6 @@ export function createTransferRouter(deps: TransferDeps) {
             ...(pendingExecution.batch ? { batch: pendingExecution.batch } : {}),
           }
         : undefined;
-      if (pendingExecution) pendingTransferExecutions.delete(transfer.id);
       if (effectiveRedeemSignature && transfer.moneriumRedeem) {
         executableTransfer = await store.updateTransfer(transfer.id, {
           moneriumRedeem: {

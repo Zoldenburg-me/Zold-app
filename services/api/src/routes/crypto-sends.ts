@@ -26,7 +26,6 @@ import { testUsdc, usdToken } from "../usd-token.js";
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type CryptoSend, type PendingSafeOp, type User } from "../store.js";
 import { requireCapability } from "../http/guards.js";
-import { pendingCryptoSends, prunePendingCryptoSends } from "../http/pending.js";
 import { redactedMessage, describeCause } from "../http/log-cause.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
@@ -330,8 +329,7 @@ export function createCryptoSendPreparer(deps: PreparerDeps) {
         return short;
       }
       challenge = passkeySafeChallenge(prepared.challenge);
-      prunePendingCryptoSends();
-      pendingCryptoSends.set(id, { userId: user.id, expiresAt: deadline * 1000, challenge, plan: safe, userOperation: prepared.userOperation });
+      await store.putPendingExecution("cryptoSend", id, { userId: user.id, expiresAt: deadline * 1000, challenge, plan: safe, userOperation: prepared.userOperation });
     } catch (err) {
       await store.releaseCapHold(c.holdId);
       if (err instanceof SafeVerifierMissingError) return refuse(err.status, { error: err.message, code: err.code });
@@ -527,8 +525,7 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
       if (!cryptoSendEnabled()) return off(res);
       if (send.state !== "CREATED") return res.status(409).json({ error: `this send is ${send.state}` });
       if (Date.now() / 1000 > send.deadline) return res.status(410).json({ error: "the approval window closed — start the send again" });
-      prunePendingCryptoSends();
-      const pending = pendingCryptoSends.get(send.id);
+      const pending = await store.findPendingExecution("cryptoSend", send.id);
       if (!pending || pending.userId !== send.userId) {
         return res.status(410).json({ error: "this send can no longer be approved — start it again" });
       }
@@ -570,7 +567,7 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         }
         if (!now.ok || now.address !== send.to) {
           await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: "the name's address changed before the send" });
-          pendingCryptoSends.delete(send.id);
+          await store.dropPendingExecution("cryptoSend", send.id);
           return res.status(409).json({
             error: now.ok
               ? `${send.name} now points to a different address — nothing was sent; check it and start again`
@@ -583,7 +580,7 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
       try {
         if (await screen(send.to as `0x${string}`)) {
           await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: "the address is on a sanctions list" });
-          pendingCryptoSends.delete(send.id);
+          await store.dropPendingExecution("cryptoSend", send.id);
           return res.status(403).json({ error: SANCTIONED_ERROR, code: "SANCTIONED" });
         }
       } catch (err) {
@@ -616,7 +613,7 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
           const mayStill = !!org && can(org, "transfers.drafts").allowed && !!account && accountIsSpendable(account).ok;
           if (drifted || !mayStill || account?.backingUserId !== send.userId || !member || !roleCan(member.role, "transfers.sign", orgEntity(org!))) {
             await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: drifted ? "the payee changed before the send" : "the sender may no longer send from this account" });
-            pendingCryptoSends.delete(send.id);
+            await store.dropPendingExecution("cryptoSend", send.id);
             return res.status(409).json(drifted
               ? { error: "the payee’s details changed since this payment was approved — nothing was sent", code: "INVALID_DATA" }
               : { error: "you can no longer send from this account — nothing was sent", code: "NOT_SENDER" });
@@ -626,10 +623,11 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
           if ((await store.findCryptoSend(send.id))?.state === "CREATED" && Date.now() / 1000 > send.deadline) return res.status(410).json({ error: "the approval window closed — start the send again" });
           return res.status(409).json({ error: "this send was already submitted" });
         }
+        // The prepared operation goes with the claim: a replayed approval finds neither.
+        await store.dropPendingExecution("cryptoSend", send.id);
         return "claimed" as const;
       });
       if (claim !== "claimed") return;
-      pendingCryptoSends.delete(send.id);
       try {
         const op = await submitPasskeySafeOperationWithReceipt(pending.plan, pending.userOperation, {
           authenticatorData: b64urlToBuf(a.authenticatorData),

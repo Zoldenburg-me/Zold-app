@@ -527,6 +527,25 @@ export interface CryptoSend {
 }
 
 /**
+ * A transfer's or a crypto send's UserOperation awaiting its passkey: the plan,
+ * the unsigned operation, the challenge the passkey signs and, for a full
+ * fee+approve+swap batch, where the swap output is delivered. None of it is a
+ * secret. Keyed by kind and the transfer's or send's id; it dies with its
+ * approval window, and the claim that submits it deletes it
+ * (docs/postgres-store-design.md §2, approvals waiting for a passkey).
+ */
+export type PendingExecutionKind = "transfer" | "cryptoSend";
+export interface PendingExecution {
+  userId: string;
+  /** Unix milliseconds. */
+  expiresAt: number;
+  challenge: string;
+  plan: NonNullable<User["passkeySafe"]>;
+  userOperation: Awaited<ReturnType<typeof import("../wallet/candide.js").preparePasskeySafeDeployment>>["userOperation"];
+  batch?: { recipient: `0x${string}`; mode: "live" };
+}
+
+/**
  * One inbound crypto transfer seen at a user's account.
  *
  * Recorded before anything is moved or credited, so a crash between detection
@@ -927,6 +946,11 @@ export type RecoveryRequestStatus =
   /** Zoldenburg guardian: new passkey registered, waiting for an operator to
    *  check the person against Monerium's identity and sign. */
   | "REVIEW_PENDING"
+  /** Zoldenburg guardian: the API is relaying its signature (from
+   *  REVIEW_PENDING) or the finalisation (from GRACE_PERIOD) to the chain now.
+   *  `relaying` names the status it came from; the chain's answer moves it on
+   *  (docs/postgres-store-design.md §2, managed recovery start). */
+  | "RELAYING"
   | "FINALIZED"
   | "CANCELED"
   | "EXPIRED";
@@ -941,6 +965,8 @@ export interface RecoveryRequest {
    *  there means waiting for that signature). `managed` only on legacy rows. */
   mode?: "managed" | "candide" | "zoldenburg" | "turnkey";
   status: RecoveryRequestStatus;
+  /** Set with RELAYING: the status the relay left and when it started. */
+  relaying?: { from: "REVIEW_PENDING" | "GRACE_PERIOD"; at: string };
   requestedAt: string;
   expiresAt: string;
   recoveryDelayHours: number;

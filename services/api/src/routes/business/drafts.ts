@@ -50,7 +50,6 @@ import { knownError } from "../../http/known-errors.js";
 import { redactedMessage } from "../../http/log-cause.js";
 import { wrap } from "../util.js";
 import { requireCapability as requireUserCapability } from "../../http/guards.js";
-import { pendingCryptoSends } from "../../http/pending.js";
 import { createCompanyCryptoSendPreparer, createCryptoSendPreparer, type CryptoSendInput } from "../crypto-sends.js";
 import { CHAIN_ID, cryptoSendEnabled } from "../../config.js";
 import type { User } from "../../store.js";
@@ -418,7 +417,7 @@ export function createDraftRoutes(
         if (op) await store.endPendingSafeOp(op.id, { state: "INVALIDATED", reason: why });
         else {
           await store.updateCryptoSendFrom(send.id, ["CREATED"], { state: "FAILED", error: why });
-          pendingCryptoSends.delete(send.id);
+          await store.dropPendingExecution("cryptoSend", send.id);
         }
       });
     };

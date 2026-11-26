@@ -357,7 +357,10 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         // On disk BEFORE the swap is submitted: if a later write is refused
         // (the process exits), the restart finds this and does not offer the
         // deposit again. Refused here, the process exits with nothing sent.
-        await store.updateCryptoDeposit(deposit.id, {
+        // The intent is the CONVERTING reserve (§2 rule 5): written only on
+        // the stored row while it is still convertible, with no other
+        // conversion's intent on it and the same USDC left as was read above.
+        const claimed = await store.patchCryptoDeposit(deposit.id, (d) => depositConversionBlocker(user, d) || unconvertedUnits(d) !== unconvertedUnits(current) ? null : {
           conversionIntent: {
             at: new Date().toISOString(),
             amountUnits: unconvertedUnits(current).toString(),
@@ -367,6 +370,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
             quote: pending.quote,
           },
         });
+        if (!claimed) return res.status(409).json({ error: "a conversion of this deposit is already running, or it changed — reload" });
         let submitted: SubmittedOperation;
         try {
           // The browser sends base64url; the Safe signature needs the bytes,

@@ -666,7 +666,7 @@ await t("execute: while the relay is in flight nothing closes the request; after
   try {
     const ex = await opCall("/admin/recoveries/r4/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
     assert.equal(ex.status, 200, ex.text);
-    assert.equal(during, "REVIEW_PENDING", "the sweep left the in-flight request alone");
+    assert.equal(during, "RELAYING", "the sweep left the in-flight request alone: it holds its relay reserve");
     assert.equal((await req("r4")).status, "GRACE_PERIOD");
   } finally {
     zoldenburgChain.relayRecovery = relayRecovery;
@@ -798,7 +798,7 @@ await t("a recovery finishing while another is being relayed leaves the relayed 
   try {
     await opCall("/admin/recoveries/rel-x/execute", { signature, reviewNote: "Video call, matched Monerium profile" });
     assert.equal((await req("rel-y")).status, "FINALIZED");
-    assert.equal(during, "REVIEW_PENDING", "the relayed request is not closed under it");
+    assert.equal(during, "RELAYING", "the relayed request is not closed under it");
   } finally {
     zoldenburgChain.relayRecovery = relayRecovery;
     zoldenburgChain.relayFinalize = relayFinalize;
@@ -998,7 +998,7 @@ await t("the owner's cancel, the operator's reject and the person's routes wait 
     ["const requestFor = ", "const askView = ", 'status: "EXPIRED"'],
   ]) {
     const body = r.slice(r.indexOf(from), r.indexOf(to));
-    assert.ok(body.indexOf("relaying.has(r.id)") > 0 && body.indexOf("relaying.has(r.id)") < body.indexOf(write), from);
+    assert.ok(body.indexOf('r.status === "RELAYING"') > 0 && body.indexOf('r.status === "RELAYING"') < body.indexOf(write), from);
   }
 });
 

@@ -15,7 +15,6 @@ import { moneriumRedeemMessage, paymentMemo, REDEEM_WINDOW_SEC } from "../sepa.j
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type Quote, type Transfer } from "../store.js";
 import { assertDailyCap, requireKycApproved } from "../http/guards.js";
-import { pendingTransferExecutions, prunePendingTransferExecutions } from "../http/pending.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
   prepareTransferBatchExecution,
@@ -321,9 +320,8 @@ async function prepareTransferFromQuote(
           orchestratorAddress,
           debitWei,
         );
-        prunePendingTransferExecutions();
         const challenge = passkeySafeChallenge(prepared.challenge);
-        pendingTransferExecutions.set(transfer.id, {
+        await store.putPendingExecution("transfer", transfer.id, {
           userId: user.id,
           expiresAt: deadline * 1000,
           challenge,

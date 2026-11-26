@@ -68,6 +68,8 @@ import type {
   OperatorCredential,
   OperatorSession,
   PaymentRequest,
+  PendingExecution,
+  PendingExecutionKind,
   PendingSafeOp,
   Quote,
   ReceiptShare,
@@ -89,6 +91,10 @@ export { REVIEW_EVIDENCE_MAX, REVIEW_NOTE_MAX, REVIEW_NOTE_MIN } from "./store/r
 
 /** Daily-cap holds for transfers being prepared — see store.holdDailyCap. */
 const capHolds = new Map<string, { userId: string; eur: number; day: string }>();
+
+/** Approvals waiting for a passkey, by `kind:id` — see store.putPendingExecution.
+ *  In memory on db.json: a restart drops them and the approval answers 410. */
+const pendingExecutions = new Map<string, PendingExecution>();
 
 /** Called after a transfer's state changed and was persisted. */
 type TransferStateListener = (t: Transfer, from: Transfer["state"]) => void | Promise<void>;
@@ -543,6 +549,25 @@ export const jsonCore = {
   /** Drop a hold whose transfer was refused or failed. A no-op once committed. */
   releaseCapHold(holdId: string) {
     capHolds.delete(holdId);
+  },
+  /**
+   * Keep a prepared UserOperation until its passkey approves it (§2,
+   * approvals waiting for a passkey). Expired entries go first. The claim
+   * that submits it drops it in the same transaction, so a replayed
+   * approval finds nothing to submit.
+   */
+  putPendingExecution(kind: PendingExecutionKind, id: string, entry: PendingExecution) {
+    const now = Date.now();
+    for (const [k, p] of pendingExecutions) if (p.expiresAt < now) pendingExecutions.delete(k);
+    pendingExecutions.set(`${kind}:${id}`, entry);
+  },
+  /** The prepared operation, unless its window closed. */
+  findPendingExecution(kind: PendingExecutionKind, id: string): PendingExecution | undefined {
+    const p = pendingExecutions.get(`${kind}:${id}`);
+    return p && p.expiresAt >= Date.now() ? p : undefined;
+  },
+  dropPendingExecution(kind: PendingExecutionKind, id: string) {
+    pendingExecutions.delete(`${kind}:${id}`);
   },
   /**
    * Claim the one and only authorization submission for a transfer.
@@ -1007,6 +1032,18 @@ export const jsonCore = {
     Object.assign(d, patch, { updatedAt: new Date().toISOString() });
     persist();
     return d;
+  },
+  /**
+   * Change a deposit from its stored value (§2 rules 2 and 5): `make` gets
+   * the stored row and returns the patch, or null to leave it. Null back when
+   * it was left. An array on the row (`partials`) is extended here, on the
+   * stored value, never written whole from a row read before an await.
+   */
+  patchCryptoDeposit(id: string, make: (d: CryptoDeposit) => Partial<CryptoDeposit> | null) {
+    const d = db.cryptoDeposits.find((x) => x.id === id);
+    if (!d) throw new Error(`unknown crypto deposit ${id}`);
+    const patch = make(structuredClone(d));
+    return patch ? jsonCore.updateCryptoDeposit(id, structuredClone(patch)) : null;
   },
   /** Settle a deposit once: `decide` runs on the stored row; null when it was settled already. */
   settleCryptoDeposit(id: string, decide: (d: CryptoDeposit) => Partial<CryptoDeposit>) {

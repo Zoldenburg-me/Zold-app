@@ -3,14 +3,15 @@
  * given and has not yet returned.
  *
  * Held in memory. After a restart the user repeats the step, as with an
- * expired authorization. Keeping the maps in one module lets the routes that
- * create an entry and the routes that consume it share them explicitly.
+ * expired authorization: these are setup steps and move no money. Keeping the
+ * maps in one module lets the routes that create an entry and the routes that
+ * consume it share them explicitly. A transfer's or crypto send's operation
+ * waiting for its passkey is in the store instead (store.putPendingExecution).
  *
  * Every map is pruned by expiry: each holds a challenge, which is a credential
  * with a deadline.
  */
 import type { preparePasskeySafeDeployment } from "../wallet/candide.js";
-import type { User } from "../store.js";
 import type { OrgSafePlan } from "../domain/types.js";
 
 export type PendingPasskeySafeDeployment =
@@ -48,47 +49,13 @@ export const pendingMoneriumLinkSignatures = new Map<
   }
 >();
 
-/**
- * Per-transfer Safe executions awaiting the send-time passkey ceremony: the
- * UserOperation that will move this transfer's exact debit out of the user's
- * Safe. Keyed by TRANSFER id; dies with its authorization window.
- */
-export const pendingTransferExecutions = new Map<
-  string,
-  {
-    userId: string;
-    expiresAt: number;
-    challenge: string;
-    plan: NonNullable<User["passkeySafe"]>;
-    userOperation: PendingPasskeySafeDeployment;
-    /** Present when the operation is a full fee+approve+swap batch: where the
-     *  swap output is delivered, so execution can measure and settle there. */
-    batch?: { recipient: `0x${string}`; mode: "live" };
-  }
->();
-
-/** A crypto send's UserOperation awaiting its passkey, keyed by send id. */
-export const pendingCryptoSends = new Map<
-  string,
-  {
-    userId: string;
-    expiresAt: number;
-    challenge: string;
-    plan: NonNullable<User["passkeySafe"]>;
-    userOperation: PendingPasskeySafeDeployment;
-  }
->();
-
 const pruneExpired = (m: Map<string, { expiresAt: number }>, now: number) => {
   for (const [id, pending] of m) if (pending.expiresAt < now) m.delete(id);
 };
 
-export const prunePendingTransferExecutions = (now = Date.now()) =>
-  pruneExpired(pendingTransferExecutions, now);
 export const prunePendingPasskeySafeDeployments = (now = Date.now()) =>
   pruneExpired(pendingPasskeySafeDeployments, now);
 export const prunePendingOrgSafeDeployments = (now = Date.now()) =>
   pruneExpired(pendingOrgSafeDeployments, now);
 export const prunePendingMoneriumLinkSignatures = (now = Date.now()) =>
   pruneExpired(pendingMoneriumLinkSignatures, now);
-export const prunePendingCryptoSends = (now = Date.now()) => pruneExpired(pendingCryptoSends, now);
