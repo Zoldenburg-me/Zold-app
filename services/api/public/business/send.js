@@ -115,6 +115,12 @@ RENDER.send = async () => {
   // The control exists only where the API would accept the send.
   const cryptoOn = health?.capabilities?.cryptoSend === true;
   const crypto = cryptoOn && sendState.mode === "crypto";
+  // A company's bank account is its own Safe, which only its owners sign: a
+  // run over several payees is not built. One payout at a time is in
+  // Settings → Monerium (routes/business/org-monerium-payouts.ts).
+  if (org.entity === "company" && !crypto) {
+    return `<div class="gate"><h3>Pay a bank account from Settings</h3><p>A company pays a bank account one payment at a time from Settings → Monerium, where an owner signs each with their ${Z.passkeyName()}. A payment run over several payees is not built, so nothing can be saved here.</p><div class="zb-actions"><a class="z-btn z-btn--primary" href="?view=settings&sec=monerium" data-view-link="settings">${Z.icon("account_balance")}<span>Settings → Monerium</span></a>${cryptoOn ? `<button type="button" class="z-btn z-btn--secondary" data-act="send-mode" data-mode="crypto">${Z.icon("account_balance_wallet")}<span>Pay a crypto wallet</span></button>` : ""}</div></div>`;
+  }
   const net = health?.chainId ?? chainId;
   const payable = crypto ? contacts.filter((c) => walletOf(c, net)) : payableContacts(contacts);
   const fundable = fundableAccounts(accounts);

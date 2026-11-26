@@ -1,7 +1,9 @@
 /**
  * The store suite on a real Postgres 17, and the cases PGlite cannot show
  * because it has one connection: two migration runners at once, parallel
- * claims on one row, a second holder of an advisory lock.
+ * claims on one row, a second holder of an advisory lock. Then the API's own
+ * store on Postgres: the §2 concurrency tests (pg-concurrency-test.ts) and
+ * the suites that hold the S2 race tests, each in a database of its own.
  *
  * Not part of the offline `npm run check`. Needs a server:
  *   TEST_DATABASE_URL=postgresql:///postgres?host=/tmp npm run check:pg
@@ -22,7 +24,7 @@ import { conditionalWriteSuite, storeSuite } from "./_store-suite.js";
 process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-store-pg-")), "db.json");
 
 const { createPgStore } = await import("../services/api/src/store/pg/backend.js");
-const { migrate } = await import("../services/api/src/store/pg/migrate.js");
+const { migrate, readMigrations } = await import("../services/api/src/store/pg/migrate.js");
 const { openPool } = await import("../services/api/src/store/pg/sql.js");
 
 const adminUrl = process.env.TEST_DATABASE_URL || "postgresql:///postgres?host=/tmp";
@@ -41,7 +43,7 @@ const urlFor = (db: string) => {
 // before its drop. One still in use, or of the old unnamed form, is left.
 for (const { datname } of (
   await admin.query<{ datname: string }>(
-    "SELECT datname FROM pg_database d WHERE datname ~ '^zold_test_[0-9]+_[0-9a-f]+$' AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname)",
+    "SELECT datname FROM pg_database d WHERE datname ~ '^zold_test_[0-9]+_[0-9a-f]+(_s[0-9a-f]+)?$' AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datname = d.datname)",
   )
 ).rows) {
   const born = Number(datname.split("_")[2]);
@@ -66,7 +68,7 @@ try {
   const b = open();
   const [ra, rb] = await Promise.all([migrate(a), migrate(b)]);
   // Each runner takes the lock per file, so the two may share the files out.
-  assert.deepEqual([...ra, ...rb].sort((x, y) => x - y), [1, 2], "each file applied once, by one runner");
+  assert.deepEqual([...ra, ...rb].sort((x, y) => x - y), readMigrations().map((m) => m.version), "each file applied once, by one runner");
   console.log(`ok - two parallel migration runners apply each file once (server_version_num ${version})`);
 
   const s = createPgStore(a);
@@ -259,12 +261,15 @@ try {
       await third.listening();
       const [stuck] = await lockHolder();
       // Needs the server on this machine, run as this OS user (Homebrew's
-      // postgresql@17 is); otherwise this case is skipped, said so.
+      // postgresql@17 is); otherwise this case is skipped, said so. On macOS
+      // the cluster is Homebrew's, so there a skip is a failure: this is the
+      // one place the case runs.
       let signalable = true;
       try {
         process.kill(stuck, 0);
       } catch {
         signalable = false;
+        if (process.platform === "darwin") throw new Error("unanswered ping: the server's backend cannot be signalled, so this case would be skipped on the Mac that runs it");
         console.log("skip - unanswered ping: the server's backend cannot be signalled from here");
       }
       if (signalable) {
@@ -315,6 +320,74 @@ try {
   const next = (await idle.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0].pid;
   assert.notEqual(next, pid, "the next query runs on a new connection");
   console.log("ok - an idle pooled connection terminated by the server is logged and replaced; the process survives");
+
+  // The API's own store on Postgres (STORE_BACKEND=postgres): the §2
+  // concurrency tests, and the suites that hold the S2 race tests, each in a
+  // database of its own, migrated as a deploy would, with real parallel
+  // connections. A suite that checks the JSON file itself skips that check.
+  const suites: [string, Record<string, string>?][] = [
+    ["scripts/pg-concurrency-test.ts"],
+    ["scripts/deposit-invoice-link-test.ts"],
+    // Postgres is refused on a real-money chain; this suite runs on the default one under check.
+    ["scripts/email-verification-test.ts", { TRANSF_CHAIN_ID: "31337" }],
+    ["scripts/zoldenburg-bank-check-test.ts"],
+    ["scripts/candide-sweep-race-test.ts"],
+    ["scripts/convert-race-test.ts"],
+    ["scripts/security-hardening-test.ts"],
+    ["scripts/invoicing-profile-test.ts"],
+    ["scripts/free-features-test.ts"],
+    ["scripts/payment-requests-test.ts"],
+    ["scripts/monerium-profile-kind-test.ts"],
+    ["scripts/monerium-money-in-test.ts"],
+    ["scripts/merchant-links-test.ts"],
+    ["scripts/shopify-orders-test.ts"],
+    ["scripts/webhook-test.ts"],
+    ["scripts/crypto-deposit-test.ts"],
+    ["scripts/wallet-proof-test.ts"],
+  ];
+  const { spawn } = await import("node:child_process");
+  const { freePort } = await import("./_free-port.js");
+  const runSuite = async ([file, env = {}]: [string, Record<string, string>?]) => {
+    const db = `${name}_s${Math.random().toString(16).slice(2, 10)}`;
+    await admin.query(`CREATE DATABASE ${db}`);
+    try {
+      const target = openPool(urlFor(db), { realMoney: false });
+      try {
+        await migrate(target);
+      } finally {
+        await target.close();
+      }
+      const child = spawn(process.execPath, ["--import", "tsx", file], {
+        cwd: new URL("..", import.meta.url).pathname,
+        env: {
+          ...process.env,
+          STORE_BACKEND: "postgres",
+          DATABASE_URL: urlFor(db),
+          // As npm run check sets it: a local RPC nothing listens on.
+          TRANSF_RPC_URL: process.env.TRANSF_RPC_URL ?? `http://127.0.0.1:${await freePort()}`,
+          ...env,
+        },
+      });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.stderr.on("data", (d) => (out += d));
+      const code = await new Promise<number | null>((r) => child.once("exit", (c) => r(c)));
+      return { file, code, out };
+    } finally {
+      await admin.query(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`);
+    }
+  };
+  const ran: Awaited<ReturnType<typeof runSuite>>[] = [];
+  const queue = [...suites];
+  await Promise.all(
+    Array.from({ length: 4 }, async () => {
+      for (let next = queue.shift(); next; next = queue.shift()) ran.push(await runSuite(next));
+    }),
+  );
+  const failedSuites = ran.filter((r) => r.code !== 0);
+  for (const r of failedSuites) console.error(`FAIL ${r.file} on Postgres (exit ${r.code})\n${r.out.split("\n").slice(-40).join("\n")}`);
+  assert.equal(failedSuites.length, 0, `${failedSuites.length} suite(s) failed on Postgres`);
+  console.log(`ok - on the API's store over Postgres 17: ${suites.map(([f]) => f.replace(/^scripts\/|-test\.ts$/g, "")).join(", ")}`);
 } finally {
   for (const db of opened) await db.close().catch(() => {});
   // pool.end() resolves before every socket has closed; a backend still

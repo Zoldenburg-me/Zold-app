@@ -615,7 +615,7 @@ await check("one conversion per deposit at a time; failure writes never undo a c
   const conv = srv.slice(srv.indexOf('"/users/:id/crypto-deposits/:depositId/convert"'));
   assert.match(conv, /convertingDeposits\.add\(deposit\.id\);[\s\S]*finally \{\s*convertingDeposits\.delete\(deposit\.id\)/);
   assert.match(conv.slice(0, 2500), /const stale = depositConversionBlocker\(user, current\)/, "re-checked after the price was claimed");
-  assert.match(srv, /function parkDeposit[\s\S]{0,500}holding === "converted"\) return;/);
+  assert.match(srv, /function parkDeposit[\s\S]{0,700}d\.holding === "converted" \? null/, "a converted row is left as it is");
 });
 
 await check("the sweep attributes a recovered deposit to its pay link before settling it", () => {

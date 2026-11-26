@@ -173,7 +173,7 @@ export async function overview(now = Date.now()) {
     },
     recoveries: {
       statuses: tally(zRecoveries, (r) => r.status),
-      open: zRecoveries.filter((r) => ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD"].includes(r.status)).length,
+      open: zRecoveries.filter((r) => ["PASSKEY_PENDING", "REVIEW_PENDING", "GRACE_PERIOD", "RELAYING"].includes(r.status)).length,
       enrolment: tally(users.filter(safeIsLive), (u: User) => recoveryEnrolment(u).zoldenburg),
     },
     issues: {

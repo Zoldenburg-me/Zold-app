@@ -12,7 +12,7 @@ import type { Account, DraftActivity, DraftPayment, Invoice, LedgerEntry, Member
 import { auditEntry, type AuditEntry } from "../audit.js";
 import { matchesPayoutEvidence } from "../transfers/review-evidence.js";
 import { OPERATOR_REFUND_STEP, REVIEW_RESOLUTION_STATES } from "./types.js";
-import type { ConversionSweep, CryptoDeposit, PaymentRequest, ReviewResolutionState, Transfer, User } from "./types.js";
+import type { ConversionSweep, CryptoDeposit, PaymentRequest, Quote, ReviewResolutionState, Transfer, User } from "./types.js";
 
 /** Bounds of an operator's review-resolution note. */
 export const REVIEW_NOTE_MIN = 20;
@@ -60,14 +60,26 @@ export function followIban(a: Account, userId: string, userIban: string | undefi
   return true;
 }
 
+/** An OPEN quote whose `expiresAt` is still ahead: the one a transfer may consume. */
+export function quoteConsumable(q: Quote, now: number): boolean {
+  return (q.status ?? "OPEN") === "OPEN" && Date.parse(q.expiresAt) > now;
+}
+
 /**
  * The patch that records a verified assertion's signCount, only while
  * `credentialId` is still the account's passkey: a recovery can replace the
- * passkey while an assertion is being verified. Undefined when it was
- * replaced; the caller refuses the assertion. The one signCount write.
+ * passkey while an assertion is being verified. And only while the count
+ * advances on the stored row (§2, passkey sign count): webauthn.ts compares
+ * with the count it read before an await, so two assertions verified in
+ * parallel would otherwise both pass, and the lower one would write the
+ * counter back. Once a count is stored, the new one must exceed it, as
+ * webauthn.ts requires. Undefined when the passkey was replaced or the count
+ * did not advance; the caller refuses the assertion. The one signCount write.
  */
 export function passkeyUsePatch(u: User | undefined, credentialId: string, signCount: number): Partial<User> | undefined {
   if (!u?.passkey || u.passkey.credentialId !== credentialId) return undefined;
+  const stored = u.passkey.signCount ?? 0;
+  if (stored > 0 && signCount <= stored) return undefined;
   return { passkey: { ...u.passkey, signCount } };
 }
 

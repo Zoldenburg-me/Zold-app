@@ -128,8 +128,11 @@ async function accountView(org: Organisation, a: Account) {
   const backer = a.backingUserId
     ? (await store.membersOf(org.id)).find((m) => m.userId === a.backingUserId && m.status === "active")
     : undefined;
+  // Bank payouts carry recipients' IBANs and references: they are read only
+  // through GET .../monerium/payouts, under its own permission.
+  const { moneriumPayouts: _payouts, ...rest } = a;
   return {
-    ...a, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
+    ...rest, gate: gateOf(org, a), profile: accountProfileStanding(org, a),
     // As Members shows them: the name, else the email.
     ...(backer?.name || backer?.email ? { backingMemberName: backer.name || backer.email } : {}),
   };
@@ -191,6 +194,11 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       // user's orgs: the user's row held, two creates are taken in turn.
       await store.lockUser(session.userId);
 
+      // An organisation opens accounts, pages and partner keys of its own, none
+      // of which ask the member's segment: so not before that is decided.
+      if ((await store.findUser(session.userId))?.segment?.value === "UNDECIDED") {
+        return res.status(403).json({ code: "RESIDENCE_NEEDED", error: "Say where you live first. It is the first step on your Home." });
+      }
       const { name, type, country, legalName, taxId, email, timeZone, entity } = req.body ?? {};
       const orgType: OrgType = type === "business" ? "business" : "personal";
       // Company or sole trader decides who will own the org's money, so a
@@ -803,12 +811,6 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       }
       profileRecord = checked.record;
       profileWarning = checked.warning;
-      // The Monerium read is an await: a parallel open may have landed in it.
-      if ((await store.accountsOf(ctx.org.id)).some((a) => a.currency === currency)) {
-        return res.status(409).json({ error: `This organisation already has a ${currency} account.` });
-      }
-      const lateTaken = await safeTakenBy(callerFunded!, ctx.org.id);
-      if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
     }
 
     const status = wantsAdoption ? "active" : "gated";
@@ -816,22 +818,41 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       ? undefined
       : (initial.gate ?? (company ? ORG_SAFE_GATE : noIbanGate(ctx.org.type)));
 
-    const account = await store.addAccount({
-      id: `acc_${randomUUID()}`,
-      orgId: ctx.org.id,
-      currency,
-      label: String(req.body?.label ?? "").trim() || defaultLabel(currency),
-      status,
-      provider: CURRENCY_REGISTRY[currency].provider,
-      identifier: wantsAdoption ? { iban: callerFunded!.iban } : {},
-      address: wantsAdoption ? callerFunded!.address : undefined,
-      backingUserId: wantsAdoption ? callerFunded!.id : undefined,
-      ...(wantsAdoption ? { backedSince: safeBooksStart(callerFunded!) } : {}),
-      ...(profileRecord ? { moneriumProfile: profileRecord } : {}),
-      gate,
-      createdAt: now,
-      updatedAt: now,
+    // The checks above ran before awaits (the Monerium read among them): they
+    // are made again where the account is written, holding the org's row and
+    // the Safe, so two parallel opens in one org, or of one Safe in two orgs,
+    // cannot both pass them (§2, one Safe two accounts).
+    const opened = await store.tx(async () => {
+      await store.lockOrganisation(ctx.org.id);
+      if (wantsAdoption) await store.lockKey(`safe:${callerFunded!.address.toLowerCase()}`);
+      if ((await store.accountsOf(ctx.org.id)).some((a) => a.currency === currency)) {
+        return { refused: { status: 409, body: { error: `This organisation already has a ${currency} account.` } } };
+      }
+      const lateTaken = wantsAdoption ? await safeTakenBy(callerFunded!, ctx.org.id) : undefined;
+      if (lateTaken) return { refused: { status: 409, body: { error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" } } };
+      return {
+        account: await store.addAccount({
+          id: `acc_${randomUUID()}`,
+          orgId: ctx.org.id,
+          currency,
+          label: String(req.body?.label ?? "").trim() || defaultLabel(currency),
+          status,
+          provider: CURRENCY_REGISTRY[currency].provider,
+          identifier: wantsAdoption ? { iban: callerFunded!.iban } : {},
+          address: wantsAdoption ? callerFunded!.address : undefined,
+          backingUserId: wantsAdoption ? callerFunded!.id : undefined,
+          ...(wantsAdoption ? { backedSince: safeBooksStart(callerFunded!) } : {}),
+          ...(profileRecord ? { moneriumProfile: profileRecord } : {}),
+          gate,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      };
     });
+    if (opened.refused) return res.status(opened.refused.status).json(opened.refused.body);
+    const account = opened.account;
+    // The database's key: a company Safe is one account (migrations/0003).
+    if (!account) return res.status(409).json({ error: "This Safe already backs another account.", code: "SAFE_IN_OTHER_ORG" });
 
     let note: string | undefined;
     if (account.status === "gated") {
@@ -896,14 +917,24 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
     // nothing is sent from it by bank, and no Monerium profile to check.
     const walletCaller = await store.findUser(ctx.userId);
     if (ctx.org.type === "business" && walletConnectable(walletCaller, ctx.org)) {
-      const taken = await safeTakenBy(walletCaller, ctx.org.id);
-      if (taken) return res.status(409).json({ error: safeTakenError(taken), code: "SAFE_IN_OTHER_ORG" });
-      const connected = await store.updateAccount(account.id, {
-        address: walletCaller.address,
-        backingUserId: walletCaller.id,
-        backedSince: safeBooksStart(walletCaller),
-        gate: WALLET_GATE,
+      // Checked and written under the org row and the Safe's key, as below.
+      const wallet = await store.tx(async () => {
+        await store.lockOrganisation(ctx.org.id);
+        await store.lockKey(`safe:${walletCaller.address.toLowerCase()}`);
+        if ((await store.findAccount(account.id))?.backingUserId) return { refused: { error: "This account was connected by another request." } };
+        const taken = await safeTakenBy(walletCaller, ctx.org.id);
+        if (taken) return { refused: { error: safeTakenError(taken), code: "SAFE_IN_OTHER_ORG" } };
+        return {
+          connected: await store.updateAccount(account.id, {
+            address: walletCaller.address,
+            backingUserId: walletCaller.id,
+            backedSince: safeBooksStart(walletCaller),
+            gate: WALLET_GATE,
+          }),
+        };
       });
+      if (wallet.refused) return res.status(409).json(wallet.refused);
+      const connected = wallet.connected!;
       return res.json({
         account: await accountView(ctx.org, connected),
         note: `Payments to ${ctx.org.name} now arrive in your wallet. It has no IBAN, so nothing is sent from it by bank.`,
@@ -931,21 +962,31 @@ export function createOrgRouter(requireSession: SessionResolver): express.Router
       return res.status(checked.status).json({ error: checked.error, code: checked.code });
     }
     // The Monerium read is an await: another adoption may have landed in it.
-    if ((await store.findAccount(account.id))?.backingUserId) {
-      return res.status(409).json({ error: "This account was funded by another request while we checked with Monerium." });
-    }
-    const lateTaken = await safeTakenBy(caller, ctx.org.id);
-    if (lateTaken) return res.status(409).json({ error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" });
-
-    const funded = await store.updateAccount(account.id, {
-      status: "active",
-      identifier: { iban: caller.iban },
-      address: caller.address,
-      backingUserId: caller.id,
-      backedSince: safeBooksStart(caller),
-      moneriumProfile: checked.record,
-      gate: undefined,
+    // Checked again and written in one transaction holding the org's row and
+    // the Safe, the key POST .../accounts takes too, so one Safe cannot back
+    // two businesses by the two routes in parallel (§2, one Safe two accounts).
+    const done = await store.tx(async () => {
+      await store.lockOrganisation(ctx.org.id);
+      await store.lockKey(`safe:${caller.address.toLowerCase()}`);
+      if ((await store.findAccount(account.id))?.backingUserId) {
+        return { refused: { status: 409, body: { error: "This account was funded by another request while we checked with Monerium." } } };
+      }
+      const lateTaken = await safeTakenBy(caller, ctx.org.id);
+      if (lateTaken) return { refused: { status: 409, body: { error: safeTakenError(lateTaken), code: "SAFE_IN_OTHER_ORG" } } };
+      return {
+        funded: await store.updateAccount(account.id, {
+          status: "active",
+          identifier: { iban: caller.iban },
+          address: caller.address,
+          backingUserId: caller.id,
+          backedSince: safeBooksStart(caller),
+          moneriumProfile: checked.record,
+          gate: undefined,
+        }),
+      };
     });
+    if (done.refused) return res.status(done.refused.status).json(done.refused.body);
+    const funded = done.funded!;
     res.json({
       account: await accountView(ctx.org, funded),
       note:

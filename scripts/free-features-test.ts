@@ -34,7 +34,8 @@ for (const [orgId, userId, role] of [["org_b", "u_owner", "owner"], ["org_b", "u
   await store.addMember({ id: `m_${orgId}_${userId}`, orgId, userId, email: "", role: role as any, status: "active", invitedAt: now, acceptedAt: now });
 }
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");
@@ -147,7 +148,10 @@ await check("one invitation accepted twice in parallel: spent once", async () =>
     invite: { tokenHash: createHash("sha256").update(token).digest("hex"), expiresAt: new Date(Date.now() + 86_400_000).toISOString() },
   } as any);
   const answers = await Promise.all([1, 2].map(() => call("POST", "/api/orgs/invites/accept", "u_invitee", { token })));
-  assert.deepEqual(answers.map((r) => r.status).sort(), [200, 404], JSON.stringify(answers.map((r) => r.data)));
+  // The loser finds the invite spent (404) or, on Postgres where both read it
+  // before either committed, loses the claim (409); either way it is refused.
+  const [won, lost] = answers.map((r) => r.status).sort();
+  assert.ok(won === 200 && [404, 409].includes(lost), JSON.stringify(answers.map((r) => r.data)));
   assert.equal((await store.membersOf("org_b")).filter((m) => m.userId === "u_invitee").length, 1);
 });
 

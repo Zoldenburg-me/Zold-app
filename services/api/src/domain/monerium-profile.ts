@@ -135,6 +135,8 @@ export interface MoneriumIbanFacts {
   iban: string;
   profile?: unknown;
   address?: unknown;
+  /** The chain the address is on; absent on an older record. */
+  chain?: unknown;
   state?: unknown;
   name?: unknown;
 }

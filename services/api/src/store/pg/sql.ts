@@ -95,6 +95,9 @@ export function pgliteDatabase(db: PgliteLike): Database {
   };
 }
 
+/** How long an application transaction waits for a row or advisory lock (§3). */
+export const LOCK_TIMEOUT = "10s";
+
 export function poolDatabase(pool: pg.Pool): Database {
   // An idle client's error (a restart, pg_terminate_backend, a socket reset)
   // is re-emitted by the pool; with no listener node throws and the process
@@ -109,11 +112,23 @@ export function poolDatabase(pool: pg.Pool): Database {
     async tx(fn) {
       const client = await pool.connect();
       let broken: Error | undefined;
+      // The connection lost while this transaction holds it: the statement in
+      // flight rejects and the transaction fails. Without a listener the
+      // client's own 'error' event would end the process.
+      const lost = (err: Error) => {
+        broken ??= err;
+      };
+      client.on("error", lost);
       try {
         // Named, not inherited: a role or database default of REPEATABLE READ
         // would keep one snapshot for the whole transaction, and a write that
         // waited on a lock would not see what the holder committed (§2).
         await client.query("BEGIN ISOLATION LEVEL READ COMMITTED");
+        // A transaction spans no partner I/O (§3), so a lock it waits for is
+        // held for milliseconds; one still held after LOCK_TIMEOUT is a bug or
+        // a stuck session, and the request fails (55P03) instead of queueing
+        // every later one behind it. Advisory locks count too.
+        await client.query(`SET LOCAL lock_timeout = '${LOCK_TIMEOUT}'`);
         const out = await inTx(
           {
             query: async (text, params) => client.query(text, params as unknown[]) as never,
@@ -132,6 +147,7 @@ export function poolDatabase(pool: pg.Pool): Database {
         });
         throw err;
       } finally {
+        client.off("error", lost);
         client.release(broken);
       }
     },

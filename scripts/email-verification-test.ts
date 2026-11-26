@@ -75,7 +75,8 @@ const { emailHeldBy } = await import("../services/api/src/domain/email.js");
 const { publicUser } = await import("../services/api/src/users/public-user.js");
 const { capabilities } = await import("../services/api/src/capabilities.js");
 
-const app = express().use(express.json()).use(
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit).use(express.json()).use(
   "/api",
   createEmailVerificationRouter({
     // The session is the x-user header: who is calling is not under test here.
@@ -275,6 +276,101 @@ await t("six requests at once send one mail; the rest wait", async () => {
   assert.equal((await store.findUser("cy"))!.emailCode!.sentAt.length, 1, "every mail sent is counted");
   await back("cy", 61_000);
   assert.equal((await post("/users/cy/email/code", "cy")).status, 200, "the next minute's request goes through");
+});
+
+// Boundaries of one code's life. One process: `sending` and the store are
+// this process's, so two instances or a restart are not modelled here.
+const lastCode = () => codeIn(inbox[inbox.length - 1])!;
+const sendFor = async (id: string) => {
+  const r = await post(`/users/${id}/email/code`, id);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  return lastCode();
+};
+
+await t("a resend voids the code before it", async () => {
+  await mk("dee", "dee@example.com");
+  let old = await sendFor("dee");
+  await back("dee", 61_000);
+  let fresh = await sendFor("dee");
+  // Two draws of a 6-digit code can coincide; draw again rather than test nothing.
+  while (fresh === old) { await back("dee", 61_000); old = fresh; fresh = await sendFor("dee"); }
+  const r = await post("/users/dee/email/verify", "dee", { code: old });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.code, "EMAIL_CODE_WRONG");
+  assert.equal((await store.findUser("dee"))!.emailVerifiedAt, undefined);
+  assert.equal((await post("/users/dee/email/verify", "dee", { code: fresh })).status, 200);
+});
+
+await t("after success the code is gone: a repeat changes nothing and no new code goes out", async () => {
+  const at = (await store.findUser("dee"))!.emailVerifiedAt;
+  assert.ok(at);
+  assert.equal((await store.findUser("dee"))!.emailCode, undefined);
+  const again = await post("/users/dee/email/verify", "dee", { code: "000000" });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.emailVerifiedAt, at, "a repeat confirm rewrote the confirmation");
+  const before = inbox.length;
+  const r = await post("/users/dee/email/code", "dee");
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, "EMAIL_VERIFIED");
+  assert.equal(inbox.length, before);
+});
+
+await t("a code sent to one address does not confirm the address the account has now", async () => {
+  await mk("eli", "eli@example.com");
+  const sent = await sendFor("eli");
+  await store.updateUser("eli", { email: "someone-else@example.com" });
+  const r = await post("/users/eli/email/verify", "eli", { code: sent });
+  assert.equal(r.status, 400);
+  assert.equal(r.body.code, "EMAIL_CODE_EXPIRED");
+  assert.equal((await store.findUser("eli"))!.emailVerifiedAt, undefined);
+});
+
+await t("a code is bound to the account it was sent for, not only the address", async () => {
+  await mk("fay", "fay@example.com");
+  await mk("fay2", "FAY@example.com");
+  const sent = await sendFor("fay");
+  await back("fay", 61_000);
+  const theirs = await sendFor("fay2");
+  if (sent !== theirs) {
+    const r = await post("/users/fay2/email/verify", "fay2", { code: sent });
+    assert.equal(r.body.code, "EMAIL_CODE_WRONG", "fay's code confirmed fay2");
+  }
+  assert.equal((await store.findUser("fay2"))!.emailVerifiedAt, undefined);
+});
+
+await t("two accounts confirming one address at once: exactly one keeps it", async () => {
+  await mk("gus", "gus@example.com");
+  await mk("gus2", "Gus@Example.com");
+  const c1 = await sendFor("gus");
+  await back("gus", 61_000);
+  const c2 = await sendFor("gus2");
+  const rs = await Promise.all([
+    post("/users/gus/email/verify", "gus", { code: c1 }),
+    post("/users/gus2/email/verify", "gus2", { code: c2 }),
+  ]);
+  assert.deepEqual(rs.map((r) => r.status).sort(), [200, 409], JSON.stringify(rs.map((r) => r.body)));
+  assert.equal(rs.find((r) => r.status === 409)!.body.code, "EMAIL_IN_USE");
+  assert.equal((await store.usersByEmail("gus@example.com")).filter((u) => u.emailVerifiedAt).length, 1);
+});
+
+await t("the same code confirmed several times at once confirms once", async () => {
+  await mk("hal", "hal@example.com");
+  const c = await sendFor("hal");
+  const rs = await Promise.all(Array.from({ length: 4 }, () => post("/users/hal/email/verify", "hal", { code: c })));
+  assert.deepEqual(rs.map((r) => r.status), [200, 200, 200, 200]);
+  const at = new Set(rs.map((r) => r.body.emailVerifiedAt));
+  assert.equal(at.size, 1, `one confirmation, not several: ${[...at]}`);
+});
+
+await t("wrong guesses sent at once all count: no more than five before the code dies", async () => {
+  await mk("ivy", "ivy@example.com");
+  const c = await sendFor("ivy");
+  const wrong = c === "000000" ? "111111" : "000000";
+  await Promise.all(Array.from({ length: 8 }, () => post("/users/ivy/email/verify", "ivy", { code: wrong })));
+  assert.ok((await store.findUser("ivy"))!.emailCode!.attempts >= 5);
+  const r = await post("/users/ivy/email/verify", "ivy", { code: c });
+  assert.equal(r.body.code, "EMAIL_CODE_EXPIRED");
+  assert.equal((await store.findUser("ivy"))!.emailVerifiedAt, undefined);
 });
 
 await t("signup: with verification on, only a confirmed email holds the address", () => {

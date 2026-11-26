@@ -390,7 +390,7 @@ export async function settleConvertedDeposit(
   // The scanner read this transaction before the conversion was recorded and
   // booked its output as money in. Crediting it as well would book it twice;
   // the scanner's row stays the one record of that EURe until reviewed.
-  if ((await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(swapTx, i)))) {
+  if ((await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(CHAIN_ID, swapTx, i)))) {
     return await store.updateCryptoDeposit(deposit.id, {
       holding: "refused",
       reason: "what the swap delivered was already recorded as a deposit — left for review rather than credited twice",
@@ -420,7 +420,6 @@ export async function settleConvertedDeposit(
   const remaining = unconvertedUnits(deposit);
   const amountInUnits = BigInt(conversion?.amountInUnits ?? remaining.toString());
   const leftover = remaining - amountInUnits;
-  const partials = deposit.partials ?? [];
   const rates = { provider: quote.provider, rate: venueRate, ...(midRate ? { midRate } : {}) };
   // More arrived than the swap delivered: another transaction's EURe, which
   // the scanner books as its own deposit. Kept for the reconciler, not credited.
@@ -444,10 +443,16 @@ export async function settleConvertedDeposit(
     const receiptPortionEur = deposit.receipt
       ? Number((BigInt(Math.round(deposit.receipt.amountEur * 100)) * amountInUnits) / BigInt(deposit.amountUnits)) / 100
       : undefined;
-    const held = await store.updateCryptoDeposit(deposit.id, {
+    // Appended on the stored row (§2 rule 2): a partial recorded meanwhile
+    // stays, and what is left is counted from the stored partials.
+    const leftOn = (d: CryptoDeposit) => {
+      const left = unconvertedUnits(d) - amountInUnits;
+      return left > 0n ? left : 0n;
+    };
+    const held = (await store.patchCryptoDeposit(deposit.id, (d) => ({
       holding: "held",
       partials: [
-        ...partials,
+        ...(d.partials ?? []),
         {
           creditedEur: filledEur,
           ...(receiptPortionEur === undefined ? {} : { receiptPortionEur }),
@@ -455,46 +460,49 @@ export async function settleConvertedDeposit(
           conversion: recorded,
         },
       ],
-      creditedUsdc: usd.fromUnits(leftover),
-      leftoverUnits: leftover.toString(),
+      creditedUsdc: usd.fromUnits(leftOn(d)),
+      leftoverUnits: leftOn(d).toString(),
       txs,
-      reason: `part of it converted; ${usd.fromUnits(leftover)} ${usdToken().symbol} is still held and can be converted any time`,
-    });
+      reason: `part of it converted; ${usd.fromUnits(leftOn(d))} ${usdToken().symbol} is still held and can be converted any time`,
+    })))!;
     await writeStatementLines();
     return held;
   }
 
-  const creditedEur = Math.round((filledEur + partials.reduce((n, p) => n + p.creditedEur, 0)) * 100) / 100;
-  /**
-   * The realised gain over every conversion of this deposit: what arrived
-   * minus its value at receipt. Recorded once, now, and never recomputed from
-   * a later rate. Near zero when conversion follows receipt promptly (the tax
-   * reason to convert promptly).
-   *
-   * Absent, not zero, when the receipt could not be valued.
-   */
-  const realisedGainEur =
-    deposit.receipt
-      ? Math.round((creditedEur - deposit.receipt.amountEur) * 100) / 100
-      : undefined;
   /**
    * The deposit was settled on arrival; this records the disposal. The invoice
    * and pay-link rows are rewritten in place under the same ref (the receipt
    * value they were paid at does not change), and the statement writer adds
-   * the disposal line — never a second receipt.
+   * the disposal line — never a second receipt. The credit sums the partials
+   * stored on the row (§2 rule 2).
    */
-  const settled = await store.updateCryptoDeposit(deposit.id, {
-    holding: "converted",
-    creditedEur,
-    creditedUsdc: undefined,
-    settlementAsset: "EURE",
-    ...rates,
-    ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
-    conversion: recorded,
-    leftoverUnits: undefined,
-    txs,
-    reason: undefined,
-  });
+  const settled = (await store.patchCryptoDeposit(deposit.id, (d) => {
+    const creditedEur = Math.round((filledEur + (d.partials ?? []).reduce((n, p) => n + p.creditedEur, 0)) * 100) / 100;
+    /**
+     * The realised gain over every conversion of this deposit: what arrived
+     * minus its value at receipt. Recorded once, now, and never recomputed from
+     * a later rate. Near zero when conversion follows receipt promptly (the tax
+     * reason to convert promptly).
+     *
+     * Absent, not zero, when the receipt could not be valued.
+     */
+    const realisedGainEur =
+      deposit.receipt
+        ? Math.round((creditedEur - deposit.receipt.amountEur) * 100) / 100
+        : undefined;
+    return {
+      holding: "converted",
+      creditedEur,
+      creditedUsdc: undefined,
+      settlementAsset: "EURE",
+      ...rates,
+      ...(realisedGainEur === undefined ? {} : { realisedGainEur }),
+      conversion: recorded,
+      leftoverUnits: undefined,
+      txs,
+      reason: undefined,
+    };
+  }))!;
   if (settled.invoiceId) await recordInvoiceSettlement(settled);
   await noteDepositSettled(settled);
   await writeStatementLines();
@@ -567,7 +575,7 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
     }
     if (!output) continue;
     // Output the scanner booked first stays its record, as settling would leave it.
-    const booked = await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(op.txHash, i));
+    const booked = await someSeq(output.logIndexes, async (i) => await store.findCryptoDeposit(CHAIN_ID, op.txHash, i));
     const txs = [
       ...rest,
       { step: "safe.swap(usdc->eure)", hash: op.txHash, outputLogIndexes: booked ? [] : output.logIndexes },
@@ -805,7 +813,7 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       if (token.token === "EURE" && from === (addrs().swapper ?? "").toLowerCase()) continue;
       const txHash = log.transactionHash!;
       const logIndex = Number(log.logIndex);
-      if ((await store.findCryptoDeposit(txHash, logIndex))) continue;
+      if ((await store.findCryptoDeposit(CHAIN_ID, txHash, logIndex))) continue;
 
       const pageMatch = matches.find((m) => m.source === "payment-page" && m.user.paymentPage?.autoConvert);
       const match = token.token === "USDC" && pageMatch ? pageMatch : matches[0];

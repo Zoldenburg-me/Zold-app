@@ -15,6 +15,7 @@
  *      this checks the guard is in place, and that a callback that answers
  *      awaits nothing after it.
  *   3. `batched` and the sync `persist` are gone from callers.
+ *   4. server.ts takes the one-process start lock before anything else.
  *
  * No chain, no network.  npm run store-gates:test
  */
@@ -221,6 +222,17 @@ check("no caller uses batched() or the sync persist()", () => {
   const callers = [...outsideStore, ...files(path.join(ROOT, "scripts")).filter((x) => !x.endsWith("store-gates-test.ts"))];
   assert.deepEqual(hits(callers, /\bstore\.batched\(|\bbatched\(|import\s*\{[^}]*\b(?:persist|batched)\b[^}]*\}\s*from\s*"[^"]*store\/db/), []);
   assert.doesNotMatch(readFileSync(path.join(SRC, "store/db.ts"), "utf8"), /export function batched/);
+});
+
+// ── 4. One API process: the start lock comes first ─────────────────────────
+check("server.ts takes the start lock before it reads the store, starts a sweep or listens", () => {
+  const src = readFileSync(path.join(SRC, "server.ts"), "utf8");
+  const lock = src.indexOf("await takeStartLock(");
+  assert.ok(lock > 0, "server.ts takes the start lock on Postgres");
+  for (const later of ["await initStore()", "singleFlight(", "app.listen("]) {
+    const at = src.indexOf(later);
+    assert.ok(at > lock, `${later} comes after the start lock`);
+  }
 });
 
 if (failures.length) {

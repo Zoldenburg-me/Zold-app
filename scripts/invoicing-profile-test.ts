@@ -22,6 +22,7 @@ process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:18545";
 process.env.LOCAL_HARNESS = "";
 
 const { initStore, store } = await import("../services/api/src/store.js");
+const { holdUntil } = await import("./_interleave.js");
 const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { createInvoicingRoutes } = await import("../services/api/src/routes/business/invoicing.js");
@@ -61,7 +62,8 @@ async function addOrg(id: string, country: string, over: Record<string, unknown>
   }
 }
 
-const app = express();
+const { sendAfterCommit } = await import("../services/api/src/http/send-after-commit.js");
+const app = express().use(sendAfterCommit);
 app.use(express.json());
 const requireSession = async (req: any, res: any) => {
   const id = req.header("x-user");
@@ -253,7 +255,8 @@ await check("nor change the payee name, BIC or bank printed beside the IBAN, tho
   // Settings sends holder, IBAN and BIC on every save and never the bank name.
   const ok = await call("PATCH", "/api/orgs/org_ga/invoicing/profile", "u_payer", { bank: { holder: "Ada Mba SARL", iban: "", bic: "ugab gali" }, paymentTermsNote: "Net 30" });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
-  assert.deepEqual((await store.findOrganisation("org_ga"))!.invoicing!.bank, { holder: "Ada Mba SARL", iban: undefined, bic: "UGABGALI", bankName: "UGB" });
+  // As stored: an undefined key is no key once written (Postgres keeps JSON).
+  assert.deepEqual(JSON.parse(JSON.stringify((await store.findOrganisation("org_ga"))!.invoicing!.bank)), { holder: "Ada Mba SARL", bic: "UGABGALI", bankName: "UGB" });
 });
 
 await check("registration text is one bounded line", async () => {
@@ -814,6 +817,51 @@ await check("a wallet connected to one business is refused in another (SAFE_IN_O
   assert.equal((await store.findAccount("acc_org_inbiz2"))!.backingUserId, undefined);
   const issued = await call("POST", "/api/orgs/org_inbiz2/invoicing/issue", "u_in", invoiceFor("IN"));
   assert.equal(issued.data.payment.code, "ACCOUNT_NOT_OPEN");
+});
+
+await check("one wallet connected to two businesses in parallel: one gets it, the other is refused", async () => {
+  await walletBusiness("org_inbiz3");
+  await walletBusiness("org_inbiz4");
+  // Free the wallet from org_inbiz for this race, and put it back after.
+  const held = (await store.findAccount("acc_org_inbiz"))!;
+  await store.updateAccount(held.id, { backingUserId: undefined, address: undefined });
+  // Both past every check before either writes, unless check and write are one transaction.
+  const restore = holdUntil(store, "updateAccount", 2);
+  try {
+    const [a, b] = await Promise.all(["org_inbiz3", "org_inbiz4"].map((org) => call("POST", `/api/orgs/${org}/accounts/acc_${org}/fund`, "u_in")));
+    assert.deepEqual([a.status, b.status].sort(), [200, 409], JSON.stringify([a.data, b.data]));
+  } finally {
+    restore();
+  }
+  const backed = ["acc_org_inbiz3", "acc_org_inbiz4"];
+  const both = await Promise.all(backed.map(async (id) => (await store.findAccount(id))!.backingUserId));
+  assert.equal(both.filter(Boolean).length, 1, "one business holds the wallet");
+  for (const id of backed) await store.updateAccount(id, { backingUserId: undefined, address: undefined });
+  await store.updateAccount(held.id, { backingUserId: held.backingUserId, address: held.address });
+});
+
+await check("two owners connecting their own wallets to one account in parallel: one is connected, the other refused", async () => {
+  const over = { country: "IN", kycStatus: "pending", segment: { value: "IN_COLLECTIONS", reasonCode: "collections_only_residence", decidedAt: now, decidedBy: "system" } };
+  const safes = [await personWithSpace("u_in_b", "priyab", over), await personWithSpace("u_in_c", "priyac", over)];
+  await walletBusiness("org_inbiz5");
+  for (const u of ["u_in_b", "u_in_c"]) {
+    await store.addMember({ id: `m_inbiz5_${u}`, orgId: "org_inbiz5", userId: u, email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now });
+  }
+  // Both past the route's first checks before either opens its transaction:
+  // the account is then claimed by whichever commits first, and the other
+  // must see it under the org row's lock.
+  const restore = holdUntil(store, "tx", 2);
+  let out: { status: number; data: any }[];
+  try {
+    out = await Promise.all(["u_in_b", "u_in_c"].map((u) => call("POST", "/api/orgs/org_inbiz5/accounts/acc_org_inbiz5/fund", u)));
+  } finally {
+    restore();
+  }
+  assert.deepEqual(out.map((r) => r.status).sort(), [200, 409], JSON.stringify(out.map((r) => r.data)));
+  const a = (await store.findAccount("acc_org_inbiz5"))!;
+  const winner = ["u_in_b", "u_in_c"][out.findIndex((r) => r.status === 200)];
+  assert.equal(a.backingUserId, winner, "the account is backed by the one that was connected");
+  assert.equal(a.address, safes[["u_in_b", "u_in_c"].indexOf(winner)], "and holds that owner's Safe, not the other's");
 });
 
 await check("an account that can still get an IBAN does not connect as a wallet: it goes through Monerium", async () => {
