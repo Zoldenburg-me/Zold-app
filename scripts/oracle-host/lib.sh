@@ -30,6 +30,8 @@ deployment() {
   PG_CLIENTS="zold-$DEP-db"            # the only group that may enter $PG_SOCKET
   API_USER="zold-$DEP"                 # runs the API
   DEPLOY_USER="zold-deploy-$DEP"       # owns the code checkout, runs the migrations
+  DEPLOY_GROUP="$DEPLOY_USER"          # its user group; the API user is in it
+  if [[ -n "$R" ]]; then DEPLOY_GROUP="$(id -gn)"; fi # the fake host's user
   APP_DIR="/srv/zold/$DEP/app"         # link to the running release (deploy.sh)
   API_ENV="$R/etc/zold/$DEP.env"       # the API's environment, owner input
   # The chain addresses, owner input: production carries no deployments.json
@@ -55,7 +57,9 @@ deployment() {
 # environment of every pg-testnet process, and the reverse (§7).
 load_host_env() {
   [[ -f "$HOST_ENV" ]] || die "$HOST_ENV is missing"
-  if grep -qE '^[[:space:]]*(export|declare|typeset)[[:space:]]' "$HOST_ENV"; then die "$HOST_ENV: no export lines (its values stay unexported)"; fi
+  # Assignments only: no command that exports (export, declare/typeset/
+  # readonly -x, set -a / allexport), at a line's start or after ; & | ( or $(.
+  if grep -qE '(^|[;&|(`]|\$\()[[:space:]]*(export|declare|typeset|readonly|local|set|eval)([[:space:]]|$)' "$HOST_ENV"; then die "$HOST_ENV: assignments only, no export, declare, readonly, set or eval (its values stay unexported)"; fi
   # shellcheck source=/dev/null
   source "$HOST_ENV"
 }
@@ -66,6 +70,18 @@ psql_su() {
 }
 
 die() { echo "$*" >&2; exit 1; }
+
+# wait_out_of_recovery <seconds>: until the cluster is promoted (a restore
+# replays WAL in hot standby, which takes connections), or refuses.
+wait_out_of_recovery() {
+  local i state
+  for ((i = 0; i < $1; i++)); do
+    state="$(psql_su -At -d postgres -c "SELECT pg_is_in_recovery()" 2>/dev/null || true)"
+    [[ "$state" == f ]] && return 0
+    sleep 1
+  done
+  die "cluster $DEP is still in recovery after $1 s (pg_is_in_recovery: ${state:-no answer}). A restore paused at its target needs --target-action=promote or SELECT pg_promote(); a long WAL replay: wait, then run provision.sh again"
+}
 
 # The primary key fingerprints in a key file, one per line; subkeys are not
 # listed (provision.sh, the PGDG key).

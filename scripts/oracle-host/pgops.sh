@@ -120,15 +120,23 @@ put_object() { # file name
 }
 
 dump() {
-  local stamp spool age="$R/opt/age/age"
+  local stamp spool age="$R/opt/age/age" vol="$R/srv/pg/$DEP" root
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  # On the cluster's volume, not /tmp; only ciphertext is ever written.
-  spool="$R/srv/pg/$DEP/dump-spool/$stamp"
+  # On the cluster's volume, not /tmp; only ciphertext is ever written. The
+  # volume root and the spool are root's (provision.sh): root writes here by
+  # path, so no directory on the way may be pg-<dep>'s, or a planted link
+  # would turn age -o, tar or rm on a root file. pg_dump writes only into a
+  # pipe this job reads.
+  root="$vol/dump-spool"
+  [[ -d "$vol" && ! -L "$vol" && -O "$vol" ]] || { alert "daily dump refused" "($vol is not root's: re-run provision.sh)"; return 1; }
+  [[ ! -L "$root" ]] || { alert "daily dump refused" "($root is a link)"; return 1; }
+  [[ -d "$root" ]] || mkdir -m 700 "$root"
+  [[ -O "$root" ]] || { alert "daily dump refused" "($root is not root's: re-run provision.sh)"; return 1; }
   # A failed night's leftovers (ciphertext only) go first: they share the
-  # volume WAL needs. Only this job writes the spool (one dump unit per
-  # deployment).
-  rm -rf "$R/srv/pg/$DEP/dump-spool"
-  install -d -o "$PG_USER" -g "$PG_USER" -m 700 "$R/srv/pg/$DEP/dump-spool" "$spool"
+  # volume WAL needs. find -delete removes a link, never what it names.
+  find "$root" -mindepth 1 -delete
+  spool="$root/$stamp"
+  mkdir -m 700 "$spool"
   enc() { "$age" -r "$OWNER_AGE_RECIPIENT" -o "$1"; }
   runuser -u "$PG_USER" -- pg_dumpall -h "$PG_SOCKET" -p "$PG_PORT" --globals-only | enc "$spool/globals.sql.age"
   local dbs=("$ZOLD_DB")
@@ -164,7 +172,7 @@ dump() {
   done
   tar -C "$spool" -cf "$spool.tar" .
   put_object "$spool.tar" "$DEP/$stamp.tar" || { alert "daily dump failed" "(upload, $stamp)"; return 1; }
-  rm -rf "$R/srv/pg/$DEP/dump-spool"
+  find "$root" -mindepth 1 -delete
   logger -t zold-host -- "$DEP: dump $stamp uploaded to $(v DUMP_BUCKET)"
 }
 

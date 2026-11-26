@@ -198,7 +198,18 @@ chmod 750 "/srv/zold/$DEP"
 # --- the cluster --------------------------------------------------------------
 echo "d $PG_SOCKET 2750 $PG_USER $PG_CLIENTS -" >"/etc/tmpfiles.d/postgresql-$DEP.conf"
 systemd-tmpfiles --create "/etc/tmpfiles.d/postgresql-$DEP.conf"
-install -d -o "$PG_USER" -g "$PG_USER" -m 700 "/srv/pg/$DEP"
+# The volume root is root's, 755: the data directory is pg-<dep>'s, the dump
+# spool root's (pgops.sh dump writes there as root, by path, so pg-<dep> must
+# not own a directory on the way). A host provisioned with a pg-<dep>-owned
+# volume root is taken back here: root's chown first, then a spool that is a
+# link or not root's is removed (rm removes a link, not its target), and the
+# data directory must be a directory, not a link.
+install -d -o root -g root -m 755 "/srv/pg/$DEP"
+[[ ! -L "$PG_DATA" ]] || die "$PG_DATA is a link: inspect the volume by hand"
+SPOOL="/srv/pg/$DEP/dump-spool"
+if [[ -L "$SPOOL" || ( -e "$SPOOL" && ! -O "$SPOOL" ) ]]; then rm -rf --one-file-system "$SPOOL"; fi
+[[ -d "$SPOOL" ]] || mkdir -m 700 "$SPOOL"
+chmod 700 "$SPOOL"
 if ! pg_lsclusters -h | awk '{print $1"/"$2}' | grep -qx "$PG_MAJOR/$DEP"; then
   # UTF-8 encoding and locale: the email key's \u escapes and lower() depend
   # on them (migrations/0003).
@@ -282,6 +293,9 @@ else
   systemctl start "$unit"
 fi
 pg_isready -q -h "$PG_SOCKET" -p "$PG_PORT" -t 30 || die "cluster $DEP did not start"
+# After a restore the cluster accepts connections in hot standby while it
+# replays WAL; stanza-create and check need it promoted.
+wait_out_of_recovery "${PROMOTE_WAIT_S:-1800}"
 
 # The stanza: idempotent, and refuses a repository made by another cluster.
 runuser -u "$PG_USER" -- pgbackrest --config="$BACKREST_CONF" --stanza="$STANZA" stanza-create

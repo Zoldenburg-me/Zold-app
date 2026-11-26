@@ -8,3 +8,5 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/opt/zold-host/deploy.sh %i
 TimeoutStartSec=20min
+# The API user reads the releases through the deploy group (provision.sh).
+UMask=0027

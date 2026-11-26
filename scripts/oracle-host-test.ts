@@ -25,7 +25,7 @@
 import assert from "node:assert/strict";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
@@ -117,7 +117,7 @@ const lines = (s: string) => s.split("\n").filter((l) => l.trim() && !l.startsWi
 // systemctl, psql, df, flock, logger), and the deploy user's PATH gets npm (a
 // fake migration CLI) and node. git is real, on a local `production` branch.
 // The alert endpoint is a dead https:// address, so every alert fails to send.
-function fakeHost() {
+function fakeHost(opts: { alertOk?: boolean } = {}) {
   const R = mkdtempSync(path.join(tmpdir(), "zold-host-"));
   const shims = path.join(R, "shims");
   const nodeBin = path.join(R, "opt/node-v22.23.4-linux-arm64/bin");
@@ -138,13 +138,36 @@ function fakeHost() {
   shim(shims, "sha256sum", `[[ -x /usr/bin/sha256sum ]] && exec /usr/bin/sha256sum "$@"; exec shasum -a 256 "$@"`);
   shim(shims, "df", `echo Use%; echo " $(cat "${R}/df-used" 2>/dev/null || echo 50)%"`);
   shim(shims, "pgbackrest", "exit 0");
+  shim(shims, "pg_dumpall", `echo "-- globals"`);
+  shim(shims, "pg_dump", `echo "dump of $*"`);
+  mkdirSync(path.join(R, "opt/age"), { recursive: true });
+  shim(path.join(R, "opt/age"), "age", `[[ "$1" == -r && "$3" == -o ]] || exit 2\ncat >"$4"`);
   // /api/health answers only on the port the API would bind, and only with
   // the release's deployments.json in place (what the real endpoint needs).
+  // An alert to https://alerts.ok/ is "sent" (recorded); any other alert URL
+  // goes to the real curl. The dump's object PUT is recorded, never sent.
   shim(shims, "curl", `if [[ "$*" == */api/health* ]]; then
   [[ -f "${R}/api-running" && -f "${R}/srv/zold/mainnet/app/deployments.json" && "$*" == *127.0.0.1:$(cat "${R}/api-port")/* ]]; exit
 fi
+if [[ "$*" == *objectstorage* ]]; then cat >/dev/null; while [[ "$1" != -T ]]; do shift; done; cp "$2" "${R}/uploaded.tar"; exit 0; fi
+if [[ "$*" == *--proto* ]]; then
+  cfg="$(cat)"
+  if [[ "$cfg" == *https://alerts.ok/* ]]; then echo "\${@: -1}" >>"${R}/alerts.sent"; exit 0; fi
+  printf '%s\n' "$cfg" | exec ${realCurl} "$@"
+fi
 exec ${realCurl} "$@"`);
-  shim(shims, "psql", `while [[ $# -gt 0 && "$1" != -c ]]; do shift; done; sql="$2"
+  // With -c: one answer per query. Without: the dump's session on stdin.
+  shim(shims, "psql", `while [[ $# -gt 0 && "$1" != -c ]]; do shift; done; sql="\${2:-}"
+if [[ $# == 0 ]]; then
+  while read -r l; do
+    case "$l" in
+      *pg_export_snapshot*) echo 00000003-0000001B-1 ;;
+      *__end__*) echo "ledger|1|abc"; echo __end__ ;;
+      *'\\q'*) exit 0 ;;
+    esac
+  done
+  exit 0
+fi
 case "$sql" in
   *pg_stat_archiver*) echo 0 ;;
   *pg_ls_archive_statusdir*) echo "0|0" ;;
@@ -182,10 +205,10 @@ esac`);
     return git("rev-parse", "HEAD");
   };
   writeFileSync(path.join(R, "etc/zold-host/host.env"),
-    `ALERT_URL=https://127.0.0.1:9/zold-test\nREPO_URL=${origin}\nMAINNET_S3_SECRET=mainnet-sentinel-s3\nMAINNET_CIPHER_PASS=mainnet-sentinel-pass\nTESTNET_S3_SECRET=testnet-sentinel-s3\nTESTNET_DUMP_SECRET=testnet-sentinel-dump\n`);
+    `ALERT_URL=${opts.alertOk ? "https://alerts.ok/zold-test" : "https://127.0.0.1:9/zold-test"}\nOCI_NAMESPACE=ns\nOWNER_AGE_RECIPIENT=age1test\nMAINNET_DUMP_REGION=eu-frankfurt-1\nMAINNET_DUMP_BUCKET=dumps\nMAINNET_DUMP_KEY=k\nMAINNET_DUMP_SECRET=mainnet-sentinel-dump\nREPO_URL=${origin}\nMAINNET_S3_SECRET=mainnet-sentinel-s3\nMAINNET_CIPHER_PASS=mainnet-sentinel-pass\nTESTNET_S3_SECRET=testnet-sentinel-s3\nTESTNET_DUMP_SECRET=testnet-sentinel-dump\n`);
   writeFileSync(path.join(R, "api-port"), "3001");
-  const run = (script: string, arg: string) =>
-    sh("bash", [path.join(DIR, script), arg], { ZH_ROOT: R, PATH: `${shims}:/usr/bin:/bin:/usr/sbin:/sbin` });
+  const run = (script: string, arg: string, umask = "022") =>
+    sh("bash", ["-c", `umask ${umask} && exec bash "$0" "$1"`, path.join(DIR, script), arg], { ZH_ROOT: R, PATH: `${shims}:/usr/bin:/bin:/usr/sbin:/sbin` });
   const read = (f: string) => (existsSync(path.join(R, f)) ? readFileSync(path.join(R, f), "utf8") : "");
   return { R, commit, run, read, origin };
 }
@@ -201,11 +224,15 @@ esac`);
     check("deploy: without deployments.json, nothing is built or migrated", r.status === 0 && /deployments\.json is missing/.test(r.stdout) && h.read("schema") === "" && !existsSync(path.join(base, "app")), r.stdout + r.stderr);
     const deployments = JSON.stringify({ 8453: { eure: "0x0000000000000000000000000000000000000001" } });
     writeFileSync(path.join(h.R, "etc/zold/mainnet.deployments.json"), deployments);
-    r = h.run("deploy.sh", "mainnet");
+    r = h.run("deploy.sh", "mainnet", "077");
     check("deploy: a first deploy on a fresh host migrates, starts the API and passes health (TRANSF_API_PORT, last and unquoted)",
       r.status === 0 && /deployed/.test(r.stdout) && h.read("schema") === "3\n" && existsSync(path.join(h.R, "api-running")), r.stdout + r.stderr + h.read("journal"));
     check("deploy: app links to the release, which holds the owner's deployments.json",
       readlinkSync(path.join(base, "app")) === `releases/${sha1}` && readFileSync(path.join(base, "app/deployments.json"), "utf8") === deployments);
+    const dj = statSync(path.join(base, "app/deployments.json"));
+    check("deploy: the release's deployments.json is 640 in the deploy group, even under umask 077 (the API reads it as a member)",
+      (dj.mode & 0o777) === 0o640 && dj.gid === process.getgid?.(), (dj.mode & 0o777).toString(8));
+    check("zold-deploy@.service: UMask=0027 (the API reads the releases through the deploy group)", /^UMask=0027$/m.test(readFileSync(path.join(DIR, "systemd/zold-deploy@.service"), "utf8")));
     const users = new Set(h.read("runuser.log").trim().split("\n").map((l) => l.split(" :: ")[0]));
     check("deploy: every command in /srv/zold runs as the deploy user", users.size === 1 && users.has("zold-deploy-mainnet"), [...users].join(","));
     const src = readFileSync(path.join(DIR, "deploy.sh"), "utf8").split("\n").filter((l) => !l.trim().startsWith("#"));
@@ -260,11 +287,85 @@ esac`);
     const t = h.run("pgops.sh", "testnet-alerts");
     const tenv = envs();
     check("alerts: testnet jobs (as pg-testnet) never see mainnet's or testnet's secrets", t.status === 0 && tenv.length > 0 && !/sentinel/.test(tenv) && /pg-testnet/.test(h.read("runuser.log")), t.stdout + t.stderr);
-    appendFileSync(path.join(h.R, "etc/zold-host/host.env"), "export MAINNET_DUMP_KEY=x\n");
-    check("host.env with an export line is refused", h.run("pgops.sh", "testnet-alerts").status !== 0);
+    const envFile = path.join(h.R, "etc/zold-host/host.env");
+    const clean = readFileSync(envFile, "utf8");
+    appendFileSync(envFile, "TESTNET_CIPHER_PASS='x-export-y;set-a'\n");
+    check("host.env: a value that only contains export or set passes", h.run("pgops.sh", "testnet-alerts").status === 0);
+    for (const line of ["export MAINNET_DUMP_KEY=x", "  declare -x A=1", "readonly -x A=1", "typeset -x A=1", "set -a", "set -o allexport", "A=1; export B=2", "A=1 && export B", "A=$(export B=1)", "eval B=1"]) {
+      writeFileSync(envFile, `${clean}${line}\n`);
+      const x = h.run("pgops.sh", "testnet-alerts");
+      check(`host.env with \`${line.trim()}\` is refused`, x.status !== 0 && /assignments only/.test(x.stderr), x.stderr);
+    }
   } finally {
     rmSync(h.R, { recursive: true, force: true });
   }
+}
+{
+  // The dump spool is root's: pg_dump writes only into a pipe the job reads,
+  // and a link planted in the spool is never followed.
+  const h = fakeHost();
+  try {
+    const vol = path.join(h.R, "srv/pg/mainnet");
+    const spool = path.join(vol, "dump-spool");
+    const victim = path.join(h.R, "victim");
+    mkdirSync(victim);
+    writeFileSync(path.join(victim, "shadow"), "root's file\n");
+    // A failed night's leftovers, with links planted in them.
+    mkdirSync(path.join(spool, "20260101T000000Z"), { recursive: true });
+    symlinkSync(path.join(victim, "shadow"), path.join(spool, "20260101T000000Z/globals.sql.age"));
+    symlinkSync(victim, path.join(spool, "20260101T000000Z.tar"));
+    let r = h.run("pgops.sh", "mainnet-dump");
+    const tar = sh("tar", ["-tf", path.join(h.R, "uploaded.tar")]).stdout.split("\n").map((l) => l.replace(/^\.\//, "")).filter((l) => l && l !== ".").sort();
+    check("dump: globals and each database's dump and check, uploaded as one tar", r.status === 0 && tar.join(" ") === "globals.sql.age hub.check.age hub.dump.age zold.check.age zold.dump.age", r.stdout + r.stderr + tar.join(" "));
+    check("dump: planted links in the spool are removed, never followed", readFileSync(path.join(victim, "shadow"), "utf8") === "root's file\n" && readdirSync(victim).join() === "shadow" && readdirSync(spool).length === 0, readdirSync(spool).join(" "));
+    const ran = h.read("runuser.log").trim().split("\n").map((l) => l.split(" :: ")[1].split(" ")[0]);
+    check("dump: as pg-mainnet only pg_dumpall, psql and pg_dump, which write no file", ran.every((c) => ["pg_dumpall", "psql", "pg_dump"].includes(c)) && /^pg-mainnet :: /.test(h.read("runuser.log")), ran.join(" "));
+    // The spool itself swapped for a link: refused, nothing written behind it.
+    rmSync(spool, { recursive: true });
+    symlinkSync(victim, spool);
+    r = h.run("pgops.sh", "mainnet-dump");
+    check("dump: a spool that is a link is refused and nothing behind it is touched", r.status === 1 && readdirSync(victim).join() === "shadow" && /daily dump refused/.test(h.read("journal")), r.stdout + r.stderr);
+    const pgops = readFileSync(path.join(DIR, "pgops.sh"), "utf8");
+    const provision = readFileSync(path.join(DIR, "provision.sh"), "utf8");
+    check("dump: the spool is not chowned to pg-<dep>, and the volume root and the spool must be root's (-O)", !/-o "\$PG_USER"/.test(pgops) && pgops.includes('-O "$vol"') && pgops.includes('-O "$root"'));
+    check("provision: the volume root is root's 755, the spool root's 700, a pg-owned or linked spool removed",
+      provision.includes('install -d -o root -g root -m 755 "/srv/pg/$DEP"') && provision.includes('[[ -d "$SPOOL" ]] || mkdir -m 700 "$SPOOL"') && /-L "\$SPOOL" \|\| \( -e "\$SPOOL" && ! -O "\$SPOOL" \)/.test(provision) && provision.indexOf("-m 755 \"/srv/pg/$DEP\"") < provision.indexOf("pg_createcluster \"$PG_MAJOR\""));
+  } finally {
+    rmSync(h.R, { recursive: true, force: true });
+  }
+}
+{
+  // A missing owner file alerts, once per 30 minutes per file.
+  const h = fakeHost({ alertOk: true });
+  try {
+    h.commit(1);
+    h.run("deploy.sh", "mainnet");
+    const r = h.run("deploy.sh", "mainnet");
+    const sent = () => h.read("alerts.sent").trim().split("\n").filter(Boolean);
+    check("deploy: a missing env file sends one alert over two runs", r.status === 0 && sent().length === 1 && /deploy waiting: .*mainnet\.env is missing/.test(sent()[0]), sent().join("\n") + r.stderr);
+    writeFileSync(path.join(h.R, "etc/zold/mainnet.env"), "TRANSF_API_PORT=3001\n");
+    h.run("deploy.sh", "mainnet");
+    h.run("deploy.sh", "mainnet");
+    check("deploy: then a missing deployments.json sends its own one", sent().length === 2 && /mainnet\.deployments\.json is missing/.test(sent()[1]), sent().join("\n"));
+  } finally {
+    rmSync(h.R, { recursive: true, force: true });
+  }
+}
+{
+  // provision.sh step 5 after a restore: wait for the promotion, or refuse.
+  const wait = (answers: string, secs: number) => sh("bash", ["-c", `source "${DIR}/lib.sh"; deployment mainnet
+    c="$(mktemp)"; echo 0 >"$c"; runuser() { shift 3; "$@"; }; sleep() { :; }
+    # psql runs in a command substitution: the call count lives in a file.
+    psql() { local a=(${answers}) n; n="$(cat "$c")"; echo $((n + 1)) >"$c"; echo "\${a[$n]:-\${a[-1]}}"; }
+    wait_out_of_recovery ${secs}; echo "after $(cat "$c")"; rm -f "$c"`]);
+  let w = wait("t t f", 10);
+  check("wait_out_of_recovery: returns once pg_is_in_recovery() is false", w.status === 0 && w.stdout.trim() === "after 3", w.stdout + w.stderr);
+  w = wait("t", 5);
+  check("wait_out_of_recovery: a cluster still in recovery fails after the timeout, saying so", w.status === 1 && /still in recovery after 5 s .*pg_promote/.test(w.stderr), w.stdout + w.stderr);
+  check("provision: waits for the promotion before stanza-create", (() => {
+    const p = readFileSync(path.join(DIR, "provision.sh"), "utf8");
+    return p.indexOf("wait_out_of_recovery") > p.indexOf("pg_isready -q") && p.indexOf("wait_out_of_recovery") < p.indexOf("stanza-create\n");
+  })());
 }
 {
   // The PGDG key check reads primary keys only, and a second one fails it.

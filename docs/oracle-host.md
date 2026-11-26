@@ -30,6 +30,7 @@ Names (all from `lib.sh`), for `<dep>` = `mainnet` | `testnet`:
 | cluster OS user and superuser | `pg-mainnet` | `pg-testnet` |
 | socket directory, port | `/run/postgresql-mainnet`, 5432 | `/run/postgresql-testnet`, 5433 |
 | data directory (own block volume) | `/srv/pg/mainnet/data` | `/srv/pg/testnet/data` |
+| dump spool (same volume) | `/srv/pg/mainnet/dump-spool` | `/srv/pg/testnet/dump-spool` |
 | API OS user → role | `zold-mainnet` → `zold_app` | `zold-testnet` → `zold_app` |
 | deploy OS user → role | `zold-deploy-mainnet` → `zold_owner` | `zold-deploy-testnet` → `zold_owner` |
 | hub OS user → role | `zold-hub` → `hub_app` | `zold-hub-testnet`, only with `HUB_TESTNET=1` |
@@ -54,8 +55,10 @@ the host:
 - `OCI_NAMESPACE`, `OWNER_AGE_RECIPIENT` (public key), `ALERT_URL`
   (`https://` only; provision refuses another scheme).
 - `/etc/zold/<dep>.env`: the lease's environment, plus `DATABASE_URL`,
-  `TRANSF_DB_PATH`, `TRANSF_API_PORT` (`host.env.example` lists them). No
-  `export` lines in it or in `host.env`.
+  `TRANSF_DB_PATH`, `TRANSF_API_PORT` (`host.env.example` lists them), no
+  `export` lines (a systemd `EnvironmentFile`). `host.env` holds assignments
+  only: provision and the jobs refuse `export`, `declare`, `readonly`, `set`
+  or `eval` in it.
 - `/etc/zold/<dep>.deployments.json` (root, 600): the `deployments.json` the
   lease writes from its environment variable. `production` carries none, and
   `/api/health` needs it, so the deploy copies it into every release.
@@ -95,13 +98,24 @@ each hostname at `http://127.0.0.1:<API port>`.
 
 A re-run changes only what differs. It never lifts a hub write stop.
 
+The volume root `/srv/pg/<dep>` is `root:root 755`: `data/` is
+`pg-<dep>`'s, `dump-spool/` is root's at 700. The dump job writes the spool as
+root, by path, so `pg-<dep>` owns no directory on the way and cannot plant a
+link there; `pg_dump` writes only into a pipe the job reads. The dump refuses
+a volume root or spool that is not root's, or a spool that is a link. A
+volume provisioned with an older `provision.sh` (root `pg-<dep>`'s) is taken
+back by the next run: the root is chowned, and a spool that is a link or not
+root's is removed (`rm` removes a link, not its target). Until then the dump
+alerts and refuses.
+
 ## Deploys
 
 `zold-deploy@<dep>.timer` runs `deploy.sh` every two minutes. While
 `/etc/zold/<dep>.env` or `/etc/zold/<dep>.deployments.json` is missing it
-stages nothing; the first run after both are in place deploys and starts
+stages nothing and alerts, once per 30 minutes per file; the first run after both are in place deploys and starts
 the API. On a new commit on the public `production` branch it makes a
-release directory, copies in `deployments.json`, runs `npm ci --omit=dev`,
+release directory, copies in `deployments.json` (640, the deploy group,
+which the API user is in; the unit's `UMask=0027`), runs `npm ci --omit=dev`,
 stops the API, runs `npm run db:migrate -- apply` as
 `zold_owner` (then `zold_grant_app('zold_app')`), points `app` at the
 release, starts the API and waits three minutes for `/api/health`. Nothing
@@ -163,8 +177,10 @@ while archiving keeps up. Mainnet first, testnet the same way after.
    A timed restore without `--target-action=promote` pauses at the target,
    and step 5's `stanza-create` and `check` then fail on a cluster still in
    recovery.
-5. `sudo scripts/oracle-host/provision.sh <dep>`: starts the cluster,
-   `stanza-create` and `check` (archiving from the new host before it takes
+5. `sudo scripts/oracle-host/provision.sh <dep>`: starts the cluster, waits
+   until `pg_is_in_recovery()` is false (a restore replays WAL in hot
+   standby, which already takes connections; after 30 minutes,
+   `PROMOTE_WAIT_S`, it stops and says so), `stanza-create` and `check` (archiving from the new host before it takes
    a write), the database step and `check.sql` (roles, attributes,
    `CONNECT` only to each database's two roles, the hub's limits, the app
    role's grants equal `zold_grant_app`'s). A repository left out in step 2

@@ -93,6 +93,9 @@ fi
 for f in "$API_ENV" "$DEPLOYMENTS_JSON"; do
   if [[ ! -f "$f" ]]; then
     echo "$DEP: ${new:0:7} not deployed: $f is missing (owner input, docs/oracle-host.md)"
+    # Once per 30 minutes (alert's own dedupe), so a forgotten file after a
+    # rebuild reaches the owner and the timer's two-minute runs do not flood.
+    alert "deploy waiting: $f is missing (owner input)" "(${new:0:7} not deployed)"
     exit 0
   fi
 done
@@ -109,8 +112,10 @@ if [[ ! -f "$rel/package.json" ]]; then
   as_deploy git -C "$BASE/repo.git" worktree prune
   as_deploy git -C "$BASE/repo.git" worktree add -q --detach "$rel" "$new"
 fi
-# Root reads the owner's file; the deploy user writes it into its release.
-as_deploy bash -c 'cat >"$1.tmp" && mv -f "$1.tmp" "$1"' _ "$rel/deployments.json" <"$DEPLOYMENTS_JSON"
+# Root reads the owner's file; the deploy user writes it into its release,
+# 640 in its own group, which the API user is in (provision.sh), whatever
+# the umask.
+as_deploy bash -c 'cat >"$1.tmp" && chgrp "$2" "$1.tmp" && chmod 640 "$1.tmp" && mv -f "$1.tmp" "$1"' _ "$rel/deployments.json" "$DEPLOY_GROUP" <"$DEPLOYMENTS_JSON"
 as_deploy bash -c 'cd "$1" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error' _ "$rel"
 
 before="$(migrate "$rel" status | cut -d' ' -f1)" || fail "deploy of ${new:0:7}: cannot read the schema version as $ZOLD_OWNER"
