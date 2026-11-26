@@ -633,6 +633,22 @@ await check("MERCHANT_LINK_BANK=1 and a payee with an IBAN: the order also takes
     const order = { id: randomUUID(), kind: "issue", amount: "42", currency: "eur", chain: MONERIUM.chain, address: owner.address, memo: `Order #5901 ${r.body.code}`, meta: { state: "processed" } };
     assert.equal(attributeMoneriumOrder(order)?.state, "PAID");
     assert.ok(await until(() => deliveries.some((d: any) => d.paymentRequestId === r.body.id)), "no PAID hint for the checkout");
+    const test = await create(link.linkId, { amountEur: 42, test: true, order: { gid: ORDER(5903) } });
+    assert.equal(test.status, 201, JSON.stringify(test.body));
+    assert.deepEqual(store.findPaymentRequest(test.body.id)!.methods, ["crypto"], "a test order: crypto only, no real IBAN");
+    // One stored with bank before that rule: re-answered without bank details, and a credit does not pay it.
+    store.updatePaymentRequest(test.body.id, { methods: ["crypto", "bank"] });
+    const again = await create(link.linkId, { amountEur: 42, test: true, order: { gid: ORDER(5903) } });
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    const { publicPaymentRequest } = await import("../services/api/src/payment-requests.js");
+    const ctx = { chainId: 84532, token: { symbol: "USDC", address: "0x0000000000000000000000000000000000000001" as const, decimals: 6 }, baseUrl: API, cryptoLive: false };
+    const page = publicPaymentRequest(store.findPaymentRequest(test.body.id)!, store.findUser(owner.id)!, ctx);
+    assert.equal(page.methods.bank, undefined, "an old test order's page shows no IBAN");
+    const real = publicPaymentRequest(stored, store.findUser(owner.id)!, ctx);
+    assert.ok(real.methods.bank, "the real order's page does show it");
+    const credit = { id: randomUUID(), kind: "issue", amount: "42", currency: "eur", chain: MONERIUM.chain, address: owner.address, memo: `Order ${test.body.code}`, meta: { state: "processed" } };
+    assert.equal(attributeMoneriumOrder(credit), undefined, "a bank credit never pays a test order");
+    assert.equal(store.findPaymentRequest(test.body.id)!.state, "OPEN");
     CHECKOUT_SERVICE.bankPayments = false;
     const off = await create(link.linkId, { amountEur: 42, order: { gid: ORDER(5902) } });
     assert.deepEqual(store.findPaymentRequest(off.body.id)!.methods, ["crypto"], "flag off, IBAN set: crypto only");

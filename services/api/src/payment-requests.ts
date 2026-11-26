@@ -436,6 +436,11 @@ export function matchDepositToRequests(
   return best ? { request: best.request, quote: best.quote, kind: best.kind } : undefined;
 }
 
+/** A test request is never settled by fiat, whatever methods it was stored with. */
+export function takesBank(request: PaymentRequest): boolean {
+  return request.methods.includes("bank") && !request.test;
+}
+
 /** A Monerium issue order settles a request when it is processed, landed on
  *  the payee's account and its memo carries the code. Amount comes from the
  *  order, never from the request: the payer may have sent a different sum. */
@@ -452,7 +457,7 @@ export function matchMoneriumOrder(
   const state = order.meta?.state ?? order.state;
   if (state !== "processed") return undefined;
   if (String(order.address).toLowerCase() !== payeeAddress.toLowerCase()) return undefined;
-  if (!request.methods.includes("bank")) return undefined;
+  if (!takesBank(request)) return undefined;
   if (!textCarriesCode(order.memo, request.code)) return undefined;
   const amountEur = Number(order.amount);
   if (!(amountEur > 0)) return undefined;
@@ -480,7 +485,7 @@ export function matchTransfer(
   payeeIban: string,
 ): Omit<RequestPayment, "id"> | undefined {
   if (transfer.rail !== "sepa" || transfer.state !== "PAID") return undefined;
-  if (!request.methods.includes("bank")) return undefined;
+  if (!takesBank(request)) return undefined;
   const norm = (s?: string) => (s ?? "").replace(/\s/g, "").toUpperCase();
   if (!payeeIban || norm(transfer.recipientIban) !== norm(payeeIban)) return undefined;
   if (!textCarriesCode(transfer.reference, request.code)) return undefined;
@@ -668,7 +673,7 @@ export function publicPaymentRequest(
         : `${ctx.baseUrl}/api/pay/${encodeURIComponent(handle)}/${displayCode(r.code)}/qr.svg`,
     };
   }
-  if (r.methods.includes("bank") && user.iban) {
+  if (takesBank(r) && user.iban) {
     methods.bank = {
       iban: user.iban,
       ...(reportedBic(user) ? { bic: reportedBic(user) } : {}),

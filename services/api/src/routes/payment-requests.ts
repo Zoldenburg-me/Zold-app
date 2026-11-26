@@ -43,6 +43,7 @@ import {
   outstandingEur,
   publicPaymentRequest,
   quoteCrypto,
+  takesBank,
   validateCreate,
   withQuote,
   type CryptoQuote,
@@ -747,7 +748,7 @@ export async function sweepPaymentRequests(now = new Date()): Promise<{ expired:
       expired++;
       continue;
     }
-    if (!r.methods.includes("bank")) continue;
+    if (!takesBank(r)) continue;
     const payee = store.findUser(r.userId);
     if (!payee?.iban) continue;
     for (const t of store.transfers) {
