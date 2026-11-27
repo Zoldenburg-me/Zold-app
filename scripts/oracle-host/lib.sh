@@ -80,10 +80,15 @@ opt() { local n="${P}_$1"; printf '%s' "${!n:-}"; }
 # (region "auto"), for a copy outside OCI (§7.1). A bare host name only: it
 # goes into pgbackrest.conf and a URL, so no scheme, path, space or newline.
 s3_host() {
-  if [[ -z "$1" ]]; then printf '%s' "$OCI_NAMESPACE.compat.objectstorage.$2.oraclecloud.com"; return 0; fi
+  if [[ -z "$1" ]]; then printf '%s' "${OCI_NAMESPACE:-}.compat.objectstorage.$2.oraclecloud.com"; return 0; fi
   [[ "$1" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || die "S3 endpoint must be a bare host name, e.g. <account id>.r2.cloudflarestorage.com: $1"
   printf '%s' "$1"
 }
+
+# endpoint <NAME> <region>: s3_host of the deployment's ${P}_NAME, read here
+# and not through $(opt), which would strip a trailing newline before the
+# check (a newline-only value would select OCI instead of failing).
+endpoint() { local n="${P}_$1"; s3_host "${!n:-}" "$2"; }
 
 # wait_out_of_recovery <seconds>: until the cluster is promoted (a restore
 # replays WAL in hot standby, which takes connections), or refuses.

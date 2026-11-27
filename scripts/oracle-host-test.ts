@@ -99,10 +99,12 @@ const lines = (s: string) => s.split("\n").filter((l) => l.trim() && !l.startsWi
     const r = host(bad);
     check(`s3_host refuses ${JSON.stringify(bad)}`, r.status !== 0 && r.stdout === "" && /bare host name/.test(r.stderr), r.stdout + r.stderr);
   }
-  check("provision: each repository's endpoint through s3_host, its own key or the shared one",
-    provision.includes('echo "repo$n-s3-endpoint=$(s3_host "$(opt "REPO${n}_ENDPOINT")" "$region")"') && provision.includes('echo "repo$n-s3-key=${key:-$(v S3_KEY)}"') && provision.includes('echo "repo$n-s3-key-secret=${secret:-$(v S3_SECRET)}"'));
+  check("provision: each repository's endpoint through endpoint (the raw value), its own key or the shared one",
+    provision.includes('echo "repo$n-s3-endpoint=$(endpoint "REPO${n}_ENDPOINT" "$region")"') && provision.includes('echo "repo$n-s3-key=${key:-$(v S3_KEY)}"') && provision.includes('echo "repo$n-s3-key-secret=${secret:-$(v S3_SECRET)}"'));
   check("provision: endpoints are checked before anything is made, a repository key needs its secret",
-    provision.indexOf('s3_host "$(opt DUMP_ENDPOINT)" x') < provision.indexOf("mountpoint -q") && provision.includes('need "REPO${n}_S3_KEY"; need "REPO${n}_S3_SECRET"'));
+    provision.indexOf("endpoint DUMP_ENDPOINT x") < provision.indexOf("mountpoint -q") && provision.includes('need "REPO${n}_S3_KEY"; need "REPO${n}_S3_SECRET"; else shared_key=1; fi'));
+  check("provision: OCI_NAMESPACE only while a target is on OCI, the shared key only while a repository uses it",
+    provision.includes('if [[ "$shared_key" == 1 ]]; then need S3_KEY; need S3_SECRET; fi') && provision.includes('if [[ "$on_oci" == 1 ]]; then host_vars="OCI_NAMESPACE $host_vars"; fi') && !/for v in REPOS S3_KEY/.test(provision));
   const units = path.join(DIR, "systemd");
   for (const u of ["zold-api@.service", "zold-hub.service"]) {
     const s = readFileSync(path.join(units, u), "utf8");
@@ -343,6 +345,9 @@ esac`);
     writeFileSync(envFile, base + "MAINNET_DUMP_ENDPOINT=https://acct.r2.cloudflarestorage.com\n");
     r = h.run("pgops.sh", "mainnet-dump");
     check("dump: an endpoint that is not a bare host name is refused, nothing uploaded", r.status === 1 && !existsSync(path.join(h.R, "uploaded.url")) && /daily dump failed/.test(h.read("journal")), r.stdout + r.stderr);
+    writeFileSync(envFile, base + "MAINNET_DUMP_ENDPOINT=$'\\n'\n");
+    r = h.run("pgops.sh", "mainnet-dump");
+    check("dump: a newline-only endpoint is refused, not taken for OCI", r.status === 1 && !existsSync(path.join(h.R, "uploaded.url")) && /bare host name/.test(r.stderr), r.stdout + r.stderr);
     writeFileSync(envFile, base);
     // The spool itself swapped for a link: refused, nothing written behind it.
     rmSync(spool, { recursive: true });

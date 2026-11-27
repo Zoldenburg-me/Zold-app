@@ -51,12 +51,14 @@ the host:
 - The OCI account, its region and second region, and the instance (Ampere
   A1, Ubuntu, aarch64) with one block volume per cluster mounted on
   `/srv/pg/<dep>`. Where the free tier has no block storage left, a
-  preallocated ext4 image (`fallocate`, root 600) loop-mounted from
+  preallocated ext4 image (root 600; `mkfs.ext4 -m 0 -E nodiscard`, then
+  `fallocate` to its full size, since a discard leaves it sparse) loop-mounted from
   `/etc/fstab` with `loop,noatime,nofail,X-fstrim.notrim` does the same job:
   provision checks only that `/srv/pg/<dep>` is a filesystem of its own, and
   the free-space alerts and the cap are then the cluster's. `X-fstrim.notrim`
   keeps the weekly trim from punching holes in the image, so its space stays
-  reserved on the boot disk; `nofail` keeps a broken image from stopping the
+  reserved on the boot disk (check: `fstrim -av --dry-run` skips it, and
+  `du --block-size=1` of the image equals its size); `nofail` keeps a broken image from stopping the
   boot, and the cluster still waits for the mount. The OCI security list opens
   only SSH.
 - A tenancy limited to one region keeps the second copy outside OCI, on
@@ -195,7 +197,8 @@ while archiving keeps up. Mainnet first, testnet the same way after.
    volume per cluster mounted on `/srv/pg/<dep>`. A tenancy limited to one
    region has no second OCI region to launch in while its home region is
    down: then any Ubuntu aarch64 host elsewhere (provision needs only that),
-   restored from `repo2` on R2. The old instance, if it returns, stays
+   restored from `repo2` on R2. With `<DEP>_REPOS=2` on R2, its own key and the dump
+   on R2, `host.env` needs no `OCI_NAMESPACE` and no shared S3 key. The old instance, if it returns, stays
    stopped.
 2. Restore `/etc/zold-host/host.env` from the owner's copy. If a region is
    gone, set `<DEP>_REPOS` to the reachable repository only.
@@ -304,7 +307,11 @@ LIMIT 0` and ends `hub_app`/`hub_owner` sessions when `hub` passes
   in design §7 whether a segment in `repo1` only is reported archived.
 - Each alert fires once (archiver failure, backlog, disk, `pgbackrest check`,
   hub size and stop) and reaches `ALERT_URL`.
-- A dump object: the dump credential is refused an overwrite and a delete.
+- A dump object: the first daily dump (`pgops.sh <dep>-dump`) is uploaded
+  and listed with the read-only credential, and the dump credential is
+  refused an overwrite and a delete (on R2, by the bucket lock). On R2 this
+  is the only test of the dump's own upload: `pgbackrest check` uses another
+  client and bucket.
 - The first restore drill and the first testnet rebuild, timed against the
   target.
 - The console check for an idle-reclamation notice on the instance.

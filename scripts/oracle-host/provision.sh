@@ -113,17 +113,25 @@ deployment "$1"
 # variable names are the deployment's, upper-cased: MAINNET_REPO1_BUCKET, …
 P="$(printf %s "$DEP" | tr a-z A-Z)"
 need() { local v="${P}_$1"; [[ -n "${!v:-}" && "${!v}" != *CHANGE_ME* ]] || die "$HOST_ENV: ${v} is not set"; }
-for v in REPOS S3_KEY S3_SECRET CIPHER_PASS DUMP_REGION DUMP_BUCKET DUMP_KEY DUMP_SECRET; do need "$v"; done
+for v in REPOS CIPHER_PASS DUMP_REGION DUMP_BUCKET DUMP_KEY DUMP_SECRET; do need "$v"; done
+# OCI_NAMESPACE only while a target is on OCI, the shared key only while a
+# repository has none of its own: an R2-only rebuild (REPOS=2) needs neither.
+on_oci=0 shared_key=0
 REPOS_VAR="${P}_REPOS"
 for n in ${!REPOS_VAR}; do
   [[ "$n" == 1 || "$n" == 2 ]] || die "${P}_REPOS: only 1 and 2"
   need "REPO${n}_REGION"; need "REPO${n}_BUCKET"
   # Optional, per repository: its own S3 host and key (R2 for the second copy).
-  s3_host "$(opt "REPO${n}_ENDPOINT")" x >/dev/null
-  if [[ -n "$(opt "REPO${n}_S3_KEY")$(opt "REPO${n}_S3_SECRET")" ]]; then need "REPO${n}_S3_KEY"; need "REPO${n}_S3_SECRET"; fi
+  endpoint "REPO${n}_ENDPOINT" x >/dev/null
+  [[ -n "$(opt "REPO${n}_ENDPOINT")" ]] || on_oci=1
+  if [[ -n "$(opt "REPO${n}_S3_KEY")$(opt "REPO${n}_S3_SECRET")" ]]; then need "REPO${n}_S3_KEY"; need "REPO${n}_S3_SECRET"; else shared_key=1; fi
 done
-s3_host "$(opt DUMP_ENDPOINT)" x >/dev/null
-for v in OCI_NAMESPACE OWNER_AGE_RECIPIENT ALERT_URL; do
+endpoint DUMP_ENDPOINT x >/dev/null
+[[ -n "$(opt DUMP_ENDPOINT)" ]] || on_oci=1
+if [[ "$shared_key" == 1 ]]; then need S3_KEY; need S3_SECRET; fi
+host_vars="OWNER_AGE_RECIPIENT ALERT_URL"
+if [[ "$on_oci" == 1 ]]; then host_vars="OCI_NAMESPACE $host_vars"; fi
+for v in $host_vars; do
   [[ -n "${!v:-}" && "${!v}" != *CHANGE_ME* ]] || die "$HOST_ENV: $v is not set"
 done
 # The alert URL can be a credential (an ntfy topic): never in clear.
@@ -251,7 +259,7 @@ v() { local n="${P}_$1"; printf '%s' "${!n}"; }
   for n in $(v REPOS); do
     region="$(v "REPO${n}_REGION")"
     echo "repo$n-type=s3"
-    echo "repo$n-s3-endpoint=$(s3_host "$(opt "REPO${n}_ENDPOINT")" "$region")"
+    echo "repo$n-s3-endpoint=$(endpoint "REPO${n}_ENDPOINT" "$region")"
     echo "repo$n-s3-region=$region"
     echo "repo$n-s3-bucket=$(v "REPO${n}_BUCKET")"
     echo "repo$n-s3-uri-style=path"
