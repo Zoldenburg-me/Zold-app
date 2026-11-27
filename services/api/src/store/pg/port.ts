@@ -19,6 +19,7 @@ import type { OutboxRow } from "../types.js";
 import { listCollection, TABLE } from "./backend.js";
 import { assertSchemaCurrent } from "./migrate.js";
 import type { Database, Sql } from "./sql.js";
+import { hasUnstorableText } from "../text.js";
 
 export const COLLECTIONS = Object.keys(emptyDb()) as Collection[];
 
@@ -182,6 +183,14 @@ export function preImportReport(db: Db): Finding[] {
     else if (Array.isArray(v) && c !== "processedMoneriumOrders" && c !== "processedMoneriumWebhooks") {
       add("not-a-row", c, true, v.flatMap((r, i) => (r !== null && typeof r === "object" && !Array.isArray(r) ? [] : [`#${i}`])));
     }
+  }
+
+  // Text Postgres's json type refuses (store/text.ts): the row would fail the import.
+  for (const c of COLLECTIONS) {
+    const v = (db as unknown as Row)[c];
+    if (c === "cryptoDepositCursor") { if (hasUnstorableText(v)) add("unstorable-text", c, true, [c]); continue; }
+    if (!Array.isArray(v)) continue;
+    add("unstorable-text", c, true, v.flatMap((r, i) => (hasUnstorableText(r) ? [typeof (r as Row)?.id === "string" ? ((r as Row).id as string) : `#${i}`] : [])));
   }
 
   // Primary keys: present, text, once.
