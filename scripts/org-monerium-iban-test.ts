@@ -458,6 +458,40 @@ try {
     }
   });
 
+  await check("two Monerium records for one IBAN decide nothing; a stale \"away\" read never undoes a reopen", async () => {
+    const { recheckCompanyIbans } = await import("../services/api/src/routes/business/org-monerium-iban.js");
+    const savedMs = MONERIUM.ibanCheckMs;
+    (MONERIUM as any).ibanCheckMs = 0;
+    try {
+      await reset();
+      await issue();
+      // Conflicting records: their order must not decide whether it is hidden.
+      mon.ibans = [
+        { iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" },
+        { iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" },
+      ];
+      await recheckCompanyIbans(io as any);
+      assert.equal((await account()).status, "active", "kept while Monerium is ambiguous");
+      // Moved away.
+      mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
+      await recheckCompanyIbans(io as any);
+      await gatedStill();
+      // A poll reads "away"; before it writes, an owner's Check again reopens it.
+      const stale = { ...io, monerium: () => ({ ...client, async ibans() {
+        const answer = { ibans: mon.ibans.map((i) => ({ ...i })) };
+        mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" }];
+        const back = await call("POST", "/org_co/monerium/iban/check", "u_adam");
+        assert.equal(back.data.monerium.companyIban.state, "issued", back.text);
+        return answer;
+      } }) };
+      await recheckCompanyIbans(stale as any);
+      assert.equal((await account()).status, "active");
+      assert.equal((await account()).moneriumIban?.movedAwayAt, undefined, "the stale read does not put the move back");
+    } finally {
+      (MONERIUM as any).ibanCheckMs = savedMs;
+    }
+  });
+
   await check("a moved IBAN stays moved after the keys are removed and reconnected", async () => {
     await reset();
     await issue();

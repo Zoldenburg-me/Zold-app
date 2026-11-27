@@ -87,12 +87,13 @@ function companyIbanPart(keys, deposits, payoutsOn) {
  *  `payouts` is undefined while loading, null when unread, [] none. The form is
  *  drawn only where the deployment has switched payouts on and this member is
  *  an owner who can sign; the history stays readable either way. */
-function payoutsHtml(payouts, on, keysOk) {
-  const add = on && keysOk && roleCan(org.role, "sign")
+function payoutsHtml(payouts, on, keysOk, ibanHere = true) {
+  const add = on && keysOk && ibanHere && roleCan(org.role, "sign")
     ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-payout-new">Pay a bank account</button></div>`
     : "";
   const off = !on ? `<p class="zb-hint">Bank payouts from the company’s IBAN are switched off on this deployment.</p>`
-    : !keysOk ? `<p class="zb-hint">Connect the company’s Monerium keys again to send a payout. The history below stays readable.</p>` : "";
+    : !keysOk ? `<p class="zb-hint">Connect the company’s Monerium keys again to send a payout. The history below stays readable.</p>`
+    : !ibanHere ? `<p class="zb-hint">Monerium now pays the company’s IBAN elsewhere, so no new payout can be sent from it. The history below stays readable.</p>` : "";
   const body = payouts === undefined
     ? `<p class="zb-hint">Loading payouts…</p>`
     : payouts === null
@@ -131,10 +132,12 @@ function companyMoneriumSection(keys, deposits, payouts, payoutsOn) {
     ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-monerium-check">Check keys again</button><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="org-monerium-drawer" data-replace="1">Replace keys</button><button type="button" class="z-btn z-btn--secondary z-btn--sm zb-danger" data-act="org-monerium-remove">Remove keys</button></div>`
     : keys.available ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--primary z-btn--sm" data-act="org-monerium-drawer">Add Monerium keys</button></div>` : "";
   const issued = keys?.companyIban?.state === "issued";
+  // A moved IBAN keeps its history: reading it is what settles a pending payout.
+  const moved = keys?.companyIban?.state === "moved";
   return section("Monerium", "The company’s own Monerium account, connected with API keys from its Monerium developer section. Monerium issues the IBANs and the euros; Zold is the software you use them with.",
     rows(keyRows(keys)) + (hint ? `<p class="zb-hint">${esc(plain(hint))}</p>` : "")
     + actions + companyIbanPart(keys, deposits, payoutsOn)
-    + (issued ? payoutsHtml(payouts, payoutsOn, keys?.status === "connected") : ""));
+    + (issued || moved ? payoutsHtml(payouts, payoutsOn, keys?.status === "connected", issued) : ""));
 }
 
 function moneriumSection(accounts) {
@@ -171,8 +174,10 @@ RENDER.settings = async () => {
   const depositsLoad = issued ? api(`/api/orgs/${org.id}/monerium/deposits`).then((r) => r.deposits, () => null) : null;
   // The company's bank payouts: stored rows, so they show even after the keys go.
   const payoutsOn = hs.status === "fulfilled" && hs.value?.capabilities?.orgBankPayouts === true;
-  let payouts = issued && company ? undefined : [];
-  const payoutsLoad = issued && company ? api(`/api/orgs/${org.id}/monerium/payouts`).then((r) => r.payouts, () => null) : null;
+  // Also for a moved IBAN: the list call re-reads its pending orders.
+  const withPayouts = company && (issued || (ks.status === "fulfilled" && ks.value?.monerium?.companyIban?.state === "moved"));
+  let payouts = withPayouts ? undefined : [];
+  const payoutsLoad = withPayouts ? api(`/api/orgs/${org.id}/monerium/payouts`).then((r) => r.payouts, () => null) : null;
   const accounts = acc.status === "fulfilled" ? acc.value.accounts : null;
   const keys = ks.status === "fulfilled" ? ks.value?.monerium ?? null : null;
   // A company's account is its own Safe: its Monerium is its own keys, never a login's connection.

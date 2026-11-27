@@ -34,7 +34,7 @@ import { MONERIUM, SECURITY } from "../../config.js";
 import { orgEntity } from "../../domain/org-entity.js";
 import { OrgSafePlanRefusal, orgSafePlan } from "../../domain/org-safe-plan.js";
 import { assertReadableSafeState } from "../../domain/safe-op-queue.js";
-import { companyEurAccount, companyIbanState } from "../../domain/org-monerium-iban.js";
+import { companyEurAccount, companyIbanIssued, companyIbanState } from "../../domain/org-monerium-iban.js";
 import { moneriumIbanList } from "../../domain/monerium-profile.js";
 import type { Organisation } from "../../domain/types.js";
 import { LINK_MESSAGE, MoneriumApiError, MoneriumClient, type MoneriumOrder, type MoneriumRedeemOrder } from "../../adapters/monerium-client.js";
@@ -185,7 +185,9 @@ async function recheckIssued(io: OrgMoneriumIbanIo, orgId: string, userId?: stri
     const account = (await store.findAccount(account0.id))!;
     if (!account.identifier.iban) return; // gated by a recheck that landed first
     const iban = normalizeIban(account.identifier.iban);
-    const entry = list.find((i) => normalizeIban(i.iban) === iban);
+    // As applyIbanBinding: two records for one IBAN decide nothing.
+    const hits = list.filter((i) => normalizeIban(i.iban) === iban);
+    const entry = hits.length === 1 ? hits[0] : undefined;
     if (!entry || typeof entry.address !== "string" || paysIntoSafe(entry, account.address!)) return;
     if (cur.safe) await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe, movedAwayAt: new Date().toISOString() } } });
     await store.updateAccount(account.id, {
@@ -224,6 +226,8 @@ async function recheckMoved(io: OrgMoneriumIbanIo, orgId: string, userId?: strin
     const cur = await stillKeys(orgId, m);
     const account = (await store.findAccount(account0.id))!;
     if (!ours) {
+      // Another check reopened it after this read: a stale "away" is dropped.
+      if (companyIbanIssued(account)) return;
       const movedAt = cur.safe?.movedAwayAt ?? account.moneriumIban?.movedAwayAt ?? new Date().toISOString();
       await store.updateAccount(account.id, { moneriumIban: { safeAddress: plan.address as Hex, profileId: m.profile.id, movedAwayAt: movedAt } });
       return;
