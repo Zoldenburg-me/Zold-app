@@ -409,6 +409,17 @@ await check("an invoice is paid when its payments, in the order they arrived, fi
   assert.equal(u.state, "PAID");
   assert.equal(u.payment!.paidAt, "2026-10-13T09:00:00.000Z", "covered on Tuesday, when the second payment arrived");
   assert.equal(settlementUpdate({ ...invoice, settlements: [] }, { ref: "deposit:mon", method: "crypto", amountEur: 60, at: "2026-10-12T09:00:00.000Z" } as any).state, undefined, "€60 of €100 leaves it open");
+  // Bank credits, the usual path: paid at the credit that completes it.
+  const bank = (ref: string, amountEur: number, at: string) => ({ ref, method: "bank", amountEur, at }) as any;
+  const open: any = { ...invoice, settlements: [] };
+  assert.equal(settlementUpdate(open, bank("monerium:full", 100, "2026-10-14T08:00:00.000Z")).payment!.paidAt, "2026-10-14T08:00:00.000Z", "one full credit");
+  const first = settlementUpdate(open, bank("monerium:a", 40, "2026-10-14T08:00:00.000Z"));
+  assert.equal(first.state, undefined, "€40 of €100 leaves it open");
+  const second = settlementUpdate({ ...open, settlements: first.settlements }, bank("monerium:b", 60, "2026-10-15T08:00:00.000Z"));
+  assert.equal(second.payment!.paidAt, "2026-10-15T08:00:00.000Z", "two credits: paid when the second completed it");
+  // A credit recorded late but dated earlier than the one before it: paid when the two first covered it.
+  const late = settlementUpdate({ ...open, settlements: [bank("monerium:c", 60, "2026-10-16T08:00:00.000Z")] }, bank("monerium:d", 40, "2026-10-14T08:00:00.000Z"));
+  assert.equal(late.payment!.paidAt, "2026-10-16T08:00:00.000Z");
 });
 
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {
