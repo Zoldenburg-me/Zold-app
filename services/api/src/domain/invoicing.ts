@@ -1073,8 +1073,17 @@ function checkDirectiveContent(
 
   // Art. 226(3): a taxed invoice carries the issuer's VAT ID. Germany also
   // accepts the Steuernummer (§ 14 Abs. 4 Nr. 2), checked in checkGermanContent.
-  if (!de && draft.treatment.kind === "standard" && !has(draft.issuer.vatId)) {
-    add("error", "issuer.vatId", "Your VAT ID is required on an invoice that charges VAT.", "Art. 226(3) VAT Directive");
+  // A note in the field ("applied for") is no VAT ID here: only Germany has
+  // the § 31 Abs. 5 UStDV correction route.
+  if (!de && draft.treatment.kind === "standard" && !vatIdLooksValid((draft.issuer.vatId ?? "").trim())) {
+    add(
+      "error",
+      "issuer.vatId",
+      has(draft.issuer.vatId)
+        ? `${draft.issuer.vatId} is not a VAT ID. An invoice that charges VAT needs yours.`
+        : "Your VAT ID is required on an invoice that charges VAT.",
+      "Art. 226(3) VAT Directive",
+    );
     issuerVatIdFlagged = true;
   }
   if (!issuerVatIdFlagged && has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {

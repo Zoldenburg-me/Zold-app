@@ -843,6 +843,8 @@ check("German-only rules stay German: an EU issuer may charge 23% and needs no S
 check("an EU issuer charging VAT must show its VAT ID (Art. 226(3)); a note never stands in outside Germany", () => {
   const taxed = checkCompliance(draft({ issuer: { ...frIssuer, vatId: undefined } }), jurisdictionFor("FR"));
   assert.ok(taxed.errors.some((e) => e.field === "issuer.vatId" && /226\(3\)/.test(e.legalBasis ?? "")));
+  const taxedNote = checkCompliance(draft({ issuer: { ...frIssuer, vatId: "applied for" } }), jurisdictionFor("FR"));
+  assert.ok(taxedNote.errors.some((e) => e.field === "issuer.vatId"), "a note is no VAT ID on a taxed EU invoice");
   const noted = checkCompliance(frDraft({ issuer: { ...frIssuer, vatId: "applied for" } }), jurisdictionFor("FR"));
   assert.ok(noted.errors.some((e) => e.field === "issuer.vatId"), "the § 31 Abs. 5 UStDV warning is German only");
 });

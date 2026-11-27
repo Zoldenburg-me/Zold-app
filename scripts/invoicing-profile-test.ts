@@ -491,6 +491,13 @@ await check("the identifiers an invoice must print are switched on in its frozen
   assert.equal(rc.data.invoice.issued.display.recipientVatId, true, "reverse charge prints the customer's VAT ID");
 });
 
+await check("an EU issuer's taxed invoice prints its VAT ID though the block is off and a tax number shows", async () => {
+  await addOrg("org_fr_ids", "FR", { invoicing: { vatId: "FR40303265045", taxNumber: "1234567890123", display: { issuerVatId: false } } });
+  const r = await call("POST", "/api/orgs/org_fr_ids/invoicing/issue", "u_owner", { ...invoiceFor("FR"), vat: { kind: "standard", rate: 20 } });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.invoice.issued.display.issuerVatId, true);
+});
+
 console.log("\nNumbering: one number, once, picked at write time");
 
 const issueIn = (orgId: string, over: Record<string, unknown> = {}) =>
