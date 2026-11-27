@@ -430,7 +430,7 @@ await check("an invoice is paid when its payments, in the order they arrived, fi
   const valued = settlementUpdate(paidInvoice, { ...mon0, amountEur: 60 });
   assert.equal(valued.state, undefined, "the state is left as it is");
   assert.equal(valued.payment!.paidAt, "2026-10-13T09:00:00.000Z", "€60 + €40 covered it on Tuesday");
-  assert.equal(settlementUpdate(paidInvoice, bank("monerium:extra", 5, "2026-10-12T00:00:00.000Z")).payment, undefined, "a new payment on a PAID invoice changes no date");
+  assert.equal(settlementUpdate(paidInvoice, bank("monerium:extra", 60, "2026-10-12T00:00:00.000Z")).payment, undefined, "a new payment on a PAID invoice changes no date, though it would cover it on Tuesday");
 });
 
 await check("an EURe settlement is dated when the money landed on chain, not when the scanner saw it", async () => {
