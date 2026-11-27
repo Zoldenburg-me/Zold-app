@@ -369,6 +369,12 @@ export interface CompanyBankPayout {
    *  company bank run (routes/business/org-monerium-bank-runs.ts). */
   draftId?: string;
   lineId?: string;
+  /** Monerium answered the order with a 2xx but no usable id: it holds an
+   *  order Zold cannot follow, so the row is never cleared by hand. */
+  acceptedWithoutId?: true;
+  /** The owner member who cleared an `unknown` row after checking Monerium. */
+  clearedByMemberId?: string;
+  clearedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

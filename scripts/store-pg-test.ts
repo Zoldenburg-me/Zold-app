@@ -623,6 +623,11 @@ try {
     ["scripts/outbox-test.ts"],
     ["scripts/checkout-service-test.ts"],
     ["scripts/identity-race-test.ts"],
+    // One live receipt share per transfer under parallel posts (receipt_shares_live).
+    ["scripts/receipt-share-route-test.ts", { TRANSF_CHAIN_ID: "31337" }],
+    // A company payout's row and its statement line written under the account's lock.
+    ["scripts/org-monerium-payouts-test.ts"],
+    ["scripts/beleg-test.ts", { TRANSF_CHAIN_ID: "31337" }],
   ];
   const { spawn } = await import("node:child_process");
   const { freePort } = await import("./_free-port.js");

@@ -357,6 +357,50 @@ await check("the holder name says whether Monerium verified it, and a company na
   assert.match(text(holderFor(u, undefined)), /Not verified: name as the holder entered it/);
 });
 
+await check("a company payout from its own Safe gets a Beleg naming the company as holder", async () => {
+  const CO_SAFE = `0x${"cc".repeat(20)}` as const;
+  await store.addOrganisation({ id: "org_co", type: "business", entity: "company", name: "Acme", legalName: "Acme GmbH", plan: "business", reporting: { currency: "EUR", timeZone: "Europe/Berlin", costBasisMethod: "FIFO" }, verifications: {}, address: { country: "DE" }, createdAt: now, updatedAt: now } as any);
+  await store.addAccount({
+    id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: null, identifier: { iban: "DE02100100109307118603" }, address: CO_SAFE,
+    moneriumProfile: { id: "prof-co", kind: "corporate", name: "Acme GmbH", checkedAt: now },
+    moneriumPayouts: [{ id: "po-1", amountEur: 42.5, recipientName: "Bob GmbH", recipientIban: "DE89370400440532013000", memo: "m", message: "x", issuedAt: now, safeAddress: CO_SAFE, profileId: "prof-co", signedByMemberId: "m_co", state: "sent", orderId: "ord_po1", createdAt: now, updatedAt: now }],
+    createdAt: "2026-02-01T00:00:00.000Z", updatedAt: now,
+  } as any);
+  await store.addMember({ id: "m_co", orgId: "org_co", userId: "u_1", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
+  await writeStatementLines();
+  const payout = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "org-payout:po-1")!;
+  assert.ok(payout, "the writer booked the payout");
+  const { doc } = await issueBelegForLine(payout);
+  const h = (doc.snapshot as any).holder;
+  assert.equal(h.name, "Acme GmbH", "the company holds the IBAN");
+  assert.equal(h.iban, "DE02100100109307118603");
+  assert.equal(h.safeAddress, CO_SAFE);
+  assert.equal(h.moneriumProfile.id, "prof-co");
+  assert.equal(h.nameSource, "self-declared", "a profile name on the account record is not Monerium's verification");
+  assert.equal(doc.orgId, "org_co");
+  const { belegOfLine } = await import("../services/api/src/bookkeeping/issue.js");
+  const booked = (await store.ledgerOf("org_co")).find((e) => e.id === payout.id)!;
+  assert.ok("live" in ((await belegOfLine(booked)) ?? {}), "live, so the receipts ZIP carries it");
+
+  // Filed under the owner, and theirs only while they are in the company.
+  const express = (await import("express")).default;
+  const { createDocumentsRouter } = await import("../services/api/src/routes/documents.js");
+  const server = express().use("/api", createDocumentsRouter({ requireUserSession: async () => ({ id: "s" }) } as any)).listen(0);
+  try {
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/users/u_1/documents`;
+    const codes = async () => ((await (await fetch(base)).json()) as any).documents.map((d: any) => d.code);
+    assert.equal(doc.userId, "u_1");
+    assert.ok((await codes()).includes(doc.code), "an active owner lists the company's Beleg");
+    await store.updateMember("m_co", { status: "deactivated" } as any);
+    assert.ok(!(await codes()).includes(doc.code), "out of the company: its Beleg codes are not handed out");
+    assert.equal((await fetch(`${base}/${doc.code}`, { method: "DELETE" })).status, 404, "nor revoked");
+    assert.equal((await store.findDocumentByCode(doc.code))?.revokedAt, undefined);
+    await store.updateMember("m_co", { status: "active" } as any);
+  } finally {
+    server.close();
+  }
+});
+
 console.log("\nPublic PDF");
 
 await check("the public PDF is served while live and refused once revoked; the verify page still answers", async () => {

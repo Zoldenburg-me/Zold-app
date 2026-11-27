@@ -151,7 +151,10 @@ Say this plainly rather than letting the surface imply otherwise:
   Monerium's sandbox or production, and no org Safe EIP-1271 redeem signature
   has been checked by Monerium. Pending orders are re-read only when Settings
   lists the payouts (five a call); there is no poller. A payout is booked in
-  the company's statement only once Monerium reports it processed.
+  the company's statement only once Monerium reports it processed. A payout
+  Monerium did not confirm stays "unclear" and holds its euros until Monerium
+  reports it or, with no order id, an owner clears it after checking Monerium
+  (audited); nothing clears one automatically.
   A company payment run of bank payees (at most 10) is the same redeem, once
   per line (`routes/business/org-monerium-bank-runs.ts`, stubs only:
   `org-monerium-bank-runs:test`). The owner's passkey signs every line before
