@@ -60,6 +60,18 @@ export async function openLinkPath(invoice: Pick<Invoice, "id" | "orgId">): Prom
   return handle ? `/pay/${encodeURIComponent(handle)}/${displayCode(link.code)}` : undefined;
 }
 
+/** The owner's view of a link. A company link keeps the address it was made
+ *  under, which opens it for good (resolvePublic), until someone else holds
+ *  that handle; then the company's current one. Never an intermediate handle,
+ *  which the next rename would close. */
+export async function ownerLink(link: PaymentRequest, baseUrl: string) {
+  if (!link.accountId) return ownerPaymentRequest(link, baseUrl);
+  const other = await store.findOrgByHandle(link.handle);
+  const taken = !!(await store.findUserByHandle(link.handle)) || (!!other && other.id !== link.orgId);
+  const handle = taken ? (await companyPageHandle(link.userId, link.orgId, link.accountId)) : undefined;
+  return ownerPaymentRequest(handle ? { ...link, handle } : link, baseUrl);
+}
+
 /** The invoice had a link and it ran out: the page says so instead of the
  *  Pay button silently going missing. */
 export async function payLinkLapsed(invoice: Pick<Invoice, "id" | "orgId">): Promise<boolean> {
@@ -247,7 +259,7 @@ export async function payLinkForInvoice(ctx: OrgContext, invoice: Invoice, baseU
 async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: string): Promise<InvoicePayLink> {
   const existing = await openLinkFor(invoice);
   if (existing) {
-    return { ok: true, url: ownerPaymentRequest(existing, baseUrl).url, amountEur: existing.amountEur, reused: true };
+    return { ok: true, url: (await ownerLink(existing, baseUrl)).url, amountEur: existing.amountEur, reused: true };
   }
   const user = await store.findUser(ctx.userId);
   if (!user) return { ok: false, code: "NO_USER", reason: "Your session has no account behind it." };
@@ -256,7 +268,7 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   const methods = await linkMethodsFor(ctx.org, found, user);
   const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, linkSubject(found));
   const link = await createLink(found, user, input, ctx.org.id);
-  return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };
+  return { ok: true, url: (await ownerLink(link, baseUrl)).url, amountEur: link.amountEur, reused: false };
 }
 
 /** What validateCreate judges methods against: the payee, or the company account's IBAN. */
