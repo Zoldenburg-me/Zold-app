@@ -224,7 +224,7 @@ function renderIssued(inv) {
   </div>
 
   <div class="panel pay-card no-print">
-    <div class="await${settled ? " ok" : ""}" lang="${sheetLang}">${esc(settled ? t.paid : t.awaiting)}</div>
+    <div class="await${settled ? " ok" : ""}" role="heading" aria-level="2" lang="${sheetLang}">${esc(settled ? t.paid : t.awaiting)}</div>
     <div class="pay-total">${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</div>
     <p class="lead">${esc([d.issuer?.name, !settled && inv.dueDate ? `due ${day(inv.dueDate)}` : ""].filter(Boolean).join(" · "))}</p>
     ${sign ? `<div class="pay-actions">
