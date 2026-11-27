@@ -595,6 +595,19 @@ await check("connecting API keys does not approve an account KYC moved to manual
   assert.equal((await store.findUser(u.id))!.kycStatus, "manual_review");
 });
 
+await check("a pending row that stopped waiting before the poller wrote takes no IBAN and releases nobody's", async () => {
+  const holder = await addUser(43);
+  const u = await addUser(44);
+  await store.updateUser(u.id, { iban: "", kycStatus: "pending", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
+  const stale = (await store.findUser(u.id))!;
+  await store.updateUser(u.id, { funding: { mode: "sandbox", status: "kyc_pending", moneriumProfileId: PROFILE } });
+  ibansOf.set(u.token, [listed(holder.iban, u.address)]);
+  const after = await refreshPendingIban(stale);
+  assert.equal(after.iban, "");
+  assert.equal(after.funding?.status, "kyc_pending");
+  assert.equal((await store.findUser(holder.id))!.iban, holder.iban, "the former account keeps its IBAN");
+});
+
 console.log("\nOrganisation accounts");
 
 await check("an org account backed by the user drops the IBAN with the user's (the row stays) and gets it back", async () => {
