@@ -250,6 +250,15 @@ try {
     // The settle is the person's code: no receipt yet leaves the row as it is.
     await settleUnconfirmedConversions(async () => null as any);
     assert.equal((await row(queued.depositId)).holding, "unconfirmed");
+    // A restart after settling wrote the swap step (output named) but before
+    // it finished: the row stays for review, and the scan goes on.
+    const parked = await row(queued.depositId);
+    await store.updateCryptoDeposit(queued.depositId, {
+      txs: [...parked.txs.filter((t) => t.step !== "safe.swap(usdc->eure).unconfirmed"), { step: "safe.swap(usdc->eure)", hash: txHash, outputLogIndexes: [2] }],
+    });
+    assert.equal(await companyConversionInFlight("acc_1", txHash), false, "an interrupted settle does not hold the scan for good");
+    await store.updateCryptoDeposit(queued.depositId, { txs: parked.txs });
+    assert.equal(await companyConversionInFlight("acc_1", txHash, Date.now(), await store.list("cryptoDeposits")), true, "a preloaded list answers the same");
     // Included but reverted: held for review, and it delivered nothing to wait for.
     await settleUnconfirmedConversions(async () => ({ success: false, txHash }) as any);
     assert.equal(await companyConversionInFlight("acc_1", txHash), false);

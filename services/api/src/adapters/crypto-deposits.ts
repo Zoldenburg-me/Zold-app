@@ -371,13 +371,22 @@ async function settleCompanyArrival(deposit: CryptoDeposit): Promise<CryptoDepos
  * the swap's own logs (a reverted swap delivered none, and holds nothing). The scanner then reads the window again rather than
  * book a swap's output as money in, or drop another payment in the bundle.
  */
-export async function companyConversionInFlight(accountId: string, txHash: string, now = Date.now()): Promise<boolean> {
+export async function companyConversionInFlight(
+  accountId: string,
+  txHash: string,
+  now = Date.now(),
+  deposits?: readonly CryptoDeposit[],
+): Promise<boolean> {
   const tx = txHash.toLowerCase();
-  for (const d of await store.list("cryptoDeposits")) {
+  for (const d of deposits ?? await store.list("cryptoDeposits")) {
     const intent = d.conversionIntent;
     if (d.userId || d.accountId !== accountId || !intent?.safeOpId) continue;
     if (intent.txHash) {
-      if (d.holding === "unconfirmed" && !conversionReverted(d) && intent.txHash.toLowerCase() === tx) return true;
+      // Only until settling replaces the pending step: from then the swap
+      // step names its output logs, or the row is left for review, a revert
+      // included. Either way the scan goes on.
+      const pending = d.txs.some((t) => t.step === "safe.swap(usdc->eure).unconfirmed");
+      if (d.holding === "unconfirmed" && pending && intent.txHash.toLowerCase() === tx) return true;
     } else {
       const op = await store.findSafeOp(intent.safeOpId);
       // Bounded: nothing sweeps a relay cut off by a restart, and a hold that
@@ -1020,11 +1029,12 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
   // A company conversion whose output is not named yet: the window waits,
   // cursor unmoved, for followCompanyConversions and the settle before the
   // next scan.
+  const known = await store.list("cryptoDeposits");
   for (const [i, token] of tokens.entries()) {
     if (token.token !== "EURE") continue;
     for (const log of logsByToken[i]) {
       const c = classify(log, token.token);
-      if (c.kind === "deposit" && c.match.account && (await companyConversionInFlight(c.match.account.id, c.txHash))) {
+      if (c.kind === "deposit" && c.match.account && (await companyConversionInFlight(c.match.account.id, c.txHash, Date.now(), known))) {
         console.log(`crypto-in: blocks ${fromBlock}..${toBlock} wait for a company conversion in ${c.txHash} to settle`);
         return { found: 0, more: false };
       }
