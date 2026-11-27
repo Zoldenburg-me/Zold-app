@@ -455,6 +455,16 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 .zb-kv { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--z-line); font-size: 14px; color: var(--z-dim); }
 .zb-kv b { color: var(--z-text); font-weight: 600; text-align: right; }
 .zb-send #send-summary .zb-h3 + .zb-kv { margin-top: 10px; border-top: 0; }
+.zb-payees { display: flex; flex-direction: column; gap: var(--z-space-3); }
+.zb-payee { display: grid; grid-template-columns: minmax(0, 1fr) 140px minmax(0, 1.2fr) var(--z-touch); gap: var(--z-space-3); align-items: end; padding-top: var(--z-space-3); border-top: 1px solid var(--z-line); }
+.zb-payee:first-child { border-top: 0; padding-top: 0; }
+.zb-payee__name { display: flex; flex-direction: column; min-width: 0; padding-bottom: 10px; }
+.zb-payee input[data-lf="amount"] { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .zb-payee { grid-template-columns: minmax(0, 1fr) var(--z-touch); }
+  .zb-payee > div:not(.zb-payee__name) { grid-column: 1 / -1; }
+  .zb-payee__drop { grid-row: 1; grid-column: 2; }
+}
 .zb-kv--total b { color: var(--z-heading); font-size: 16px; }
 .zb-next { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .zb-next li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; color: var(--z-text); }

@@ -15,7 +15,7 @@ import { moneriumRedeemMessage, paymentMemo, REDEEM_WINDOW_SEC } from "../sepa.j
 import { safeDebitBlocker, safeFundedEurToday } from "../orchestrator.js";
 import { store, type Quote, type Transfer } from "../store.js";
 import { assertDailyCap, requireKycApproved } from "../http/guards.js";
-import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
+import { passkeySafeChallenge, signsSafeDebit } from "../wallet/passkey-safe-plan.js";
 import {
   prepareTransferBatchExecution,
   prepareTransferExecution,
@@ -219,13 +219,7 @@ async function prepareTransferFromQuote(
       transfer.rail === "sepa"
         ? eur.toWei(Math.max(0, transfer.sendEur - (transfer.receiveEur ?? transfer.sendEur - railFeeEur("sepa"))))
         : amountWei;
-    if (
-      debitWei > 0n &&
-      user.passkey?.credentialId &&
-      user.passkeySafe?.status === "active" &&
-      user.address.toLowerCase() === user.passkeySafe.address.toLowerCase() &&
-      !HARNESS.enabled
-    ) {
+    if (debitWei > 0n && signsSafeDebit(user) && !HARNESS.enabled) {
       try {
         let prepared: Awaited<ReturnType<typeof prepareTransferExecution>> | undefined;
         let batch: { recipient: `0x${string}`; mode: "live" } | undefined;
