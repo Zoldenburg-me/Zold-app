@@ -25,7 +25,7 @@ deployment() {
   esac
   PG_USER="pg-$DEP"                    # the cluster's OS user and bootstrap superuser
   PG_SOCKET="/run/postgresql-$DEP"     # unix socket only, listen_addresses = ''
-  PG_DATA="/srv/pg/$DEP/data"          # on the cluster's own block volume (/srv/pg/$DEP)
+  PG_DATA="/srv/pg/$DEP/data"          # on the cluster's own volume (/srv/pg/$DEP)
   PG_CONF="/etc/postgresql/$PG_MAJOR/$DEP"
   PG_CLIENTS="zold-$DEP-db"            # the only group that may enter $PG_SOCKET
   API_USER="zold-$DEP"                 # runs the API
@@ -70,6 +70,20 @@ psql_su() {
 }
 
 die() { echo "$*" >&2; exit 1; }
+
+# opt <NAME>: the deployment's optional host.env value (${P}_NAME), empty if unset.
+opt() { local n="${P}_$1"; printf '%s' "${!n:-}"; }
+
+# s3_host <endpoint> <region>: the S3-compatible host of one backup target.
+# An empty <endpoint> is OCI Object Storage in <region>; otherwise the owner's
+# own host name, e.g. Cloudflare R2's <account id>.r2.cloudflarestorage.com
+# (region "auto"), for a copy outside OCI (§7.1). A bare host name only: it
+# goes into pgbackrest.conf and a URL, so no scheme, path, space or newline.
+s3_host() {
+  if [[ -z "$1" ]]; then printf '%s' "$OCI_NAMESPACE.compat.objectstorage.$2.oraclecloud.com"; return 0; fi
+  [[ "$1" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || die "S3 endpoint must be a bare host name, e.g. <account id>.r2.cloudflarestorage.com: $1"
+  printf '%s' "$1"
+}
 
 # wait_out_of_recovery <seconds>: until the cluster is promoted (a restore
 # replays WAL in hot standby, which takes connections), or refuses.

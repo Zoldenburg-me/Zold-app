@@ -33,7 +33,7 @@ Names (all from `lib.sh`), for `<dep>` = `mainnet` | `testnet`:
 |---|---|---|
 | cluster OS user and superuser | `pg-mainnet` | `pg-testnet` |
 | socket directory, port | `/run/postgresql-mainnet`, 5432 | `/run/postgresql-testnet`, 5433 |
-| data directory (own block volume) | `/srv/pg/mainnet/data` | `/srv/pg/testnet/data` |
+| data directory (own volume) | `/srv/pg/mainnet/data` | `/srv/pg/testnet/data` |
 | dump spool (same volume) | `/srv/pg/mainnet/dump-spool` | `/srv/pg/testnet/dump-spool` |
 | API OS user → role | `zold-mainnet` → `zold_app` | `zold-testnet` → `zold_app` |
 | deploy OS user → role | `zold-deploy-mainnet` → `zold_owner` | `zold-deploy-testnet` → `zold_owner` |
@@ -50,7 +50,22 @@ the host:
 
 - The OCI account, its region and second region, and the instance (Ampere
   A1, Ubuntu, aarch64) with one block volume per cluster mounted on
-  `/srv/pg/<dep>`. The OCI security list opens only SSH.
+  `/srv/pg/<dep>`. Where the free tier has no block storage left, a
+  preallocated ext4 image (`fallocate`, root 600) loop-mounted from
+  `/etc/fstab` with `loop,noatime,nofail,X-fstrim.notrim` does the same job:
+  provision checks only that `/srv/pg/<dep>` is a filesystem of its own, and
+  the free-space alerts and the cap are then the cluster's. `X-fstrim.notrim`
+  keeps the weekly trim from punching holes in the image, so its space stays
+  reserved on the boot disk; `nofail` keeps a broken image from stopping the
+  boot, and the cluster still waits for the mount. The OCI security list opens
+  only SSH.
+- A tenancy limited to one region keeps the second copy outside OCI, on
+  Cloudflare R2: `<DEP>_REPO2_ENDPOINT` and `<DEP>_DUMP_ENDPOINT` set to
+  `<account id>.r2.cloudflarestorage.com`, their region `auto`, and
+  `<DEP>_REPO2_S3_KEY`/`_S3_SECRET` an R2 token scoped to that bucket. An R2
+  token cannot be create-only, so the dump bucket's bucket lock rule (14
+  days) is what keeps the host from deleting or overwriting a dump; the
+  pgBackRest bucket has no lock, because `expire` deletes.
 - Per deployment: the two pgBackRest buckets and an OCI user with a policy
   for those two only (its customer secret key); the repository passphrase;
   the dump bucket in the second region with a 14-day time-bound retention

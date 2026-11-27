@@ -92,6 +92,17 @@ const lines = (s: string) => s.split("\n").filter((l) => l.trim() && !l.startsWi
   check("provision: drops the Postgres ports, opens none", /--dport 5432:5433 -j DROP/.test(provision) && !/-j ACCEPT/.test(provision));
   check("provision: refuses a public listener but sshd", provision.includes("listening on a public address"));
   check("provision: never sets archive-push-queue-max", !/^\s*echo "archive-push-queue-max/m.test(provision));
+  const host = (endpoint: string) => sh("bash", ["-c", `R=; source "$0"; OCI_NAMESPACE=ns; s3_host "$1" eu-frankfurt-1`, path.join(DIR, "lib.sh"), endpoint]);
+  check("s3_host: no endpoint is OCI Object Storage in the region", host("").stdout === "ns.compat.objectstorage.eu-frankfurt-1.oraclecloud.com");
+  check("s3_host: an owner's host name is used as it is (R2)", host("0123abcd.r2.cloudflarestorage.com").stdout === "0123abcd.r2.cloudflarestorage.com");
+  for (const bad of ["https://a.r2.cloudflarestorage.com", "a.example/x", "a example", "a\nrepo1-s3-key=x", "-a.example", "A.EXAMPLE"]) {
+    const r = host(bad);
+    check(`s3_host refuses ${JSON.stringify(bad)}`, r.status !== 0 && r.stdout === "" && /bare host name/.test(r.stderr), r.stdout + r.stderr);
+  }
+  check("provision: each repository's endpoint through s3_host, its own key or the shared one",
+    provision.includes('echo "repo$n-s3-endpoint=$(s3_host "$(opt "REPO${n}_ENDPOINT")" "$region")"') && provision.includes('echo "repo$n-s3-key=${key:-$(v S3_KEY)}"') && provision.includes('echo "repo$n-s3-key-secret=${secret:-$(v S3_SECRET)}"'));
+  check("provision: endpoints are checked before anything is made, a repository key needs its secret",
+    provision.indexOf('s3_host "$(opt DUMP_ENDPOINT)" x') < provision.indexOf("mountpoint -q") && provision.includes('need "REPO${n}_S3_KEY"; need "REPO${n}_S3_SECRET"'));
   const units = path.join(DIR, "systemd");
   for (const u of ["zold-api@.service", "zold-hub.service"]) {
     const s = readFileSync(path.join(units, u), "utf8");
@@ -149,7 +160,7 @@ function fakeHost(opts: { alertOk?: boolean } = {}) {
   shim(shims, "curl", `if [[ "$*" == */api/health* ]]; then
   [[ -f "${R}/api-running" && -f "${R}/srv/zold/mainnet/app/deployments.json" && "$*" == *127.0.0.1:$(cat "${R}/api-port")/* ]]; exit
 fi
-if [[ "$*" == *objectstorage* ]]; then cat >/dev/null; while [[ "$1" != -T ]]; do shift; done; cp "$2" "${R}/uploaded.tar"; exit 0; fi
+if [[ "$*" == *objectstorage* || "$*" == *r2.cloudflarestorage.com* ]]; then cat >/dev/null; echo "\${@: -1}" >"${R}/uploaded.url"; while [[ "$1" != -T ]]; do shift; done; cp "$2" "${R}/uploaded.tar"; exit 0; fi
 if [[ "$*" == *--proto* ]]; then
   cfg="$(cat)"
   if [[ "$cfg" == *https://alerts.ok/* ]]; then echo "\${@: -1}" >>"${R}/alerts.sent"; exit 0; fi
@@ -320,6 +331,17 @@ esac`);
     check("dump: planted links in the spool are removed, never followed", readFileSync(path.join(victim, "shadow"), "utf8") === "root's file\n" && readdirSync(victim).join() === "shadow" && readdirSync(spool).length === 0, readdirSync(spool).join(" "));
     const ran = h.read("runuser.log").trim().split("\n").map((l) => l.split(" :: ")[1].split(" ")[0]);
     check("dump: as pg-mainnet only pg_dumpall, psql and pg_dump, which write no file", ran.every((c) => ["pg_dumpall", "psql", "pg_dump"].includes(c)) && /^pg-mainnet :: /.test(h.read("runuser.log")), ran.join(" "));
+    check("dump: by default to OCI Object Storage in DUMP_REGION", /^https:\/\/ns\.compat\.objectstorage\.eu-frankfurt-1\.oraclecloud\.com\/dumps\/mainnet\/\d{8}T\d{6}Z\.tar$/.test(h.read("uploaded.url").trim()), h.read("uploaded.url"));
+    const envFile = path.join(h.R, "etc/zold-host/host.env");
+    const base = readFileSync(envFile, "utf8");
+    writeFileSync(envFile, base + "MAINNET_DUMP_ENDPOINT=acct.r2.cloudflarestorage.com\nMAINNET_DUMP_REGION=auto\n");
+    r = h.run("pgops.sh", "mainnet-dump");
+    check("dump: DUMP_ENDPOINT sends it outside OCI (Cloudflare R2)", r.status === 0 && /^https:\/\/acct\.r2\.cloudflarestorage\.com\/dumps\/mainnet\//.test(h.read("uploaded.url").trim()), r.stderr + h.read("uploaded.url"));
+    rmSync(path.join(h.R, "uploaded.url"));
+    writeFileSync(envFile, base + "MAINNET_DUMP_ENDPOINT=https://acct.r2.cloudflarestorage.com\n");
+    r = h.run("pgops.sh", "mainnet-dump");
+    check("dump: an endpoint that is not a bare host name is refused, nothing uploaded", r.status === 1 && !existsSync(path.join(h.R, "uploaded.url")) && /daily dump failed/.test(h.read("journal")), r.stdout + r.stderr);
+    writeFileSync(envFile, base);
     // The spool itself swapped for a link: refused, nothing written behind it.
     rmSync(spool, { recursive: true });
     symlinkSync(victim, spool);
