@@ -110,7 +110,9 @@ function payeesSummary(rows, contacts, kv) {
     const a = sendAmount(r.amount, false);
     return kv(contacts.find((c) => c.id === r.contactId)?.name || "", a ? esc(eur(Number(a))) : '<span class="z-dim">No amount yet</span>');
   }).join("");
-  const more = rows.length > SUMMARY_NAMES ? kv(`and ${rows.length - SUMMARY_NAMES} more`, "") : "";
+  // The payees past the named ones are in the form; here they are one row with their sum.
+  const rest = rows.slice(SUMMARY_NAMES);
+  const more = rest.length ? kv(`and ${rest.length} more`, rest.every((r) => sendAmount(r.amount, false)) ? esc(eur(payeesTotal(rest))) : '<span class="z-dim">No amount yet</span>') : "";
   return `${kv("To", `${rows.length} payees`)}${named}${more}`;
 }
 

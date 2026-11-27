@@ -17,7 +17,8 @@ import express from "express";
 import { bankLineProblem, walletLineProblem } from "../../domain/invoices.js";
 import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
-import { FX, railFeeEur } from "../../config.js";
+import { FX, HARNESS, railFeeEur } from "../../config.js";
+import { sharedNonceRunProblem } from "../../wallet/passkey-safe-plan.js";
 import { createQuote, roundEur } from "../../fx.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../../adapters/monerium-connection.js";
 import { accountBalances } from "../../chain.js";
@@ -703,6 +704,12 @@ export function createDraftRoutes(
         problems,
       });
     }
+
+    // Several lines with a fee would each be a Safe operation at the same
+    // nonce: refused whole, before the draft is claimed or a transfer built.
+    // The harness chain prepares no Safe operation (transfers/build.ts).
+    const nonceProblem = HARNESS.enabled ? null : sharedNonceRunProblem(user, plans.length, railFeeEur("sepa"));
+    if (nonceProblem) return res.status(422).json({ error: nonceProblem, code: "ONE_PAYEE_PER_RUN" });
 
     // Each line is its own transfer and therefore its own fixed fee. Checked
     // against the balance as a TOTAL: the per-transfer check inside
