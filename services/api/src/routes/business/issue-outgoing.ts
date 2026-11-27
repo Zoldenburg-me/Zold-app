@@ -364,7 +364,9 @@ export const correctable = (i: Invoice) =>
  *  stays as the original printed it. The VAT treatment and currency are
  *  never taken: changing what tax is shown is a cancellation (§ 14c UStG),
  *  and the amount is checked to be the original's. The issuer's details come
- *  from today's profile. */
+ *  from today's profile. The recipient is replaced whole, VAT ID and country
+ *  included, on a paid invoice too: an owner decision, so the issuer can fix
+ *  who was billed without a cancellation. */
 const CORRECTABLE = ["recipient", "lines", "supplyKind", "supplyDate", "supplyPeriod", "language", "purchaseOrder", "paymentTerms", "notes"] as const;
 
 /** The request a correction is issued from: the original's own document,
