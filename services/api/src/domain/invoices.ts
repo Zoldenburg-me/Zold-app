@@ -334,7 +334,9 @@ export function supplierView(
     supplier: invoice.supplier,
     // The printed columns only: a line's `receipt` names a ledger row and is
     // the organisation's own record.
-    lines: invoice.lines.map(({ description, quantity, unitPrice, amount }) => ({ description, quantity, unitPrice, amount })),
+    lines: invoice.lines.map(({ description, quantity, unitPrice, amount, vatRate }) => ({
+      description, quantity, unitPrice, amount, ...(vatRate !== undefined ? { vatRate } : {}),
+    })),
     currency: invoice.currency,
     total: invoice.total,
     dueDate: invoice.dueDate,

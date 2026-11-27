@@ -24,7 +24,7 @@ import {
   invoiceLanguage,
   reasonForRuleSet,
   } from "../../domain/invoicing.js";
-import { EU_MEMBER_STATES, validateCustomReason } from "../../domain/jurisdictions.js";
+import { EU_MEMBER_STATES, validateCustomReason, type CustomExemptionReason } from "../../domain/jurisdictions.js";
 import { VAT_ID_FORMATS, vatIdShape } from "../../domain/vat-ids.js";
 import { cachedVatCheck, checkVatId } from "../../adapters/vies.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
@@ -215,7 +215,12 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     }
     if (Array.isArray(b.customReasons)) {
       try {
-        next.customReasons = b.customReasons.slice(0, 20).map(validateCustomReason);
+        const reasons: CustomExemptionReason[] = b.customReasons.slice(0, 20).map(validateCustomReason);
+        next.customReasons = reasons;
+        const clash = reasons.find((c) => c.id in EXEMPTION_REASONS);
+        if (clash) {
+          return res.status(400).json({ error: `"${clash.id}" is a built-in reason. Give your own rule another id.`, field: "customReasons" });
+        }
       } catch (err) {
         return res.status(400).json({ error: redactedMessage(err), field: "customReasons" });
       }
