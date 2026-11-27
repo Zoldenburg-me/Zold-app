@@ -155,6 +155,7 @@ const scripts = [
   "review-resolution:test",
   "invoicing:test",
   "invoice-correction:test",
+  "invoice-logo:test",
   "invoice-form:test",
   "invoicing-profile:test",
   "send-link:test",

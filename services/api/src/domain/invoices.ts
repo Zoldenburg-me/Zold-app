@@ -314,6 +314,7 @@ export function supplierView(
   issuerExtras?: {
     bank?: { holder?: string; iban?: string; bic?: string; bankName?: string };
     footerNote?: string;
+    logo?: string;
     payPath?: string;
     payLinkLapsed?: boolean;
   },
@@ -329,6 +330,7 @@ export function supplierView(
       ? {
           bank: issuerExtras.bank,
           footerNote: issuerExtras.footerNote,
+          ...(issuerExtras.logo ? { logo: issuerExtras.logo } : {}),
           ...(issuerExtras.payPath ? { payPath: issuerExtras.payPath } : {}),
           ...(issuerExtras.payLinkLapsed ? { payLinkLapsed: true } : {}),
         }

@@ -944,6 +944,10 @@ export const ACTIONS = {
       body: { customReasons: (d.profile.customReasons ?? []).filter((c) => c.id !== el.dataset.id) },
     });
   },
+  async "remove-invoice-logo"() {
+    await api(`/api/orgs/${org.id}/invoicing/profile`, { method: "PATCH", body: { logo: null } });
+    toast("Logo removed from new invoices. Issued ones keep theirs.");
+  },
   async "save-invoicing"() {
     const val = (id) => $("#" + id)?.value?.trim() ?? "";
     // Who the issuer is (name, address, tax and registration numbers) is the

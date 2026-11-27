@@ -341,6 +341,12 @@ Say this plainly rather than letting the surface imply otherwise:
   mode was clicked through once on the local preview stack (chain 31337,
   VIES unreachable): name, street and description changed, the Pay link
   carried over, a changed total refused.
+- **No invoice with a logo has reached a customer.** The logo
+  (`domain/invoice-logo.ts`, set in Invoicing profile) has run in
+  `scripts/invoice-logo-test.ts` and once on the local preview stack: a PNG
+  uploaded through the settings card, scaled in the browser, and printed on
+  the invoice link. Print/PDF output from a real browser print dialog has not
+  been checked.
 - **Invoices made from wallet receipts have run only against local hardhat**
   (2026-10-03: a payer rule saved, one EURe receipt of €300.00 collected into
   a draft, two unlisted-token receipts listed as not included, and the draft

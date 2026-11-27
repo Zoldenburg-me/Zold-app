@@ -30,6 +30,7 @@ import { cachedVatCheck, checkVatId } from "../../adapters/vies.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
 import { correctable, correctionBody, issueOutgoing } from "./issue-outgoing.js";
+import { logoFrom } from "../../domain/invoice-logo.js";
 import { openLinkFor, payLinkForInvoice } from "./invoice-pay-link.js";
 import { baseUrlFor } from "../payment-requests.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
@@ -47,6 +48,13 @@ export interface OrgRoutes {
   ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined>;
 }
 
+/** The profile as the settings screen reads it: the current logo as an
+ *  image, not every logo the org has kept for its issued invoices. */
+function printedLogo(inv: NonNullable<Organisation["invoicing"]>) {
+  const { logos, ...rest } = inv;
+  return { ...rest, ...(inv.logoId && logos?.[inv.logoId] ? { logo: logos[inv.logoId] } : {}) };
+}
+
 export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
@@ -62,7 +70,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     const custom = customReasonsOf(ctx.org);
     res.json({
       profile: {
-        ...inv,
+        ...printedLogo(inv),
         display: { ...DEFAULT_DISPLAY, ...(inv.display ?? {}) },
         numberSeries: seriesOf(ctx.org),
         language: languageOf(ctx.org),
@@ -159,6 +167,17 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       ("footerNote" in next && next.footerNote !== (stored?.footerNote ?? undefined)) ||
       ("customFields" in next && JSON.stringify(next.customFields) !== JSON.stringify(stored?.customFields ?? []));
     if (printsChanged && !requirePermission(ctx, res, "org.update")) return;
+    // The logo is printed beside who issues the invoice: org.update, like the
+    // footer. null takes it off new invoices; issued ones keep theirs.
+    let logo: { id: string; dataUrl: string } | undefined;
+    if (b.logo === null) next.logoId = undefined;
+    else if (b.logo !== undefined) {
+      const checked = logoFrom(b.logo);
+      if (!checked.ok) return res.status(400).json({ error: checked.error, field: "logo" });
+      logo = checked;
+      next.logoId = checked.id;
+    }
+    if ("logoId" in next && next.logoId !== stored?.logoId && !requirePermission(ctx, res, "org.update")) return;
     if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
       next.paymentTermsDays = Math.round(b.paymentTermsDays);
     }
@@ -226,13 +245,17 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       }
     }
 
-    const org = await store.patchOrgSub(ctx.org.id, "invoicing", (cur) => ({ ...(cur ?? {}), ...next }), {
+    const org = await store.patchOrgSub(ctx.org.id, "invoicing", (cur) => ({
+      ...(cur ?? {}),
+      ...next,
+      ...(logo ? { logos: { ...(cur?.logos ?? {}), [logo.id]: logo.dataUrl } } : {}),
+    }), {
       ...(clearsSignupTaxId(identity.patch) ? { taxId: undefined } : {}),
     });
     if (ibanChange) {
       await store.audit(auditEntry("org.invoice_iban_changed", { orgId: org.id, memberId: ctx.member.id, ...ibanChange }, ctx.userId));
     }
-    res.json({ profile: org.invoicing, issuer: issuerParty(org) });
+    res.json({ profile: printedLogo(org.invoicing ?? {}), issuer: issuerParty(org) });
   }));
 
   /**

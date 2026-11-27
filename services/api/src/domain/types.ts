@@ -170,6 +170,11 @@ export interface Organisation {
     paymentTermsDays?: number;
     paymentTermsNote?: string;
     footerNote?: string;
+    /** The logo printed on new invoices: a key of `logos`. */
+    logoId?: string;
+    /** Every logo ever set, by content hash, as a data URL (invoice-logo.ts).
+     *  Never removed: an issued invoice prints the one it was issued with. */
+    logos?: Record<string, string>;
     /** Per-year series, e.g. prefix "RE-{YYYY}-". */
     numberSeries?: { prefix: string; next: number; padding: number };
     /** Which optional blocks appear. Mandatory ones are not listed. */
@@ -1026,6 +1031,8 @@ export interface Invoice {
     /** Set on a correction (§ 31 Abs. 5 UStDV): the invoice it replaces, by
      *  the number and date printed on it. */
     corrects?: { invoiceId: string; number: string; issueDate: string };
+    /** The issuer's logo at issue: a key of the org's `invoicing.logos`. */
+    logoId?: string;
     /** Business or private customer, and goods or services, as declared. */
     recipientIsBusiness?: boolean;
     supplyKind?: "services" | "goods";

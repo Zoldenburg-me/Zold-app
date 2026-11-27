@@ -69,9 +69,12 @@ const issuerExtras = async (invoice: Invoice) => {
     .filter(Boolean)
     .join(" · ");
   const settled = invoice.state === "PAID" || invoice.state === "RECONCILED" || invoice.state === "REPLACED";
+  const logoId = invoice.issued?.logoId;
   return {
     bank: org ? (await invoiceBankOf(org)) : undefined,
     footerNote: footerNote || undefined,
+    // The logo it was issued with, kept on the org under its hash.
+    logo: logoId ? org?.invoicing?.logos?.[logoId] : undefined,
     // The customer holding the invoice link is the one its payment link was
     // made for; a settled invoice has nothing left to pay.
     payPath: settled ? undefined : (await openLinkPath(invoice)),
