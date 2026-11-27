@@ -309,7 +309,9 @@ LIMIT 0` and ends `hub_app`/`hub_owner` sessions when `hub` passes
 
 ## What S7b still has to do on the host
 
-Mainnet has done the rest of this list; testnet has done none of it.
+On mainnet, done: provisioning, `pgbackrest check` and a first full backup
+to each repository, the one-repository-down test, the alerts, and the
+dump-lock refusal. Testnet has done none of it.
 
 - Provision both clusters; the toolchain check on the host.
 - `pgbackrest check` against both repositories; a first full backup to each.

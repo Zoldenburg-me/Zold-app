@@ -916,8 +916,8 @@ stopped and read-only, until the owner closes it (§6 step 8).
   `pg_wal` grows until both repositories hold a segment. The backlog alert
   fired after five minutes; the archiving-failed and `pgbackrest check`
   alerts fired too. With `repo2` unreachable, `pgbackrest check` takes about
-  two minutes, so that alerts run overlaps the next minute's, which then
-  does not run. Once `repo2` answered again, the five waiting segments were
+  two minutes, so that alerts run overlapped the next minute's, which was
+  skipped. Once `repo2` answered again, the five waiting segments were
   archived within 30 seconds. We do
   **not** set `archive-push-queue-max`: on reaching it pgBackRest reports the
   WAL as archived and drops it, and "PITR will not be possible past that
