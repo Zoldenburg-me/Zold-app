@@ -85,7 +85,7 @@ Owner-approved 2026-11-18 (PR #35). Code references checked against main d982325
 ### 3.5 AGENTS.md invariants to change (the owner sees each one)
 - "The passkey is the Safe's only owner. The plan type is `threshold: 1` only." This stays true for personal and sole_trader Safes. For an org Safe: members' passkeys are the only owners, at the org's threshold, and Zold holds none.
 - "Zold never collects its [second owner's] signature, so at threshold > 1 every op is refused." This stays true for personal Safes. Org Safes collect member signatures through the pending-op queue.
-- "Four eyes": on an org Safe the control is the owners' signatures at the on-chain threshold (§2.4). That is the only four-eyes control: the off-chain review flag is not used on an org Safe (Q8).
+- "Four eyes": on an org Safe the control is the owners' signatures at the on-chain threshold (§2.4). That is the only four-eyes control: the off-chain review flag is not used on an org Safe (Q8). One owner may draft and sign alone, so a Safe with one owner can pay (owner, 2026-11-27); AGENTS.md says so.
 - "An org can never lose its last owner": add "and its Safe never loses its last signer, and the threshold never exceeds the signers left".
 - New invariant: **Zold never changes membership or the on-chain signer set without the other.** Nobody is shown as removed while they can still sign. This covers Zold's own writes only: a change made elsewhere, such as an owner added in Safe{Wallet}, is shown as the chain has it and flagged in the Access card (§2.2).
 - "Gating is a read-time filter, never a write-time delete" (`AGENTS.md:132-135`) stays, and covers the removal: nothing is deleted while the chain still has the signer.

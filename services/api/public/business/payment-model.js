@@ -29,12 +29,14 @@ export function payee(line, contacts) {
  * the account's signer sends it. Two are needed once the run went to review,
  * or while review is on.
  */
-export function approvals(run, reviewRequired) {
+export function approvals(run, reviewRequired, ownerSends = false) {
   // A rejected run, or one stopped because a contact changed, is not approved, whoever looked at it.
   const reviewed = !["REJECTED", "INVALID_DATA"].includes(run.state) && !!run.reviewedByMemberId;
   // Sent (or cancelled) while review was off: turning review on later asks nothing more of it.
   const pastReview = !run.reviewedByMemberId && ["EXECUTING", "EXECUTED", "FAILED", "CANCELLED"].includes(run.state);
-  const twoEyes = !pastReview && (reviewRequired || !!run.reviewedByMemberId || ["PENDING_REVIEW", "REVIEWED", "REJECTED"].includes(run.state));
+  // A company's bank run (ownerSendsWithoutReview) asks no second approval:
+  // a review is shown only if someone gave one.
+  const twoEyes = !pastReview && (ownerSends ? !!run.reviewedByMemberId : (reviewRequired || !!run.reviewedByMemberId || ["PENDING_REVIEW", "REVIEWED", "REJECTED"].includes(run.state)));
   const steps = [{ role: "drafted", memberId: run.createdByMemberId, at: run.createdAt, done: true }];
   if (twoEyes) {
     steps.push(run.state === "REJECTED"
@@ -47,8 +49,11 @@ export function approvals(run, reviewRequired) {
   return { needed: steps.length, have: steps.filter((s) => s.done).length, steps, sentBy: sent ? { memberId: sent.actorMemberId, at: sent.at } : null };
 }
 
-/** What happens next, by state. */
-export function nextStep(run, reviewRequired) {
+/** What happens next, by state. `ownerSends`: a company's bank run, which
+ *  an owner sends with their passkey and no second approval. */
+export function nextStep(run, reviewRequired, ownerSends = false) {
+  if (ownerSends && ["DRAFT", "PENDING_REVIEW", "REVIEWED"].includes(run.state)) return "An owner sends it with their passkey. No second approval is needed.";
+  if (run.bankRun && run.state === "EXECUTING") return "Sending from the company’s IBAN, one line at a time. Each line is sent once Monerium processes it.";
   return {
     DRAFT: reviewRequired ? "Not submitted for approval yet." : "Saved. It is sent when someone sends it from Payments.",
     PENDING_REVIEW: "Waits for a second approval, then the account’s signer sends it.",

@@ -130,7 +130,9 @@ Each of these was a bug once.
 - **Three checks, not one**: session (who), member+role (may they here),
   capability (built, right org type). Collapsing any two opens a hole.
 - **Four eyes**: the reviewer may not be the drafter, whatever their role — and
-  editing someone's draft lines makes you the drafter.
+  editing someone's draft lines makes you the drafter. A company's org Safe has
+  no review step: its owners' signatures are the approval, and one owner may
+  draft and sign alone (design note Q8).
 - **Gating is a read-time filter, NEVER a write-time delete.** Nothing in
   `store.ts` deletes an org, account, invoice or ledger row. Every feature is
   free: no plan, no trial.

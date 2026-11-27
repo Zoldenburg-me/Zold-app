@@ -59,7 +59,7 @@ function linesHtml(run, contacts, invoices) {
 
 function approvalsCard(run) {
   const ownerSends = ownerSendsWithoutReview(org?.entity, run);
-  const a = approvals(run, reviewOn() && !ownerSends);
+  const a = approvals(run, reviewOn() && !ownerSends, ownerSends);
   const step = (s) => {
     const who = s.memberId ? upper(memberName(s.memberId)) : "An owner or admin";
     const sub = s.at ? esc(when(s.at)) : "Waiting";
@@ -124,7 +124,7 @@ RENDER.payment = async () => {
           : run.source.kind === "account" && ac.status === "rejected" ? kv("From", '<span class="z-dim">The account could not be read just now.</span>') : ""}
         ${wallet ? kv("From", "An imported wallet") : ""}
         ${kv("Method", wallet ? "Prepared here, signed in your own wallet" : sepa ? "SEPA bank transfer, paid out by Monerium" : bank ? "Bank transfer" : "Transfer on chain from the account")}
-        ${kv("Next", esc(wallet ? "Approve it in your own wallet. Zold does not send it." : nextStep(run, reviewOn())))}
+        ${kv("Next", esc(wallet ? "Approve it in your own wallet. Zold does not send it." : nextStep(run, reviewOn(), ownerSendsWithoutReview(org?.entity, run))))}
         <div class="zb-kv zb-kv--total"><span>Total</span><b>−${esc(draftTotal(run))}</b></div>
         ${contacts ? "" : '<p class="zb-hint">The contacts could not be read, so the IBAN and BIC are not shown.</p>'}
         ${bank && contacts ? `<p class="zb-hint">IBAN and BIC are the contact’s as saved now. ${["EXECUTING", "EXECUTED"].includes(run.state) ? "Zold checked them against the drafted details before sending." : "Zold checks them again before sending, and stops the payment if they changed."}</p>` : ""}</section>

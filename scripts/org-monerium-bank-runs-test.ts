@@ -38,7 +38,7 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -85,7 +85,7 @@ const PROFILE = "prof-corp-1";
 const IBAN = "DE02100100109307118603";
 const PAYEES = [
   { id: "c_bob", name: "Bob GmbH", iban: "DE89370400440532013000" },
-  { id: "c_cara", name: "Cara Schmidt", iban: "DE75512108001245126199" },
+  { id: "c_cara", name: "Cara Schmidt", iban: "DE12500105170648489890" },
   { id: "c_dora", name: "Dora AG", iban: "DE02120300000000202051" },
 ];
 const keys: Record<string, Awaited<ReturnType<typeof makeSoftwarePasskey>>> = {};
@@ -237,6 +237,39 @@ const run = async (id: string, p = "anna", tamper?: (body: any) => void | Promis
 };
 const payouts = async () => (await store.findAccount("acc_co"))!.moneriumPayouts ?? [];
 const draft = async (id: string) => (await call("GET", `/org_co/drafts/${id}`, "u_anna")).data.draft;
+/** Every write the run makes, checked against the file on disk right after
+ *  it: what a process that stopped there would leave behind. */
+const onDisk = () => JSON.parse(readFileSync(DB, "utf8"));
+const halfWritten = (): string[] => {
+  const db = onDisk();
+  const rows = new Map<string, any>();
+  for (const a of db.accounts ?? []) for (const p of a.moneriumPayouts ?? []) rows.set(p.id, p);
+  const bad: string[] = [];
+  for (const d of db.drafts ?? []) {
+    if (d.orgId !== "org_co") continue;
+    if (d.state === "EXECUTING" && !d.bankRun && !d.transferIds?.length && !d.cryptoSendIds?.length) bad.push(`${d.id} EXECUTING without its run`);
+    for (const l of d.bankRun?.lines ?? []) {
+      const row = rows.get(l.payoutId);
+      if (l.state === "sending" && !row) bad.push(`${l.lineId} sending without its payout row`);
+      if (row && l.state !== "sending" && row.state !== l.state) bad.push(`${l.lineId} reads ${l.state}, its row ${row.state}`);
+      if (row && l.state === "signed") bad.push(`${l.lineId} signed although its row exists`);
+    }
+  }
+  return bad;
+};
+const watchWrites = () => {
+  const seen: string[] = [];
+  const names = ["claimDraftExecution", "appendDraftActivity", "updateDraft", "updateDraftFrom", "updateAccount"] as const;
+  const saved = names.map((n) => [n, (store as any)[n]] as const);
+  for (const [n, fn] of saved) {
+    (store as any)[n] = async (...args: unknown[]) => {
+      const out = await fn(...args);
+      for (const b of halfWritten()) seen.push(`after ${n}: ${b}`);
+      return out;
+    };
+  }
+  return { seen, stop: () => { for (const [n, fn] of saved) (store as any)[n] = fn; } };
+};
 const nothingSent = async () => {
   assert.equal(mon.attempts, 0, "no order asked for");
   assert.deepEqual(await payouts(), [], "no payout row");
@@ -367,9 +400,12 @@ try {
     clearPendingPayouts();
     const fits = await start(id);
     assert.equal(fits.status, 201, fits.text);
-    // And a run waiting for its passkey holds its lines against a payout.
-    const after = await call("POST", "/org_co/monerium/payouts/start", "u_otto", { recipientName: "Eve", recipientIban: PAYEES[0].iban, amountEur: 90 });
-    assert.notEqual(after.status, 201, "otto is not a signer anyway");
+    // And a run waiting for its passkey holds its lines against a payout by
+    // the same signer: €200 less the run's €120 leaves €80.
+    const after = await call("POST", "/org_co/monerium/payouts/start", "u_anna", { recipientName: "Eve", recipientIban: PAYEES[0].iban, amountEur: 90 });
+    assert.equal(after.status, 409, after.text);
+    assert.equal(after.data.code, "AMOUNT_OVER_BALANCE");
+    assert.match(after.data.error, /€80\.00 available/);
     assert.equal(mon.attempts, 0);
   });
 
@@ -572,6 +608,95 @@ try {
     assert.equal(bankRunLineState({ ...sending, issuedAt: new Date().toISOString() }, sending.lines[0]), "sending");
   });
 
+  await check("no write leaves a run half-written on disk: claim with its run, a sending line with its row, a row with its line", async () => {
+    await reset();
+    const id = await draftOf(["10", "20", "30"]);
+    mon.failAt = { n: 3, err: new MoneriumApiError("Monerium POST /orders failed (503)", 503) };
+    const w = watchWrites();
+    try {
+      await run(id);
+      mon.orders.ord_1 = { id: "ord_1", meta: { state: "processed", processedAt: "2026-11-26T09:00:00Z" } };
+      mon.orders.ord_2 = { id: "ord_2", meta: { state: "rejected" } };
+      await call("GET", "/org_co/monerium/payouts", "u_anna");
+    } finally { w.stop(); }
+    assert.deepEqual(w.seen, []);
+    assert.deepEqual((await draft(id)).bankRun.lines.map((l: any) => l.state), ["sent", "failed", "unknown"]);
+  });
+
+  await check("two lines with the same amount and IBAN are refused: they would carry one message and one signature", async () => {
+    await reset();
+    await store.updateContact("c_cara", { bankAccounts: [{ id: "c_cara_b", currency: "EUR", country: "DE", holderName: "Cara Schmidt", iban: PAYEES[0].iban }] } as any);
+    const id = await draftOf(["10", "10"]);
+    const r = await start(id);
+    assert.equal(r.status, 422, r.text);
+    assert.equal(r.data.code, "LINES_NOT_PAYABLE");
+    assert.match(r.data.problems[0].reason, /same amount to the same IBAN/);
+    // Different amounts to one IBAN are two messages.
+    await reset();
+    await store.updateContact("c_cara", { bankAccounts: [{ id: "c_cara_b", currency: "EUR", country: "DE", holderName: "Cara Schmidt", iban: PAYEES[0].iban }] } as any);
+    const ok = await draftOf(["10", "11"]);
+    const s = await start(ok);
+    assert.equal(s.status, 201, s.text);
+    assert.notEqual(s.data.lines[0].challenge, s.data.lines[1].challenge);
+    await nothingSent();
+  });
+
+  await check("payouts switched off: execute says so before any sign dialog opens", async () => {
+    await reset();
+    const id = await draftOf(["10"]);
+    process.env.MONERIUM_ORG_PAYOUTS = "off";
+    try {
+      const x = await call("POST", `/org_co/drafts/${id}/execute`, "u_anna");
+      assert.equal(x.status, 409, x.text);
+      assert.equal(x.data.code, "ORG_PAYOUTS_OFF");
+      assert.equal(x.data.startTo, undefined);
+    } finally { process.env.MONERIUM_ORG_PAYOUTS = "on"; }
+  });
+
+  await check("one Monerium client places every order of a run", async () => {
+    await reset();
+    const id = await draftOf(["10", "20", "30"]);
+    const clients: object[] = [];
+    const placedBy: object[] = [];
+    const real = io.monerium;
+    io.monerium = (org: any) => {
+      const c = { ...real(org), placeOrder: async (b: any) => { placedBy.push(c); return client.placeOrder(b); } };
+      clients.push(c);
+      return c;
+    };
+    try { assert.equal((await run(id)).status, 201); } finally { io.monerium = real; }
+    assert.equal(placedBy.length, 3);
+    assert.equal(new Set(placedBy).size, 1, "every order on one client");
+  });
+
+  await check("an invoice line must pay the invoice in full, and is marked paid only then", async () => {
+    await reset();
+    const inv = (id: string, total: string) => store.addInvoice({ id, orgId: "org_co", direction: "incoming", linkTokenHash: `h_${id}`, state: "SUBMITTED", supplier: { name: "Bob GmbH", invoiceNumber: id }, lines: [], currency: "EUR", total, createdByMemberId: "m_pia", createdAt: now, updatedAt: now } as any);
+    await inv("inv_short", "25.00");
+    const lines = [{ contactId: "c_bob", invoiceId: "inv_short", destination: { kind: "bank", bankAccountId: "c_bob_b", displayName: "Bob GmbH" }, asset: "EUR", amount: "10" }];
+    const d = await call("POST", "/org_co/drafts", "u_pia", { source: { kind: "account", accountId: "acc_co" }, lines });
+    assert.equal(d.status, 201, d.text);
+    const r = await start(d.data.draft.id);
+    assert.equal(r.status, 422, r.text);
+    assert.match(r.data.problems[0].reason, /invoice is for €25\.00/);
+    // A run line recorded as sent for less than the invoice never marks it paid.
+    const { syncInvoicePayment } = await import("../services/api/src/routes/business/state.js");
+    await inv("inv_paying", "25.00");
+    await store.addDraft({ id: "dft_paid", orgId: "org_co", source: { kind: "account", accountId: "acc_co" }, state: "EXECUTED", createdByMemberId: "m_pia", activity: [], createdAt: now, updatedAt: now,
+      lines: [{ id: "dl_1", contactId: "c_bob", invoiceId: "inv_paying", destination: { kind: "bank", bankAccountId: "c_bob_b", displayName: "Bob GmbH" }, asset: "EUR", amount: "10", tags: [] }],
+      bankRun: { accountId: "acc_co", safeAddress: SAFE, signedByMemberId: "m_anna", issuedAt: now, lines: [{ lineId: "dl_1", payoutId: "p1", amountEur: 10, recipientName: "Bob GmbH", recipientIban: PAYEES[0].iban, state: "sent" }] } } as any);
+    await store.updateInvoice("inv_paying", { state: "PAYING", payment: { draftId: "dft_paid" } } as any);
+    assert.equal((await syncInvoicePayment((await store.findInvoice("inv_paying"))!)).state, "PAYING");
+    await store.updateInvoice("inv_paying", { total: "10.00" } as any);
+    assert.equal((await syncInvoicePayment((await store.findInvoice("inv_paying"))!)).state, "PAID");
+  });
+
+  await check("New payment offers a company the account its run pays from: live, on its Safe, IBAN issued", async () => {
+    const homeModel: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/home-model.js")).href);
+    const ok = { id: "a", status: "active", address: SAFE, identifier: { iban: IBAN } };
+    assert.deepEqual(homeModel.companyBankAccounts([ok, { ...ok, id: "b", identifier: {} }, { ...ok, id: "c", status: "gated" }, { ...ok, id: "d", backingUserId: "u" }]).map((a: any) => a.id), ["a"]);
+  });
+
   await check("the screens offer an owner Send on a company bank run in any open state, never a Submit for review", () => {
     const bank = { destination: { kind: "bank" } };
     const wallet = { destination: { kind: "wallet" } };
@@ -584,6 +709,12 @@ try {
     assert.equal(paymentModel.ownerSendsWithoutReview("sole_trader", { state: "DRAFT", lines: [bank] }), false);
     assert.equal(paymentModel.ownerSendsWithoutReview("company", { state: "DRAFT", lines: [wallet] }), false, "a wallet run keeps its own path");
     assert.equal(paymentModel.ownerSendsWithoutReview("company", { state: "DRAFT", lines: [] }), false);
+    // The Approvals card and Next line agree with the Send button.
+    const waiting = { state: "PENDING_REVIEW", lines: [bank], createdByMemberId: "m_pia", createdAt: now, activity: [] };
+    const a = paymentModel.approvals(waiting, false, true);
+    assert.deepEqual([a.have, a.needed], [1, 1], "no approval outstanding");
+    assert.match(paymentModel.nextStep(waiting, true, true), /owner sends it with their passkey\. No second approval/);
+    assert.deepEqual([paymentModel.approvals(waiting, true).needed], [2], "other runs keep their approval");
   });
 
   await check("the words after signing: placed is not sent; a stopped run says what each line did", () => {
