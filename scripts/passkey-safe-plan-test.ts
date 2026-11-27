@@ -9,7 +9,7 @@ import {
   webauthnOwnerFromJwk,
   webauthnOwnerToStore,
 } from "../services/api/src/wallet/candide.js";
-import { passkeySafePlan } from "../services/api/src/wallet/passkey-safe-plan.js";
+import { passkeySafePlan, sharedNonceRunProblem, signsSafeDebit } from "../services/api/src/wallet/passkey-safe-plan.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const b64url = (hex: string) => Buffer.from(hex, "hex").toString("base64url");
@@ -133,5 +133,37 @@ assert.ok(
   /app\.use\("\/api", createAuthRouter\(/.test(serverSource),
   "the auth router must stay mounted under /api",
 );
+
+// A sole trader's bank run with a fee: each line's fee debit is its own Safe
+// operation and all are prepared before the first is signed, so they would
+// carry one nonce and only the first payee would be paid. Two payees with a
+// positive fee are refused, before the draft is claimed or a transfer built.
+const safe = "0x00000000000000000000000000000000000000aa" as const;
+const sender: any = { address: safe.toUpperCase().replace("0X", "0x"), passkey: { credentialId: "cred" }, passkeySafe: { address: safe, status: "active", threshold: 1 } };
+assert.equal(signsSafeDebit(sender), true, "an active passkey Safe that is the account's address, compared without case");
+assert.equal(signsSafeDebit({ ...sender, passkey: undefined }), false);
+assert.equal(signsSafeDebit({ ...sender, passkeySafe: { ...sender.passkeySafe, status: "planned" } }), false);
+assert.equal(signsSafeDebit({ ...sender, address: "0x00000000000000000000000000000000000000bb" }), false);
+assert.match(sharedNonceRunProblem(sender, 2, 0.99) ?? "", /€0\.99 fee.*one payee/s, "two payees, a positive fee: refused");
+assert.equal(sharedNonceRunProblem(sender, 1, 0.99), null, "one payee is one operation");
+assert.equal(sharedNonceRunProblem(sender, 200, 0), null, "no fee, no Safe debit: any number of payees");
+assert.equal(sharedNonceRunProblem(sender, 2, 0.004), null, "a fee a quote rounds to nothing is no Safe debit");
+assert.match(sharedNonceRunProblem(sender, 2, 0.005) ?? "", /one payee/);
+assert.equal(sharedNonceRunProblem({ ...sender, passkeySafe: undefined }, 2, 0.99), null, "no passkey Safe, no prepared operation");
+const draftsSource = readFileSync(path.join(ROOT, "services/api/src/routes/business/drafts.ts"), "utf8");
+const exec = draftsSource.slice(draftsSource.indexOf('"/:orgId/drafts/:draftId/execute"'));
+const refusal = exec.indexOf("sharedNonceRunProblem(user, plans.length, railFeeEur(\"sepa\"))");
+assert.ok(refusal > 0, "draft execution asks sharedNonceRunProblem");
+assert.ok(refusal < exec.indexOf("store.claimDraftExecution(") && refusal < exec.indexOf("buildTransferFromQuote("), "refused before the draft is claimed and before any transfer, so before any debit");
+// Saving and submitting ask too, so a run is never approved only to be refused.
+const before = (route: string, write: string) => {
+  const body = draftsSource.slice(draftsSource.indexOf(route));
+  const ask = body.indexOf("await bankRunProblem(");
+  return ask > 0 && ask < body.indexOf(write);
+};
+assert.ok(before('r.post("/:orgId/drafts", ', "store.addDraft("), "a new draft is checked before it is saved");
+assert.ok(before('r.post("/:orgId/drafts/:draftId/submit"', "store.updateDraftFrom("), "a draft is checked before it is submitted for review");
+const buildSource = readFileSync(path.join(ROOT, "services/api/src/transfers/build.ts"), "utf8");
+assert.match(buildSource, /debitWei > 0n && signsSafeDebit\(user\) && !HARNESS\.enabled/, "the builder prepares a Safe debit for exactly the users the run refusal counts");
 
 console.log("PASSKEY SAFE PLAN TEST PASSED");
