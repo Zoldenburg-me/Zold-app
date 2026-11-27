@@ -23,6 +23,7 @@ import type { Hex } from "viem";
 import { HARNESS } from "../config.js";
 import { store, type RecoveryRequest, type User } from "../store.js";
 import { describeCause, redactedMessage } from "../http/log-cause.js";
+import { claimRelay, endRelay, relayStale, releaseRelay, type Relay } from "../recovery.js";
 import { mailAvailable } from "../adapters/mailer.js";
 import {
   readRecoveryState,
@@ -86,14 +87,10 @@ export const turnkeyRecoveryChain: TurnkeyRecoveryChain = {
  *  went out, or when an earlier one in its window covers it. */
 export const ownerWasAlerted = (r: RecoveryRequest): boolean => mailAvailable() && Boolean(r.ownerAlerts?.requested);
 
-/** One signature in flight per request: two would both pass the reads. */
-const signing = new Set<string>();
-/** Is a signature for this request being relayed now? The owner's cancel
- *  waits for it rather than be overwritten by the relay's result. */
-export const isBeingSigned = (id: string): boolean => signing.has(id);
-/** One finalise in flight per request: the route, the status read and the
- *  sweep would each relay finalizeRecovery and bind the passkey. */
-const finishing = new Set<string>();
+/** Is a signature for this request being relayed now (its RELAYING reserve,
+ *  claimed from REVIEW_PENDING)? The owner's cancel waits for it rather than
+ *  be overwritten by the relay's result. */
+export const isBeingSigned = (r: RecoveryRequest): boolean => r.status === "RELAYING" && r.relaying?.from === "REVIEW_PENDING";
 
 const sameSet = (a: string[], b: string[]) =>
   a.length === b.length && a.every((x) => b.some((y) => y.toLowerCase() === x.toLowerCase()));
@@ -144,13 +141,16 @@ export async function acceptTurnkeySignature(
   chain: TurnkeyRecoveryChain,
   { ownerAlerted = ownerWasAlerted, now = new Date() }: { ownerAlerted?: (r: RecoveryRequest) => boolean; now?: Date } = {},
 ): Promise<RecoveryRequest> {
-  // The re-read, the checks and the claim are one transaction: the expiry
-  // sweep either lands before it (seen here) or after it (and sees `signing`).
-  // The user's row is the lock every writer of their recovery takes, so on
-  // Postgres the sweep's check of `signing` and its write wait for this.
-  await store.tx(async () => {
+  // The re-read, the checks and the claim are one transaction, and the
+  // claim is the RELAYING reserve (§2 rule 5), one conditional write from
+  // REVIEW_PENDING committed before the first chain read: a second signer,
+  // the owner's cancel and the expiry sweep all write only from
+  // REVIEW_PENDING, so each either lands first (and the claim fails) or
+  // finds the reserve.
+  const claimed = await store.tx(async () => {
     await store.lockUser(request.userId);
     const current = (await store.findRecoveryRequest(request.id)) ?? request;
+    if (isBeingSigned(current)) throw new TurnkeyGuardianError("this recovery is already being approved", 409, "BUSY");
     if (current.status !== "REVIEW_PENDING") throw new TurnkeyGuardianError(`recovery is ${current.status}`, 409, "NOT_WAITING");
     if (!ownerAlerted(current)) {
       throw new TurnkeyGuardianError(
@@ -159,22 +159,34 @@ export async function acceptTurnkeySignature(
         "OWNER_NOT_ALERTED",
       );
     }
-    if (signing.has(request.id)) throw new TurnkeyGuardianError("this recovery is already being approved", 409, "BUSY");
-    signing.add(request.id);
+    const held = await claimRelay(request.id, "REVIEW_PENDING");
+    if (!held) throw new TurnkeyGuardianError("this recovery is already being approved", 409, "BUSY");
+    return { ...current, status: "RELAYING" as const, relaying: held };
   });
+  const held = claimed.relaying!;
   try {
-    return await relayApproved(request, sig, chain, now);
+    return await relayApproved(claimed, held, sig, chain, now);
   } finally {
-    signing.delete(request.id);
+    // A relay that recorded nothing gives its own reserve back; a no-op once it moved on.
+    await releaseRelay(request.id, held);
   }
 }
 
-async function relayApproved(request: RecoveryRequest, sig: { r: string; s: string; v: string }, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
+async function relayApproved(request: RecoveryRequest, held: Relay, sig: { r: string; s: string; v: string }, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
   const t = request.turnkey!;
   const { plan } = await planOf(request);
   const state = await chain.readState(plan);
   if (state.pending) {
-    if (sameSet(state.pending.newOwners, t.newOwners ?? [])) return syncTurnkeyFromChain(request, chain, now);
+    if (sameSet(state.pending.newOwners, t.newOwners ?? [])) {
+      // An earlier relay landed but was never recorded. The grace period is
+      // written over this reserve, never back through REVIEW_PENDING, where
+      // the owner's cancel would leave the recovery on chain to execute.
+      const moved = await endRelay(request.id, held, {
+        status: "GRACE_PERIOD",
+        turnkey: { ...t, executedAt: t.executedAt ?? now.toISOString(), finalizeAfter: new Date(state.pending.executeAfter * 1000).toISOString() },
+      });
+      return moved ? syncTurnkeyFromChain(moved, chain, now) : (await store.findRecoveryRequest(request.id)) ?? request;
+    }
     throw new TurnkeyGuardianError("another recovery is already pending on this account", 409, "RECOVERY_PENDING");
   }
   if (!state.guardians.some((g) => g.toLowerCase() === request.guardianAddress.toLowerCase())) {
@@ -189,9 +201,9 @@ async function relayApproved(request: RecoveryRequest, sig: { r: string; s: stri
   if (signer.toLowerCase() !== request.guardianAddress.toLowerCase()) {
     throw new TurnkeyGuardianError("this signature is not from the guardian on the account — log in with the Google or Apple account you added", 400, "WRONG_SIGNER");
   }
-  // The owner may have cancelled while the module was read.
-  const current = (await store.findRecoveryRequest(request.id))?.status;
-  if (current !== "REVIEW_PENDING") throw new TurnkeyGuardianError(`recovery is ${current}`, 409, "NOT_WAITING");
+  // Still our reserve: an owner's on-chain cancel or the stale sweep ends one too.
+  const current = await store.findRecoveryRequest(request.id);
+  if (current?.status !== "RELAYING" || current.relaying?.token !== held.token) throw new TurnkeyGuardianError(`recovery is ${current?.status}`, 409, "NOT_WAITING");
   const { txHash } = await chain.relayRecovery(td, request.guardianAddress, signature);
   const after = await chain.readState(plan);
   if (!after.pending || !sameSet(after.pending.newOwners, t.newOwners!)) {
@@ -212,7 +224,9 @@ async function relayApproved(request: RecoveryRequest, sig: { r: string; s: stri
       await store.updateRecoveryRequest(other.id, { status: "CANCELED", canceledAt: now.toISOString(), cancelReason: "another recovery of this account went on chain" });
     }
   }
-  return await store.updateRecoveryRequest(request.id, {
+  // On chain now: written over the reserve, or the row as it stands if an
+  // on-chain cancel ended the reserve meanwhile.
+  return (await endRelay(request.id, held, {
     status: "GRACE_PERIOD",
     factors: { ...request.factors, manualReview: "passed" },
     turnkey: {
@@ -224,7 +238,7 @@ async function relayApproved(request: RecoveryRequest, sig: { r: string; s: stri
       finalizeAfter: finalizeAfter.toISOString(),
       ...(verifierDeployTxHash ? { verifierDeployTxHash } : {}),
     },
-  });
+  })) ?? (await store.findRecoveryRequest(request.id))!;
 }
 
 /** Move the request to what the chain says, as syncZoldenburgFromChain does. */
@@ -235,10 +249,13 @@ export async function syncTurnkeyFromChain(request: RecoveryRequest, chain: Turn
   if (request.status === "REVIEW_PENDING") {
     const state = await chain.readState(plan);
     if (state.pending && sameSet(state.pending.newOwners, t.newOwners)) {
-      return await store.updateRecoveryRequest(request.id, {
+      // Only from the status it was read in: a signer that claimed it since
+      // holds RELAYING, and its outcome (tx hash, verifier) is the one to keep.
+      const moved = await store.updateRecoveryRequestFrom(request.id, ["REVIEW_PENDING"], {
         status: "GRACE_PERIOD",
         turnkey: { ...t, executedAt: t.executedAt ?? now.toISOString(), finalizeAfter: new Date(state.pending.executeAfter * 1000).toISOString() },
       });
+      return moved ?? (await store.findRecoveryRequest(request.id)) ?? request;
     }
   }
   if (sameSet(await chain.safeOwners(request.safeAddress), t.newOwners)) return await bindAndFinish(request, now, undefined);
@@ -258,6 +275,7 @@ async function bindAndFinish(request: RecoveryRequest, now: Date, txHash: `0x${s
     return await store.updateRecoveryRequest(request.id, {
       status: "FINALIZED",
       finalizedAt: now.toISOString(),
+      relaying: undefined,
       turnkey: { ...t, ...(txHash ? { finalizeTxHash: txHash } : {}), finalizeError: undefined },
     });
   });
@@ -271,16 +289,21 @@ export async function finalizeTurnkeyRecovery(request: RecoveryRequest, chain: T
   if (t.finalizeAfter && now < new Date(t.finalizeAfter)) {
     throw new TurnkeyGuardianError(`the waiting period runs until ${t.finalizeAfter}`, 425, "GRACE_PERIOD");
   }
-  if (finishing.has(request.id)) throw new TurnkeyGuardianError("this recovery is being finished — check again in a minute", 409, "BUSY");
-  finishing.add(request.id);
+  // The reserve, committed before the relay: the route, the status read and
+  // the sweep would each relay finalizeRecovery and bind the passkey.
+  const held = await claimRelay(request.id, "GRACE_PERIOD");
+  if (!held) {
+    throw new TurnkeyGuardianError("this recovery is being finished — check again in a minute", 409, "BUSY");
+  }
   try {
-    return await relayFinalize(request, t, chain, now);
+    return await relayFinalize(request, held, t, chain, now);
   } finally {
-    finishing.delete(request.id);
+    // Its own reserve only: a no-op once the outcome or the release below ended it.
+    await releaseRelay(request.id, held);
   }
 }
 
-async function relayFinalize(request: RecoveryRequest, t: NonNullable<RecoveryRequest["turnkey"]>, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
+async function relayFinalize(request: RecoveryRequest, held: Relay, t: NonNullable<RecoveryRequest["turnkey"]>, chain: TurnkeyRecoveryChain, now: Date): Promise<RecoveryRequest> {
   let finalizeError: string | undefined;
   let txHash: `0x${string}` | undefined;
   try {
@@ -296,9 +319,9 @@ async function relayFinalize(request: RecoveryRequest, t: NonNullable<RecoveryRe
     finalizeError = `${finalizeError ? `${finalizeError}; ` : ""}could not read Safe owners: ${redactedMessage(err).slice(0, 120)}`;
   }
   if (!sameSet(owners, t.newOwners ?? [])) {
-    return await store.updateRecoveryRequest(request.id, {
+    return (await releaseRelay(request.id, held, {
       turnkey: { ...t, finalizeAttempts: (t.finalizeAttempts ?? 0) + 1, finalizeError: finalizeError ?? "the Safe's owners do not show the recovered set yet" },
-    });
+    })) ?? (await store.findRecoveryRequest(request.id)) ?? request;
   }
   return await bindAndFinish(request, now, txHash);
 }
@@ -312,16 +335,23 @@ export async function sweepTurnkeyRecoveries(now = new Date(), chain: TurnkeyRec
     const r = (await store.findRecoveryRequest(snap.id)) ?? snap;
     const before = r.status;
     try {
-      if (finishing.has(r.id) || signing.has(r.id)) continue;
+      // A reserve held: its relay is running, or was cut off (a restart) and
+      // goes back to the status it came from. From REVIEW_PENDING the chain
+      // read below picks up a relay that landed; from GRACE_PERIOD the next
+      // finalize reads the owners.
+      if (r.status === "RELAYING") {
+        if (r.relaying && relayStale(r)) {
+          console.warn(`RECOVERY: ${r.id} held its ${r.relaying.from} reserve past the relay timeout; back to ${r.relaying.from}`);
+          await releaseRelay(r.id, r.relaying);
+        }
+        continue;
+      }
       // Ask the chain before expiring: a relay that landed but was never
       // recorded must still reach its grace period.
       let cur = r.status === "REVIEW_PENDING" ? await syncTurnkeyFromChain(r, chain, now) : r;
       if (["PASSKEY_PENDING", "REVIEW_PENDING"].includes(cur.status) && now >= new Date(cur.expiresAt)) {
-        // Only from the status it was read in, and not once a signer has claimed it.
-        await store.tx(async () => {
-          await store.lockUser(r.userId);
-          if (!finishing.has(r.id) && !signing.has(r.id)) await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" });
-        });
+        // Only from the status it was read in: one a signer has claimed is RELAYING.
+        await store.updateRecoveryRequestFrom(r.id, ["PASSKEY_PENDING", "REVIEW_PENDING"], { status: "EXPIRED" });
         continue;
       }
       if (cur.status === "GRACE_PERIOD" && cur.turnkey?.finalizeAfter && now >= new Date(cur.turnkey.finalizeAfter)) {

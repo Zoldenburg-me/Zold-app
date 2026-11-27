@@ -291,7 +291,7 @@ console.log("sessions");
 await check("a user session is not an operator session, and an operator session is not a user's", async () => {
   const user = { id: "u_plain", name: "Plain", email: "plain@example.com", country: "DE", kycStatus: "approved", iban: "", address: `0x${"1".repeat(40)}`, createdAt: new Date().toISOString() };
   await store.addUser(user as any);
-  const userToken = await issueSession(user.id);
+  const userToken = await issueSession({ id: user.id });
   assert.equal((await req("GET", "/api/admin/users", undefined, { authorization: `Bearer ${userToken}` })).status, 401);
   assert.equal((await req("GET", `/api/users/${user.id}/probe`, undefined, { authorization: `Bearer ${kit.sessionToken}` })).status, 401);
 });

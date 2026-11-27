@@ -542,6 +542,82 @@ try {
     }
   });
 
+  // A relay that landed but was never recorded (its caller cut off): the module
+  // holds the recovery while the row still says REVIEW_PENDING.
+  const landedUnrecorded = async (label: string) => {
+    const start = await call("POST", "/recovery/turnkey/requests", { email: "u_created@example.com" });
+    const h = { "x-recovery-secret": start.body.recoverySecret };
+    const key = await makeSoftwarePasskey(label, ORIGIN);
+    await call("POST", `/recovery/turnkey/requests/${start.body.id}/passkey`, key.register(start.body.registerChallenge), h);
+    await markAlerted(start.body.id);
+    const d = await call("GET", `/recovery/turnkey/requests/${start.body.id}/digest`, undefined, h);
+    const row = (await store.findRecoveryRequest(start.body.id))!;
+    assert.equal(row.status, "REVIEW_PENDING");
+    chainState.pending = { newOwners: row.turnkey!.newOwners as `0x${string}`[], newThreshold: 1, executeAfter: GRACE_END };
+    return { id: start.body.id as string, h, digest: d.body.digest as `0x${string}` };
+  };
+  const ownerCancel = (id: string) => call("POST", `/users/u_created/recovery/turnkey/requests/${id}/cancel`, {}, { "x-test-user": "u_created" });
+
+  await check("a signature retried after its relay landed unrecorded records the grace period over its own reserve; the owner's cancel cannot slip in", async () => {
+    const pendingBefore = chainState.pending;
+    const { id, h, digest } = await landedUnrecorded("turnkey-recovery-retry-cancel");
+    const realRead = chain.readState;
+    const realOwners = chain.safeOwners;
+    let reads = 0;
+    let cancel: any;
+    // Every chain call after the first module read is where the owner's cancel lands.
+    const cancelOnce = async () => { if (!cancel) cancel = await ownerCancel(id); };
+    chain.readState = async (plan) => { if (++reads > 1) await cancelOnce(); return realRead(plan); };
+    chain.safeOwners = async (safe) => { await cancelOnce(); return realOwners(safe); };
+    try {
+      const before = relayed.length;
+      const r = await call("POST", `/recovery/turnkey/requests/${id}/signature`, await turnkeySign(guardian, digest), h);
+      assert.equal(relayed.length, before, "nothing relayed again");
+      assert.ok(cancel, "the owner's cancel ran during the signature");
+      assert.equal(cancel.status, 409, JSON.stringify(cancel.body));
+      assert.equal(r.body.status, "GRACE_PERIOD", JSON.stringify(r.body));
+      const row = (await store.findRecoveryRequest(id))!;
+      assert.equal(row.status, "GRACE_PERIOD", "the row follows the chain, not the cancel");
+      assert.equal(row.turnkey!.finalizeAfter, new Date(GRACE_END * 1000).toISOString());
+    } finally {
+      chain.readState = realRead;
+      chain.safeOwners = realOwners;
+      chainState.pending = pendingBefore;
+      await store.updateRecoveryRequest(id, { status: "CANCELED" });
+    }
+  });
+
+  await check("the owner's cancel of a request whose recovery is on chain is refused, and the row moves to the grace period", async () => {
+    const pendingBefore = chainState.pending;
+    const { id } = await landedUnrecorded("turnkey-recovery-cancel-onchain");
+    try {
+      const r = await ownerCancel(id);
+      assert.equal(r.status, 409, JSON.stringify(r.body));
+      assert.equal(r.body.code, "NOT_CANCELABLE");
+      assert.equal((await store.findRecoveryRequest(id))!.status, "GRACE_PERIOD");
+    } finally {
+      chainState.pending = pendingBefore;
+      await store.updateRecoveryRequest(id, { status: "CANCELED" });
+    }
+  });
+
+  await check("the owner's cancel refuses when the module cannot be read, and leaves the request as it was", async () => {
+    const pendingBefore = chainState.pending;
+    const { id } = await landedUnrecorded("turnkey-recovery-cancel-unread");
+    const realRead = chain.readState;
+    chain.readState = async () => { throw new Error("rpc down"); };
+    try {
+      const r = await ownerCancel(id);
+      assert.equal(r.status, 503, JSON.stringify(r.body));
+      assert.equal(r.body.code, "UNAVAILABLE");
+      assert.equal((await store.findRecoveryRequest(id))!.status, "REVIEW_PENDING");
+    } finally {
+      chain.readState = realRead;
+      chainState.pending = pendingBefore;
+      await store.updateRecoveryRequest(id, { status: "CANCELED" });
+    }
+  });
+
   await check("a failure below us answers a fixed message and a log reference, never its cause", async () => {
     const realRead = chain.readState;
     chain.readState = async () => { throw new Error("bundler said: nonce too low at https://rpc.example/v1/SECRETKEY"); };

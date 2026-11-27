@@ -195,4 +195,81 @@ Human testing on zoldhq.com follows `docs/test-round.md`.
 | payments | `paylinks:test` `shopify:test` `shopify:orders:test` `receipt:test` `pay:test` `crypto:test` `convert:test` |
 | ops | `reconcile:test` `anchor:*:test` `country:policy:test` `segments:test` `onboarding:test` `gnosispay:test` |
 | live (network) | `travelrule:test` `trustline:test` `stellar:payout:live` `anchor:test` `eur:proof` |
+| store | `store-backend:test` (the store suite on JSON and PGlite) `pg-import:test` `store-gates:test`; `check:pg` (below) is NOT in check |
 
+## Postgres
+
+Every deployment runs the JSON store (`data/db.json`). The Postgres backend
+(`docs/postgres-store-design.md`) runs in the suites and nowhere else: no
+Oracle host, cluster, backup or cut-over exists yet (§8 rows S7, S8).
+
+- `STORE_BACKEND=postgres` with `DATABASE_URL` (and `DATABASE_CA` for a TLS
+  host) puts the API on it. Config refuses it on a real-money chain until
+  the cut-over. The API takes the one-process start lock and checks that
+  every migration is applied; it never migrates. There is no migrate
+  command: `migrate()` (`store/pg/migrate.ts`) is run by the tests, and the
+  deploy step that runs it as the owner role and then
+  `SELECT zold_grant_app('<app role>')` is S7.
+- **Local Postgres 17**: Homebrew `postgresql@17`
+  (`brew services start postgresql@17`). It listens on the socket in `/tmp`,
+  which is `check:pg`'s default.
+- **`npm run check:pg`** (`scripts/store-pg-test.ts`) connects with
+  `TEST_DATABASE_URL` (default `postgresql:///postgres?host=/tmp`) as a role
+  with `CREATEDB` and `CREATEROLE`, and makes a throwaway database and
+  application role per run, uniquely named and dropped at the end, pass or
+  fail; the next run drops what a killed run left. It refuses a server not
+  on this machine unless `ZOLD_TEST_DB_REMOTE_OK=1` says it is disposable.
+  It runs what PGlite cannot show (parallel connections, a second lock
+  holder), the grants, the import and export CLIs, and the API suites that
+  hold the race tests, as the application role. Run it when you change
+  `store/`, `services/api/migrations/` or a path in the design note's §2.
+
+### db.json ↔ Postgres
+
+```bash
+npm run pg-import -- report <db.json>                  # no database, no env
+DATABASE_URL=… npm run pg-import -- import <db.json>    # after the migrations
+DATABASE_URL=… npm run pg-import -- verify <db.json>    # a lease's db.json
+DATABASE_URL=… npm run pg-export -- <out.json> [--ledger-history <out.jsonl.age>]
+DATABASE_URL=… npm run pg-export -- --verify <out.json> # an export
+```
+
+They need `DATABASE_URL` (and `DATABASE_CA`) and no other setting: no
+signing key, no chain. A database host other than this machine needs
+`sslmode=verify-full` and a CA, whatever the chain. They print collection
+names, counts, hashes and row ids, never a row. `report` exits 1 on any
+blocking finding; import and verify run it first.
+
+- **A source must be stable.** A db.json with a user who has no
+  organisation is refused: the load-time migration would give them one
+  under random ids on every load. Start the JSON API on it once, stop it,
+  then import.
+- **Verify the right way round.** `pg-import verify` is for a lease's
+  db.json: it runs the load-time migrations on the file first. An export is
+  checked as written with `pg-export --verify`; through those migrations an
+  export holding a signup made on Postgres (no organisation yet) is refused,
+  and one holding a dead session not yet pruned mismatches `sessions`.
+- **The clock.** Loading a db.json prunes dead sessions. A second import of
+  one file says "nothing changed" only while no session in it has died
+  since the first; after that it is refused as differing in `sessions`, and
+  the first import stands. A `verify` long after an import can differ in
+  `sessions` for the same reason; the import verifies in its own run.
+- **What the hash does not see.** Rows are hashed in stored order, each as
+  JSON with its keys sorted, so keys reordered inside a row hash the same.
+  The import keeps the key order by storing the text as written (`json`, not
+  `jsonb`), which `pg-import:test` checks; the verify would not catch it.
+- **Outbox rows the report passes and Postgres refuses**: an `attempts` past
+  the `integer` range, or a timestamp of a date that does not exist. The
+  import then rolls back and names the row and the SQLSTATE.
+- **Export and verify** read one `REPEATABLE READ, READ ONLY` transaction
+  under the start lock, so they refuse while an API runs. For a rollback,
+  first stop the API and set the application role `NOLOGIN` (design §6).
+- **The exported db.json is plain JSON**, mode 600, as the JSON backend
+  serves it. Write it only to the data directory it will be served from, or
+  encrypt it at once (`TRANSF_DB_PATH=<out.json> npm run backup:db`) and
+  delete the plain file.
+- **`ledger_history`** has no place in db.json: with history rows the export
+  refuses unless `--ledger-history` names a file, written only through the
+  pinned `age` (`npm run age:fetch`) to `.age-recipients`. `scripts/_age.sh`
+  pins no linux-arm64 build, so on the planned Oracle host (aarch64) such an
+  export refuses until S7 adds one. Both files are published or neither.

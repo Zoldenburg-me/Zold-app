@@ -167,7 +167,11 @@ Rules for the table above:
   address as unbookable, `bookkeeping/money-in.ts:42`), and `(org_id, number)`
   on invoices (S2).
 - Foreign keys are `ON DELETE RESTRICT`. The same rule: added only where the
-  importer finds no orphan, so none is in 0001; they come with S5.
+  importer finds no orphan, so none is in the schema yet. The pre-import
+  report (§6) lists the orphans of every key in the FK column; a key goes in
+  by its own migration once the reports on the testnet and mainnet copies
+  show none for it. `transfers.quote_id → quotes` cannot be one while quotes
+  are pruned (:429-430): a transfer outlives its quote by design.
 - **The `table` in a sealed field's AAD stays the collection name**
   (`shopifyConnections`, not `shopify_connections`), and `rowId` stays the
   row's `id`. Changing either makes every sealed value unopenable. The SQL
@@ -221,9 +225,8 @@ paths rely on it, and stay in memory in #166:
 - the deposit conversion guards `pendingDepositConversions` and
   `convertingDeposits` (`routes/crypto-deposits.ts:56`, `:70`, checked at
   `:200`);
-- Turnkey `signing` / `finishing` (`recovery/turnkey-recovery.ts:90`, `:96`)
-  and `harnessPending` (`:55`); Candide `passkeySubmits`
-  (`routes/recovery-candide.ts`);
+- the Turnkey harness's `harnessPending` (`recovery/turnkey-recovery.ts`);
+  Candide `passkeySubmits` (`routes/recovery-candide.ts`);
 - `submitting` (`routes/business/org-safe-deployment.ts:145`), `issuing`
   (`bookkeeping/issue.ts:94`), `invoiceLocks`
   (`routes/business/invoice-pay-link.ts:80`), `pendingLinks`
@@ -326,7 +329,7 @@ The table below is built in S3 (money paths on Postgres, `check:pg`).
 | Crypto send | `holdDailyCap` (`routes/crypto-sends.ts:262`), `addCryptoSendUnderHold` (:356, :437), `claimCryptoSend` (:619, `store.ts:964-972`) | As quote → transfer for the hold; rule 1 for the claim | Parallel submits of one send: one `SENT`/`SUBMITTED`. Parallel sends at the cap from one org Safe: one passes (cap key `orgSafeCapKey`, `wallet/org-debit.ts:174`) |
 | Org Safe op queue | `addSafeOpSignature` (`routes/business/safe-ops.ts:180`), `claimSafeOpRelay` / `finishSafeOp` (`wallet/org-safe-queue.ts:174-196`) | Rule 1 on the op row | Two owners sign at once: both signatures land. One owner twice: one lands. Two relays: one claims |
 | Draft payments | `claimDraftExecution` with `expectedUpdatedAt` (`routes/business/drafts.ts:408`, `:704`) | Rule 1 | Two parallel executes of one reviewed draft: one claims |
-| Managed recovery start | Check open requests, maybe cancel the idle one, then add (`routes/recovery-zoldenburg.ts:629-674`); `relaying` was an in-memory set | `store.tx` locks the user row (`SELECT … FROM users WHERE id=$1 FOR UPDATE`) for the whole check-cancel-add. The partial unique index on one `GRACE_PERIOD` request per user backs it. The relay is a `RELAYING` status in the row, claimed with rule 3 before the chain call: from `REVIEW_PENDING` by the operator's execute, from `GRACE_PERIOD` by a finaliser (the next row), with `relaying: { from, at }`. Cancel, reject and expiry refuse while it is set. The start gate counts `RELAYING` as open and exempt from the expiry filter, as `GRACE_PERIOD` is, so a request whose relay is in flight past its `expiresAt` still blocks a new start. The relay's outcome moves it on (`GRACE_PERIOD`, `FINALIZED`); a relay that ends with nothing recorded (a throw, no matching recovery on chain) gives it back to the status it came from. A restart can leave it set, so the sweep reconciles a `RELAYING` row older than `RELAY_TIMEOUT_MS` (10 minutes on the wall clock; a relay waits up to 90 s for its receipt): it asks the chain as the status the row came from (`syncZoldenburgFromChain`); a recovery or finalisation on chain moves it on, and nothing on chain gives it back to the status it came from, so the next sweep or an operator relays again. A chain that cannot be read leaves it for the next sweep. Public projections show a `RELAYING` row as the status it came from: the relay lasts seconds, and the screens read as before | Parallel starts for one account at `MAX_OPEN_REQUESTS`: never more than the limit. Two finalisers: one relays, one bind. Two operators executing one request: one relay. A `RELAYING` request past its `expiresAt`: a new start answers 409, and the sweep leaves it until the relay timeout. A process stopped after `RELAYING` was written: with the relay on chain the sweep moves it to its grace period; without, it is back in `REVIEW_PENDING` and relays once (`scripts/zoldenburg-bank-check-test.ts`, on JSON and on Postgres 17) |
+| Managed recovery start | Check open requests, maybe cancel the idle one, then add (`routes/recovery-zoldenburg.ts:629-674`); `relaying` was an in-memory set | `store.tx` locks the user row (`SELECT … FROM users WHERE id=$1 FOR UPDATE`) for the whole check-cancel-add. The partial unique index on one `GRACE_PERIOD` request per user backs it. The relay is a `RELAYING` status in the row, claimed with rule 3 before the chain call: from `REVIEW_PENDING` by the operator's execute, from `GRACE_PERIOD` by a finaliser (the next row), with `relaying: { from, at, token }`. The token is the claim's own: its outcome and its release write only over that token (`store.updateRecoveryRelay`, one compare-and-write), so a caller that ends after the sweep released its reserve and another caller claimed cannot clear the newer one. Cancel, reject and expiry refuse while it is set. The start gate counts `RELAYING` as open and exempt from the expiry filter, as `GRACE_PERIOD` is, so a request whose relay is in flight past its `expiresAt` still blocks a new start. The relay's outcome moves it on (`GRACE_PERIOD`, `FINALIZED`); a relay that ends with nothing recorded (a throw, no matching recovery on chain) gives it back to the status it came from. A restart can leave it set, so the sweep reconciles a `RELAYING` row older than `RELAY_TIMEOUT_MS` (10 minutes on the wall clock; a relay waits up to 90 s for its receipt): it asks the chain as the status the row came from (`syncZoldenburgFromChain`); a recovery or finalisation on chain moves it on, and nothing on chain gives it back to the status it came from, so the next sweep or an operator relays again. A chain that cannot be read leaves it for the next sweep. Public projections show a `RELAYING` row as the status it came from: the relay lasts seconds, and the screens read as before | Parallel starts for one account at `MAX_OPEN_REQUESTS`: never more than the limit. Two finalisers: one relays, one bind. Two operators executing one request: one relay. A `RELAYING` request past its `expiresAt`: a new start answers 409, and the sweep leaves it until the relay timeout. A process stopped after `RELAYING` was written: with the relay on chain the sweep moves it to its grace period; without, it is back in `REVIEW_PENDING` and relays once (`scripts/zoldenburg-bank-check-test.ts`, on JSON and on Postgres 17) |
 | Payment request paid | `record()` reads the row, `applyPayment` merges in place, then writes (`routes/payment-requests.ts:559-575`; in-place merge `payment-requests.ts:551`) | One store method, `recordPaymentRequestPayment(id, payment)`, runs `applyPayment` on the locked row. The "became PAID" hook is an outbox row in the same transaction (`payment-request.paid`, key `paid:<id>`), delivered after the commit | A Monerium order and our own transfer for one payment, recorded in parallel: one payment row, merged; one PAID outbox row; the PAID hook fires once |
 | Invoice paid | Read the invoice, check its settlement ref, write (`routes/payment-requests.ts:656-663`, `adapters/crypto-deposits.ts:627-632`, `routes/business/state.ts:97-144`) | One store method, `settleInvoice(id, settlement)`, checks the ref on the locked row | The poller and a webhook settle one order in parallel: one settlement |
 | Ledger | `batched` blocks in `wallet-sync/sync.ts:300`, `wallet-sync/revalue.ts:82`, `bookkeeping/writer.ts:260`, `routes/orgs.ts:1147`; rule runs compute replacements from rows read earlier, then replace them (`routes/business/bookkeeping.ts:152-162`) | `store.tx` holding `pg_advisory_xact_lock(hashtext('ledger:'||org_id))`, taken by every ledger write: statement writer, sync, revalue, rule run, categorise. A write reads the rows it changes inside that lock, never before it: the rule run becomes one store method, `applyAccountRules(orgId)`, that reads rules and rows, runs `applyRules` and writes, all under the lock. `replaceLedgerEntries` also refuses a row whose stored `updatedAt` is not the one the caller read, so a replacement computed from a stale row fails instead of overwriting. The statement writer's add path is backed by `UNIQUE(org_id, statement key)`, so two sweeps cannot add a line twice | Two statement sweeps in parallel: same lines as one sweep. Revalue racing a categorise: both changes kept, each a step in `ledger_history` (`pg-concurrency-test`, ×5). A rule run racing a revalue and a hand categorisation: the revalued value and the hand category both survive (`pg-concurrency-test`, ×5) |
@@ -335,7 +338,7 @@ The table below is built in S3 (money paths on Postgres, `check:pg`).
 | Shopify delivery dedupe | `shopifyDelivery`, record, mark on finish (`routes/shopify.ts:668-678`) | `INSERT … ON CONFLICT (id) DO NOTHING RETURNING`; a conflict reads the row and checks its shop. Order create is backed by `UNIQUE(kind, shop, external_id)` on payment requests | One delivery id twice in parallel: one request created. Same order id from two shops: two requests |
 | Crypto deposits | Idempotent on (txHash, logIndex) (`store.ts:985-1009`) | `UNIQUE(chain_id, lower(tx_hash), log_index)`, `ON CONFLICT DO NOTHING` then read. The scanner covers one chain per deployment (`CHAIN_ID`, `adapters/crypto-deposits.ts:34`), but each deposit records its `chainId` (`store/types.ts:540`) and the cursor is per chain, so the key carries it: a second chain cannot collide with the first | Two overlapping scans of one window: one row |
 | Passkey sign count | `recordPasskeyUse` only while the credential is still the account's (`store.ts:202-206`), 11 callers (`http/passkey-assertion.ts:44`, `routes/auth.ts:122`, …). The counter check (`webauthn.ts:323`) compares against the count the caller read before its await, and the method writes whatever came back | Rule 1 on the user row, and the compare moves into the method: the write happens only if `stored = 0 AND new = 0` or `new > stored` on the locked row; otherwise the method returns false and the caller answers 401, as for a replaced credential (S3) | A recovery replacing the passkey while an assertion records its count: the count is refused, the new passkey stays. Two assertions with counts 5 and 6 recorded in the order 6, 5: the stored count is 6 and the second is refused |
-| Sessions | `findSessionByTokenHash`, `touchSession` (`store.ts:819-841`); login mints its session synchronously after `recordPasskeyUse` so that a recovery landing later revokes it too (`routes/auth.ts:440-448`); recovery revokes the others (`recovery/recovered-passkey.ts:155`, `revokeOtherSessions` `http/sessions.ts:32-36`) | On an async store the credential check and the session insert are separate awaits, and a recovery can swap the passkey and revoke between them, leaving the old device a 24 h bearer. So `users.session_epoch` (an integer in `doc`, generated column): every passkey replace or recovery bumps it in the same transaction as the swap and the revoke, and moves the one session the method keeps (`revokeOtherSessions(userId, keepId)`, e.g. the session that approved a passkey replacement, `routes/auth.ts:249-259`) to the new epoch, so that session stays signed in; `addSession` copies the epoch it read with the credential check and inserts only `WHERE` the user's epoch still equals it; `requireSession` (`http/sessions.ts:44-61`) refuses a session whose epoch is below the user's. The touch is a conditional `UPDATE … WHERE last_used_at < now() - 60s`. Pruning is a periodic `DELETE`, not part of `addSession` (S4b) | Login paused after its credential check while a recovery swaps the passkey: the login gets 401, or its session is refused on first use; never a live session on the old passkey. A passkey replacement approved from a session: that session still works, every other one is refused |
+| Sessions | `findSessionByTokenHash`, `touchSession` (`store.ts:819-841`); login mints its session synchronously after `recordPasskeyUse` so that a recovery landing later revokes it too (`routes/auth.ts:440-448`); recovery revokes the others (`recovery/recovered-passkey.ts:155`, `revokeOtherSessions` `http/sessions.ts:32-36`) | On an async store the credential check and the session insert are separate awaits, and a recovery can swap the passkey and revoke between them, leaving the old device a 24 h bearer. So `User.sessionEpoch` (an integer in `doc`; no column, nothing queries it): `store.revokeOtherSessions(userId, keepId)` locks the user row, bumps it, revokes every other live session and moves the one it keeps (e.g. the session that approved a passkey replacement) to the new epoch, so that session stays signed in, all in one write. A passkey replacement (`routes/auth.ts`) and a recovery bind (`bindRecoveredPasskey`) call it in the transaction of the swap; a Monerium credential change calls it after its write. A session row carries the epoch it was issued under (`Session.epoch`): `issueSession(user)` passes the epoch of the row its credential check read, and `addSession` inserts only while the user's epoch still equals it, under the user row's lock, or refuses (the login answers 401). `requireSession` (`http/sessions.ts`) refuses a session whose epoch is below the user's. The touch is conditional on the minute. Pruning is periodic (`store.pruneSessions`, hourly in `server.ts`), not part of `addSession` on Postgres; db.json also prunes on each add, as before | Login paused after its credential check while a recovery swaps the passkey: the login gets 401, or its session is refused on first use; never a live session on the old passkey. A passkey replacement approved from a session: that session still works, every other one is refused |
 | Imported-wallet proof | `batched` re-reads before writing (`routes/orgs.ts:1244-1294`) | `store.tx` with the wallet row locked | Two proofs at once: one wins, the other 409 (`wallet-proof-test`, on JSON and Postgres 17) |
 
 
@@ -358,12 +361,35 @@ in parallel on Postgres 17 in `check:pg`.
 | Last owner | Count of owners then the role change or deactivation (`routes/orgs.ts:606`→`:616`), synchronous today | Rule 4: the method locks the `organisations` row, counts active owners inside the lock, then writes | Two owners each demoting the other in parallel: one succeeds, one answers 409; one owner remains | S2 |
 | Four eyes | `canReviewDraft` compares reviewer and drafter (`routes/business/drafts.ts:282-309`), synchronous today | The review write is conditional on the draft's `updated_at` and drafter read with the check (`WHERE doc->>'updatedAt' = $read AND doc->>'createdByMemberId' = $drafterMember`, and the review state from rule 3), so an edit that makes the reviewer the drafter lands first or refuses the review | A line edit by the reviewer racing their own approval: the approval is refused | S2 |
 | Invoice numbers | `nextNumberOf(ctx.org, issueDate)` (`routes/business/issue-outgoing.ts:115`), then `addInvoice` (`:192`), the series bump (`:213-216`) and `updateInvoice` (`:237`), synchronous today | Rule 4: the series is on the organisation row (`invoicing.numberSeries`), so one store method locks that row `FOR UPDATE`, picks the number, inserts the invoice and bumps the series (rule 2) in one transaction; `UNIQUE(org_id, number)` on issued invoices (§1.2) refuses a duplicate whatever the code does, including a number typed by hand. A unique number per invoice is what §14 UStG requires | Two automatic issues in parallel: two different, consecutive numbers. A typed number racing an automatic one that picks it: one 409 | S2 |
-| Candide recovery | Execute after an admin reject re-checks nothing after its awaits (`routes/recovery-candide.ts:935`/`:947`→`:960`→`:972`→`:1006`, `GRACE_PERIOD` written unconditionally); finalize (`:295`→`:316`→`:350`/`:352`) likewise. Open today. The passkey step is guarded on current main by an in-memory `passkeySubmits` set around the guardian await and a re-read of the status after it (`passkeySubmits`, `recovery-candide.ts`, #227) | Rule 5: `EXECUTING` and `FINALIZING` reserves, each claimed with rule 3 from the status it requires before the chain call; a reject is a rule-3 write that refuses on a reserve. The passkey step keeps `passkeySubmits` (one process), held until its `OTP_PENDING` write has committed, not only around the guardian call: today it is cleared as the guardian answers, which is safe only while the re-read and write that follow are synchronous. That write becomes rule 3 `WHERE status='PASSKEY_PENDING'`. So a second submit is refused (409) from the guardian request until the commit, and never sends a second guardian request | Admin reject racing execute: either the reject wins and nothing goes on chain, or execute holds the reserve and the reject answers 409. A second passkey submit arriving after the guardian answered but before the write committed: 409, one guardian request | S4b |
-| Turnkey recovery | Re-checks at `recovery/turnkey-recovery.ts:185`, then `GRACE_PERIOD` unconditional at `:207` after awaits (`:187`, `:188`, `:196`); `signing` stops a second call in one process only | Rule 5: a `SIGNING` reserve claimed from the required status before the first await | Two starts in parallel: one signs | S4b |
+| Candide recovery | Execute after an admin reject re-checks nothing after its awaits (`routes/recovery-candide.ts:935`/`:947`→`:960`→`:972`→`:1006`, `GRACE_PERIOD` written unconditionally); finalize (`:295`→`:316`→`:350`/`:352`) likewise. Open today. The passkey step is guarded on current main by an in-memory `passkeySubmits` set around the guardian await and a re-read of the status after it (`passkeySubmits`, `recovery-candide.ts`, #227) | Rule 5: the `RELAYING` reserve Zoldenburg uses (`relaying: { from, at, token }`, `recovery.ts` `claimRelay` / `endRelay` / `releaseRelay`, each end conditional on the caller's own token), claimed with rule 3 before the partner call: from `OTP_PENDING` by the execute, from `GRACE_PERIOD` by a finaliser (the route or the sweep). The outcome is written only over the reserve (`GRACE_PERIOD`, `FINALIZED` with the passkey bind in one transaction); a failure gives it back. The reject and the expiry write only from `PASSKEY_PENDING` / `OTP_PENDING`, so they refuse a reserve; the in-memory `executing` set is gone. The start gate counts `RELAYING` as open. A reserve older than `RELAY_TIMEOUT_MS` was cut off by a restart: the sweep gives it back (from `GRACE_PERIOD` the next sweep finalizes from the chain's owners; from `OTP_PENDING` it logs at error that the module may hold a pending recovery, as such a crash left the row before). The passkey step keeps `passkeySubmits` (one process), held until its conditional `OTP_PENDING` write (`WHERE status='PASSKEY_PENDING'`) has committed, so a second submit is refused (409) from the guardian request until the commit, and never sends a second guardian request | Admin reject racing execute: either the reject wins and nothing goes on chain, or execute holds the reserve and the reject answers 409. Ten executes of one request: one holds the reserve; the expiry leaves it; one past the relay timeout is given back. Two finalisers: one asks the service. A finaliser cut off by the sweep that ends after a second finaliser claimed leaves the second one's reserve, and a third is refused (`scripts/candide-sweep-race-test.ts`; Turnkey in `scripts/identity-race-test.ts`; on JSON and Postgres 17). A second passkey submit arriving after the guardian answered but before the write committed: 409, one guardian request | S4b |
+| Turnkey recovery | Re-checks at `recovery/turnkey-recovery.ts:185`, then `GRACE_PERIOD` unconditional at `:207` after awaits (`:187`, `:188`, `:196`); `signing` stops a second call in one process only | Rule 5: the same `RELAYING` reserve, claimed from `REVIEW_PENDING` by the guardian's signature inside the transaction that re-checks it, before the first chain read, and from `GRACE_PERIOD` by a finaliser; the in-memory `signing` and `finishing` sets are gone. The outcome is written over the reserve; a relay that records nothing gives it back. The owner's cancel and the expiry write only from `PASSKEY_PENDING` / `REVIEW_PENDING`, and the cancel answers 409 `BEING_SIGNED` on a reserve. The sweep gives a stale reserve back; from `REVIEW_PENDING` its chain read then picks up a relay that landed | Five signatures of one request at once: one reads the module, four answer 409. Five finalisers: one relay, one bind (`scripts/identity-race-test.ts`, JSON and Postgres 17) | S4b |
 | Zoldenburg finalize | The finalize route, the admin route and the sweep each reached `finalizeZoldenburgRecovery` and `bindAndFinish` without `relaying`: a second bind set the registration `signCount` again (`recovery/recovered-passkey.ts`) and revoked sessions again, logging out the recovered device | Rule 5: `RELAYING` from `GRACE_PERIOD` (the row above) is the finalising reserve, reconciled by the sweep from the Safe's owners; a finaliser that finds it claimed relays nothing. `bindAndFinish` re-reads the request under the user's lock and binds only while it is not yet finalised or ended, so a sync and a finaliser bind once between them | Two finalisers in parallel: one relay, one bind; one arriving later binds nothing | S3b2 |
-| Monerium refresh | Single-flight per user in memory (`adapters/monerium-connection.ts:232`, `:245-249`) and a compare on `refreshTokenEnc` after the await (`:271-274`) on the live row | The compare moves into `storeMoneriumTokens(userId, expectedRefreshEnc, next)`: `WHERE doc->'monerium'->>'refreshTokenEnc' = $expected` on the locked row; no row means the connection changed and the new tokens are not written. Replacing API keys already compares the keys (`routes/business/org-monerium.ts:234`) and moves into its method the same way | Two refreshes with one token in parallel (single-flight bypassed): one stores, the other refuses; the stored refresh token is the newest | S4b |
-| Ceremony challenges | Login challenges are single-use and consumed on read (`webauthn.ts:157`, `consumeChallenge` `:205-210`). `verifyAssertionForChallenge` (9 callers) only compares; single use rests on each flow consuming its pending entry or claim | They stay in memory under the one-process invariant: a restart drops them and the user repeats the ceremony. For a money action the single-use point is the claim in the same transaction (`claimAuthorization`, `claimCryptoSend`, `pending_executions` deleted with the claim), so a replayed assertion finds nothing to claim. S4b lists each of the 9 callers with its single-use point; one without becomes `DELETE … RETURNING` on its pending row | Each caller: one assertion presented twice; the second is refused | S4b |
+| Monerium refresh | Single-flight per user in memory (`adapters/monerium-connection.ts:232`, `:245-249`) and a compare on `refreshTokenEnc` after the await (`:271-274`) on the live row | The compare moves into `storeMoneriumTokens(userId, expectedRefreshEnc, next)` (rule `moneriumTokensPatch`, `store/rules.ts`): on the locked row, an OAuth connection whose stored `refreshTokenEnc` equals the one spent, compared in constant time (`sameSecret`: SHA-256 of both, `timingSafeEqual`), in JavaScript on both backends; no match means the connection changed and the new tokens are not written. Replacing API keys already writes through `updateOrganisationIf`, its predicate comparing the keys on the stored row; that compare uses `sameSecret` too | Two refreshes with one token in parallel (single-flight bypassed): one stores, the other refuses; the stored refresh token is the newest | S4b |
+| Ceremony challenges | Login challenges are single-use and consumed on read (`webauthn.ts:157`, `consumeChallenge` `:205-210`). `verifyAssertionForChallenge` (9 callers) only compares; single use rests on each flow consuming its pending entry or claim | They stay in memory under the one-process invariant: a restart drops them and the user repeats the ceremony. For a money action the single-use point is the claim in the same transaction (`claimAuthorization`, `claimCryptoSend`, `pending_executions` deleted with the claim), so a replayed assertion finds nothing to claim. Every other caller takes its pending entry in one synchronous step (`Map.delete`, its result checked) before the first await after the lookup; a refused assertion puts it back. The callers and their single-use points are listed below the table | Each caller: one assertion presented twice; the second is refused (the Zoldenburg op, by a counter-less passkey: `scripts/zoldenburg-remove-test.ts`) | S4b |
 | One Safe, two accounts | `accounts` has no unique address; importer and add scan with `toLowerCase()` (`routes/safe-import.ts:271-276`, `routes/orgs.ts:792-804`, `store.ts:1167-1170`) | A plain `UNIQUE(lower(address))` would refuse real data: a sole trader's Safe backs their personal account and their business's, both with `backingUserId` set (`scripts/monerium-money-in-test.ts`). So the key is `UNIQUE(lower(address)) WHERE backing_user_id IS NULL`: a company Safe is one account. The add is `INSERT … ON CONFLICT … DO NOTHING RETURNING`, and no row back answers 409. A person's Safe in at most one business (`safeTakenBy`, `routes/orgs.ts`) is rule 4: both routes that put a person's Safe behind an account (open, `POST /accounts`, and fund, `POST /accounts/:id/fund`, its wallet-only branch too) re-check it and write in one `store.tx` holding the org row and `lockKey("safe:<address>")`. `cap_holds` rows are deleted under their cap's lock too, so a cap sum, which reads holds and rows in two statements, never counts a hold and its replacement both | Two companies opening an account on one person's Safe in parallel, and one funding while another opens: one gets the Safe, the other 409 (JSON and Postgres). Two owners connecting their own Safes to one account in parallel: one is connected, the other 409 (the org row and the `backingUserId` re-check; `invoicing-profile-test`). Three adds of one company Safe in parallel: one account | S3 |
+
+**Ceremony challenges, per caller** (`verifyAssertionForChallenge` and
+`checkOpAssertion`). The sign counter (`recordPasskeyUse`) refuses a replay
+only for an authenticator that counts; synced passkeys report 0, so the
+single-use point is the take below.
+
+| Caller | Single-use point |
+|---|---|
+| Transfer execution and Monerium redeem (`routes/transfers.ts`) | `claimAuthorization` with `dropPendingExecution`, one transaction |
+| Crypto send (`routes/crypto-sends.ts`) | `claimCryptoSend` with `dropPendingExecution`, one transaction |
+| Org multi-sig signature (`routes/business/safe-ops.ts`) | `addSafeOpSignature`, conditional on the op and the signer |
+| Deposit conversion (`routes/crypto-deposits.ts`) | `pendingDepositConversions.delete` before the first await, then the deposit's intent claim |
+| Safe signer op (`routes/safe-signers.ts`), Turnkey guardian op (`routes/recovery-turnkey.ts`), Candide guardian op and cancel (`routes/recovery-candide.ts`), company Safe link (`routes/business/org-monerium-iban.ts`), Monerium link signature (`routes/monerium.ts`) | the pending entry deleted before the first await |
+| Zoldenburg guardian add/remove (`routes/recovery-zoldenburg.ts`) | deleted before the chain read (was: after the submit); put back on a refused assertion or a submit that throws |
+| Personal passkey Safe deployment (`routes/auth.ts`), company Safe deployment (`routes/org-safe-deployment.ts`) | `delete` checked after the balance / plan reads (was: unchecked, so a second request past the lookup also submitted) |
+| Ownership letter signature (`routes/documents.ts`) | deleted before the assertion (was: after the Safe signature); put back on a refused assertion |
+| Candide channel registration and removal (`routes/recovery-candide.ts`) | `stage = "signing"` / the delete before the first await (was: after the Candide call); given back on a failure |
+
+The Monerium link challenges (`routes/monerium.ts`, `org-monerium-iban.ts`)
+are the hash of a fixed message per Safe, Monerium's own text, so one
+captured assertion verifies against any later request on that Safe; only the
+sign counter refuses it. A per-request nonce would change the message
+Monerium checks; not in #166.
 
 **Approvals waiting for a passkey are in the store.** Preparing a
 transfer's or a crypto send's UserOperation and approving it are separate
@@ -625,7 +651,11 @@ each new one. It resets the role's grants in the schema: `USAGE` on it and no
 `CREATE` (for `PUBLIC` either), `SELECT` on `schema_migrations` and
 `ledger_history`, `SELECT, INSERT` on `audit`, `SELECT, INSERT, UPDATE` on the
 kept tables above, and `SELECT, INSERT, UPDATE, DELETE` on the rest. No
-`TRUNCATE`, and nothing owned, so no DDL. `check:pg` creates a role per run
+`TRUNCATE`, and nothing owned, so no DDL. No temporary tables: it revokes
+`TEMPORARY` on the database from `PUBLIC` and the role, which only the
+database's owner can do, and raises if the role can still create one
+(`0007`), so it runs as the database owner. It finds its schema by
+`pg_namespace.nspname`, so a schema whose name needs quotes works. `check:pg` creates a role per run
 (a unique name, dropped at the end), runs the store suite as it, checks each
 refusal, and runs the API suites as it. `CONNECT`, `pg_hba` and `pg_ident` are
 §7's.
@@ -638,33 +668,88 @@ only: quote and session pruning, Shopify delivery pruning,
 
 ## 6. Data migration and cut-over
 
-**Importer** (`scripts/pg-import.ts`, S5):
+**Importer** (`scripts/pg-import.ts`, S5; the code is `store/pg/port.ts`):
 
-- Reads `db.json` with `loadStoreReadOnly` (`db.ts:229-232`), runs the
-  load-time migrations in memory, and writes every row in one transaction.
-- Idempotent: `INSERT … ON CONFLICT (id) DO NOTHING`, then compares. A
-  second run on the same file changes nothing and says so. A row present with
-  a different `doc` stops the run.
-- Before inserting, it reports what would break a constraint: duplicates for
-  each unique key and orphans for each foreign key (§1.2). Those are findings,
-  not repairs.
-- **Verify both ways:** per table, the row count and a SHA-256 over the rows
-  sorted by id, each in canonical JSON (sorted keys). The source side is the
-  snapshot after the load-time migrations ran in memory (they fill missing
-  fields and prune sessions, `db.ts:215-220`), not the raw file, so both
-  sides hash the same data. Computed from that snapshot and from
-  `SELECT doc` on Postgres; they must match. Then the export (below) is
-  checksummed against the same migrated snapshot. The raw file's SHA-256 is
-  recorded too, to name the input, not compared.
-- Never prints a row. Output is table names, counts and hashes.
+- Reads `db.json` with `loadMigratedSnapshot` (`store/db.ts`): the file as
+  `initStore` would serve it, the load-time migrations run in memory and
+  nothing written back. The raw file's SHA-256 is printed to name the input,
+  not compared. A file with a user who has no organisation yet is no stable
+  source (the migration gives them one under random ids, so every load is
+  another snapshot): the report says so, and import and verify refuse it
+  until the file has been loaded once by the JSON store. Session pruning
+  depends on the clock, so a verify run long after the import can find
+  `sessions` changed; the import verifies in the same run. For the same
+  reason a second import of one file is "nothing changed" only while no
+  session in it has died since the first; after that it is refused as
+  differing in `sessions`, and the first import stands. Import, verify and
+  export need `DATABASE_URL` (and `DATABASE_CA`) and no other deployment
+  setting: `store/db.ts` reads `config/env.ts`, not the config that loads the
+  signing keys.
+- `report <db.json>` needs no database and no deployment environment. It
+  lists what would break the import, each with the ids of the rows involved:
+  a duplicate for each unique key of the migrations (among them
+  `transfers.quote_id`, the unbacked account address and one Zoldenburg grace
+  period per user of `0003`, the issued invoice number of `0002`, and the
+  `payment_handles` namespace across users and organisations;
+  `pg-import-test` checks that every unique index of the migrations is
+  mirrored, and that the database refuses each duplicate the report finds);
+  a missing or duplicate id; a deposit without `logIndex`, `chainId` or `txHash` or with
+  a `logIndex` that is not an integer (`0005`, `0008`); a daily-cap amount
+  (`transfers.sendEur`, `cryptoSends.capEur`) that is not a finite number
+  (JSON writes NaN and Infinity as `null`); a cursor block or an outbox row
+  the typed columns refuse (the outbox check is the shape: an `attempts` past
+  the `integer` range or a date that does not exist passes it, and the insert
+  refuses the row, rolling back); a collection the schema has no table for,
+  or of the wrong shape, and a row that is not an object (the other rules
+  still run, so the report prints everything it found). Those
+  block the import. The orphans of each foreign key in §1.2 are listed too,
+  and do not block. Exit 1 when anything blocks.
+- `import <db.json>` runs the report and refuses on any blocking finding,
+  then refuses a schema that is not current and a target where an API holds
+  the start lock (it holds that lock until it is done, so no API starts
+  meanwhile). It writes every row in one transaction, in stored order, plus
+  `payment_handles` and `operator_credentials`, then reads everything back in
+  the same transaction and compares counts and hashes before the `COMMIT`. A
+  failed insert names the collection, the row id and the constraint or
+  SQLSTATE, never the driver's message (it quotes the value), and rolls back:
+  the target stays empty. Idempotent: a target that already holds exactly
+  this snapshot is left as it is and the run says so; any other non-empty
+  target is refused.
+- **Verify both ways** (`verify <db.json>`, and inside every import and
+  export): per collection, the row count and a SHA-256 over the rows in
+  stored order (the JSON array's, `seq` on Postgres; the cursor map sorted by
+  chain), each in canonical JSON (sorted keys), so a reordered row fails as a
+  changed one does. Reordered keys inside a row do not: the import keeps
+  them by storing the text `JSON.stringify` wrote (`json`, §1.1;
+  `pg-import-test` compares `doc::text`), not the verify. The source side is the migrated snapshot, so both sides
+  hash the same data. `payment_handles` and `operator_credentials`, filled
+  from the rows, are compared with what the rows say. Verify holds the start
+  lock too, so it refuses while an API writes, and reads in one
+  `REPEATABLE READ, READ ONLY` transaction. `verify` is for an import source:
+  an export is checked as written by `pg-export.ts --verify`, the export's
+  own check run again. Through the load-time migrations an export would not
+  come back unchanged: a signup on Postgres has no organisation yet (only the
+  JSON load makes one), so `verify` refuses it as unstable, and a dead
+  session not yet pruned mismatches `sessions`.
+- Never prints a row. Output is collection names, counts, hashes and row ids.
 
-**Export** (`scripts/pg-export.ts`): `SELECT doc` per table into the
-`Db` shape, so `db.json` can be rebuilt from Postgres. It is the rollback
-path and the test of the importer. The `Db` shape has `outbox` (the JSON
-backend keeps one) but no place for `ledger_history`, `cap_holds` or
-`pending_executions`; the export writes undelivered `outbox` rows into
-`db.json`'s `outbox`, and `ledger_history` to its own age-encrypted file next
-to the `db.json`.
+**Export** (`scripts/pg-export.ts`): every collection in the `Db` shape,
+read as the Postgres store reads it (`listCollection`), in one
+`REPEATABLE READ, READ ONLY` transaction that holds the start lock, so it
+refuses while an API runs. Still under the
+lock it writes the file owner-only, reads it back and verifies it against
+Postgres, and only then links it and the history file under their names,
+both or neither: it refuses to overwrite a file and leaves none behind when
+it fails. The db.json is plain, as the JSON backend serves it: it is written
+only to the data directory it is served from, or encrypted at once with
+`scripts/backup-db.sh` (AGENTS.md: no unencrypted copy). It is the rollback path and the test of the importer. The
+`Db` shape has `outbox` (the JSON backend keeps one) but no place for
+`ledger_history`, `cap_holds` or `pending_executions`; every `outbox` row goes
+into `db.json`'s `outbox` (the dead ones are listed), and `ledger_history`
+goes to its own age-encrypted file (`--ledger-history`, to the recipients of
+`scripts/_age.sh`). With history rows and no such file, the export refuses.
+`scripts/_age.sh` pins no linux-arm64 `age` build; S7 adds one for the
+Oracle host, and until then an export with history refuses there.
 
 **Cut-over** (the runbook is written in S7; the owner picks the time). The
 API and the data move together, from the Akash lease to the Oracle host
@@ -705,7 +790,8 @@ writes:
    it recorded is lost.
 4. `cap_holds` and `pending_executions` are dropped: holds expire anyway, and
    an approval in flight answers 410 and the user starts it again.
-5. Export, verify the export against Postgres (counts and hashes), then start
+5. Export (it verifies the file against Postgres, counts and hashes, before
+   it names it; `pg-export.ts --verify` runs that check again), then start
    the lease on that `db.json` and point the tunnel back.
 
 The encrypted `db.json` copies are kept until the owner deletes them.
@@ -1113,7 +1199,7 @@ stays the default until the cut-over.
 | S3b2 | `pending_executions` (`0004`), the deposit `CONVERTING` reserve with partials under rule 2, the Zoldenburg `RELAYING` status for the relay and the finalisation, and their §2 tests; the outbound-intent cut connection, the imported-wallet proof, the ledger writers and two owners connecting one account, in parallel on Postgres 17 | — |
 | S4a | Migration `0006`: the outbox and its worker (checkout hints, the merchant-link revoke hint, PAID hooks), on both backends; audit and no-delete triggers; `ledger_history`; the application role's grants (`zold_grant_app`), with the store suite and the API suites run as that role in `check:pg` | — |
 | S4b | Identity and recovery: `session_epoch`, the ceremony-challenge audit of the 9 callers, the Candide and Turnkey reserve statuses, the Monerium token compare in the store; their tests on JSON and Postgres 17 | — |
-| S5 | Importer, export, verify (§6), run against a copy of the testnet `db.json` on the local Postgres 17. Constraint findings reported to the lead. Before S8: run the duplicate report for `transfers.quote_id`, the unbacked account address, one Zoldenburg grace period per user (`0003`) and the issued invoice number (`0002`) against copies of the testnet and the mainnet `db.json`, and record the result on the board: a duplicate there fails the import at the insert | — |
+| S5 | Importer, export, verify and the pre-import report (§6); migration `0008`: `cap_holds` refuses `'Infinity'`, the deposit key's `chain_id` and `tx_hash_lc` are `NOT NULL`. Tests on PGlite in `check` and on Postgres 17 in `check:pg`. Before S8: run the report against copies of the testnet and the mainnet `db.json` (`npm run pg-import -- report <copy>`) and record the counts per rule on the board: a blocking finding there refuses the import, and an orphan decides whether its foreign key goes in (§1.2) | — |
 | S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |
 | S7 | The Oracle host (§7): Postgres 17 and roles, two clusters with peer authentication, pgBackRest to Object Storage in two regions, the dump bucket with its retention rule, the archiver and disk alerts, the one-repository-down test, systemd units, the deploy pipeline in place of the Akash leg, the aarch64 toolchain check, the cut-over runbook, the host-loss runbook and provisioning script (§7.1) including the `hub` database, its roles, grants and limits (§7.2), and the first restore drill onto a new instance and the first testnet rebuild, both timed. Each cluster is made with `pg_createcluster --encoding=UTF8` and a UTF-8 locale (the email key's `\u` escapes and `lower()` depend on them, `0003`). The runbook says: after a migration, a bad deploy is fixed forward, never by redeploying an older build (`assertSchemaCurrent` refuses a schema ahead of the code) | recovery-time target accepted; host access |
 | S8 | Cut-over (§6): testnet, then app.zoldhq.com. `STORE_BACKEND=postgres` becomes the default; the JSON backend stays one release as the rollback path, then goes | the owner picks the time |

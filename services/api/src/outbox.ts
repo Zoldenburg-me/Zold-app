@@ -78,8 +78,13 @@ async function deliverOne(row: OutboxRow, h: OutboxHandler): Promise<void> {
   // The claim counts the attempt before the send, so a claim past the limit
   // means the last attempt's lease ran out unsettled (a crash, or a save that
   // failed): its outcome is unknown, and the row ends there, not sent again.
+  // Or the limit was lowered since the last attempt was settled: that
+  // attempt's error is the row's real one, and is kept. A stored error names
+  // its attempt, so an earlier retry's error never stands for a lost one.
   if (row.attempts > h.maxAttempts) {
-    const reason = `attempt ${row.attempts - 1} was not settled before its lease ran out; outcome unknown`;
+    const reason = row.lastError?.startsWith(attemptTag(row.attempts - 1))
+      ? `${row.lastError} (attempt ${row.attempts} is past the limit of ${h.maxAttempts}; not sent again)`
+      : `attempt ${row.attempts - 1} was not settled before its lease ran out; outcome unknown`;
     if (await store.settleOutbox(row.id, row.attempts, { ok: false, error: reason, dead: true })) {
       outboxMetrics.dead++;
       console.error(`outbox: ${row.kind} ${row.id} dead: ${reason}`);
@@ -108,7 +113,11 @@ async function deliverOne(row: OutboxRow, h: OutboxHandler): Promise<void> {
   }
 }
 
-async function settleFailed(row: OutboxRow, h: OutboxHandler, reason: string): Promise<void> {
+/** The prefix of a failed attempt's stored error. */
+const attemptTag = (n: number) => `attempt ${n}: `;
+
+async function settleFailed(row: OutboxRow, h: OutboxHandler, failure: string): Promise<void> {
+  const reason = `${attemptTag(row.attempts)}${failure}`;
   if (row.attempts >= h.maxAttempts) {
     if (await store.settleOutbox(row.id, row.attempts, { ok: false, error: reason, dead: true })) outboxMetrics.dead++;
     console.error(`outbox: ${row.kind} ${row.id} dead after ${row.attempts} attempts: ${reason}`);
@@ -117,7 +126,7 @@ async function settleFailed(row: OutboxRow, h: OutboxHandler, reason: string): P
   const wait = backoffMs(h, row.attempts);
   if (!(await store.settleOutbox(row.id, row.attempts, { ok: false, error: reason, retryInMs: wait }))) return;
   outboxMetrics.retried++;
-  console.error(`outbox: ${row.kind} ${row.id} attempt ${row.attempts} failed (${reason}); retrying in ${Math.round(wait / 1000)} s`);
+  console.error(`outbox: ${row.kind} ${row.id} attempt ${row.attempts} failed (${failure}); retrying in ${Math.round(wait / 1000)} s`);
   setTimeout(kickOutbox, wait + 5).unref();
 }
 
