@@ -811,7 +811,9 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         }, `Your Monerium profile already has an IBAN ${where} — move ${one ? "it" : "one"} to this account, or keep ${one ? "it" : "them"} where ${one ? "it is" : "they are"}`);
       }
 
-      const updated = await store.patchUserSub(user.id, "monerium", (m) => ({ ...m!, profileId, ...snapshot }), {
+      // The row as stored, held: `user` was read before the Monerium calls, and
+      // KYC may have moved (manual_review, rejected) since. Approve from this.
+      const updated = await store.tx(async () => { const fresh = (await store.lockUser(user.id)) ?? user; return await store.patchUserSub(user.id, "monerium", (m) => ({ ...m!, profileId, ...snapshot }), {
         // What Monerium attributes to THIS address, or nothing. Falling back to
         // a previously stored value would preserve a mis-attribution.
         iban,
@@ -820,7 +822,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         // "duplicate" answer on both proves nothing about THIS address, and an
         // IBAN not yet issued is iban_pending, which refreshPendingIban resolves
         // and approves when it lands.
-        ...(viaApp || !iban || !mayApproveOnIban(user)
+        ...(viaApp || !iban || !mayApproveOnIban(fresh)
           ? {}
           : {
               kycStatus: "approved" as const,
@@ -838,7 +840,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           moneriumProfileId: profileId,
           detail: iban ? undefined : "Monerium IBAN requested; waiting for activation",
         },
-      });
+      }); });
       const balances = await shownBalances(updated.address);
       res.json({ ...(await publicUser(updated)), ...balances });
     }),
@@ -1005,11 +1007,13 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (confirmed) {
         const iban = ibanKey(landed[0].iban);
         await releaseIbanFromOtherUsers(iban, user.id);
-        updated = await store.patchUserSub(user.id, "monerium", (m) => ({ ...m!, profileId: ibanProfile, ...after }), {
+        // The row as stored, held: `user` was read before the Monerium calls, and
+        // KYC may have moved (manual_review, rejected) since. Approve from this.
+        updated = await store.tx(async () => { const fresh = (await store.lockUser(user.id)) ?? user; return await store.patchUserSub(user.id, "monerium", (m) => ({ ...m!, profileId: ibanProfile, ...after }), {
           iban,
           moneriumIbanElsewhere: undefined,
           moneriumIbanMoves: moves,
-          ...(!mayApproveOnIban(user)
+          ...(!mayApproveOnIban(fresh)
             ? {}
             : {
                 kycStatus: "approved" as const,
@@ -1028,7 +1032,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
             moneriumProfileId: ibanProfile,
             detail: undefined,
           },
-        });
+        }); });
         updated = await store.updateUser(user.id, { moneriumIbanMoves: confirmedMoves(updated, iban) });
       } else {
         updated = await store.patchUserSub(user.id, "monerium", (m) => (after ? { ...m!, profileId: ibanProfile, ...after } : m), {
@@ -1126,12 +1130,14 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       const keepsIban = !notOffered && !ownIban && user.funding?.status === "active" && storedIbanOnProfile(user, verified.ibans, profileId);
       const dropIban = Boolean(user.iban) && !ownIban && !keepsIban;
       const now = new Date().toISOString();
-      const wasApproved = user.kycStatus === "approved";
-
-      const updated = await store.updateUser(user.id, {
+      // The row as stored, held: `user` was read before the Monerium calls, and
+      // KYC may have moved (manual_review, rejected) since. Approve from this.
+      const updated = await store.tx(async () => { const fresh = (await store.lockUser(user.id)) ?? user;
+      const wasApproved = fresh.kycStatus === "approved";
+      return await store.updateUser(user.id, {
         moneriumConnect: undefined,
         moneriumRefusal: undefined,
-        ...(wasApproved || !mayApproveOnIban(user)
+        ...(wasApproved || !mayApproveOnIban(fresh)
           ? {}
           : ownIban
             ? {
@@ -1184,7 +1190,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
           ibans: verified.ibans,
           addresses: verified.addresses,
         },
-      });
+      }); });
       forgetUserClient(user.id);
       await store.audit(auditEntry(
         "partner.credentials_connected",
