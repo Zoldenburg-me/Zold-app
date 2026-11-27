@@ -220,7 +220,9 @@ async function recheckMoved(io: OrgMoneriumIbanIo, orgId: string, userId?: strin
   } catch (err) {
     throw moneriumFailure("reading the company’s IBANs", err);
   }
-  const ours = list.find((i) => i.profile === m.profile.id && i.state === "approved" && paysIntoSafe(i, plan.address));
+  const found = list.find((i) => i.profile === m.profile.id && i.state === "approved" && paysIntoSafe(i, plan.address));
+  // As recheckIssued: two records for one IBAN decide nothing, so it stays moved.
+  const ours = found && list.filter((i) => normalizeIban(i.iban) === normalizeIban(found.iban)).length === 1 ? found : undefined;
   // Written only against the account and keys as they are now.
   await store.tx(async () => {
     const cur = await stillKeys(orgId, m);

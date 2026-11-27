@@ -487,6 +487,16 @@ try {
       await recheckCompanyIbans(stale as any);
       assert.equal((await account()).status, "active");
       assert.equal((await account()).moneriumIban?.movedAwayAt, undefined, "the stale read does not put the move back");
+      // Moved again; then conflicting records (one on the Safe, one elsewhere) do not reopen it.
+      mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
+      await recheckCompanyIbans(io as any);
+      await gatedStill();
+      mon.ibans = [
+        { iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" },
+        { iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" },
+      ];
+      await recheckCompanyIbans(io as any);
+      await gatedStill();
     } finally {
       (MONERIUM as any).ibanCheckMs = savedMs;
     }

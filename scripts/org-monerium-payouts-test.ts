@@ -594,6 +594,10 @@ try {
     const settings = readFileSync(path.join(ROOT, "services/api/public/business/settings.js"), "utf8");
     assert.match(settings, /companyIban\?\.state === "moved"\)\);\n  let payouts = withPayouts/);
     assert.match(settings, /issued \|\| moved \? payoutsHtml\(payouts, payoutsOn, keys\?\.status === "connected", issued\)/);
+    assert.match(settings, /el\.outerHTML = payoutsHtml\(p, payoutsOn, keys\?\.status === "connected", issued\)/, "the list filled in later offers no send either");
+    assert.doesNotMatch(settings, /payoutsHtml\([^)]*"connected"\)/, "every call says whether the IBAN is here");
+    assert.match(settings, /on && keysOk && ibanHere && roleCan/, "no Pay a bank account while it is away");
+    assert.match(settings, /!ibanHere \? `[^`]*IBAN was moved to another address[^`]*no longer reach this account/, "the moved-away note in its place");
   });
 
   await check("a payout being answered by Monerium is not counted twice against the next one", async () => {

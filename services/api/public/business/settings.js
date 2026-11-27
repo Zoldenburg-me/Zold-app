@@ -93,7 +93,8 @@ function payoutsHtml(payouts, on, keysOk, ibanHere = true) {
     : "";
   const off = !on ? `<p class="zb-hint">Bank payouts from the company’s IBAN are switched off on this deployment.</p>`
     : !keysOk ? `<p class="zb-hint">Connect the company’s Monerium keys again to send a payout. The history below stays readable.</p>`
-    : !ibanHere ? `<p class="zb-hint">Monerium now pays the company’s IBAN elsewhere, so no new payout can be sent from it. The history below stays readable.</p>` : "";
+    // As IBAN_MOVED_AWAY (app/monerium.js); moving it back is not built for a company.
+    : !ibanHere ? `<p class="zb-hint"><strong>The company’s IBAN was moved to another address at Monerium.</strong> Payments to it no longer reach this account, and no payout can be sent from it. The history below stays readable.</p>` : "";
   const body = payouts === undefined
     ? `<p class="zb-hint">Loading payouts…</p>`
     : payouts === null
@@ -194,7 +195,7 @@ RENDER.settings = async () => {
       payoutsLoad?.then((p) => {
         payouts = p;
         const el = root.querySelector("#om-payouts");
-        if (el) el.outerHTML = payoutsHtml(p, payoutsOn, keys?.status === "connected");
+        if (el) el.outerHTML = payoutsHtml(p, payoutsOn, keys?.status === "connected", issued);
       });
       root.addEventListener("click", (ev) => {
         const b = ev.target.closest("[data-ss]");
