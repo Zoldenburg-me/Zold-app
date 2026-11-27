@@ -15,6 +15,8 @@ import { CHAIN_ID, IS_PRODUCTION, MONERIUM, PAYMENT_REQUESTS, PUBLIC_URL, RESOLV
 import { store, type CryptoDeposit, type OutboxRow, type User } from "../store.js";
 import {
   buildBankSettlement,
+  liveInvoice,
+  liveInvoiceId,
   orderNamesInvoice,
   payableEur,
   settlementRef,
@@ -182,6 +184,9 @@ async function assertInvoiceCollectable(invoiceId: string, orgId: string | undef
   if (invoice.state === "DRAFT") throw new PaymentRequestError("that invoice is a draft and has not been issued", 409);
   if (invoice.state === "PAID" || invoice.state === "RECONCILED") {
     throw new PaymentRequestError("that invoice is already settled", 409);
+  }
+  if (invoice.state === "REPLACED") {
+    throw new PaymentRequestError(`that invoice was replaced by ${invoice.replacedBy?.number ?? "a correction"}; collect that one`, 409);
   }
   return invoice;
 }
@@ -707,8 +712,9 @@ async function recordBankSettlement(
   if (!(await store.findInvoice(invoiceId))) return;
   const s = buildBankSettlement(order, matchedOn);
   // Already booked: the poll re-sees it every pass and must not rewrite the
-  // db. Checked on the stored row, in the same write.
-  await store.settleInvoice(invoiceId, settlementRef(s), (row) => settlementUpdate(row, s));
+  // db. Checked on the stored row, in the same write. A replaced invoice's
+  // money is its correction's.
+  await store.settleInvoice(await liveInvoiceId(invoiceId, (id) => store.findInvoice(id)), settlementRef(s), (row) => settlementUpdate(row, s));
 }
 
 /**
@@ -739,15 +745,14 @@ export async function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike):
     // Safe receiving a payment that quotes the company's invoice number is the
     // member's money, and must not close the company's invoice.
     const orgIds = await orgsBackedBy(user.id);
-    const named = (await store.list("invoices")).filter(
-      (invoice) =>
-        invoice.direction === "outgoing" &&
-        orgIds.has(invoice.orgId) &&
-        invoice.state !== "DELETED" &&
-        invoice.state !== "PAID" &&
-        invoice.state !== "RECONCILED" &&
-        orderNamesInvoice(order, invoice),
-    );
+    // A transfer quoting a replaced invoice's number pays its correction:
+    // the customer may still have the first one. Each counted once.
+    const all = await store.list("invoices");
+    const named = [...new Map(all
+      .filter((invoice) => invoice.direction === "outgoing" && orgIds.has(invoice.orgId) && orderNamesInvoice(order, invoice))
+      .map((invoice) => liveInvoice(all, invoice)!)
+      .filter((invoice) => invoice.state !== "DELETED" && invoice.state !== "PAID" && invoice.state !== "RECONCILED" && invoice.state !== "REPLACED")
+      .map((invoice) => [invoice.id, invoice])).values()];
     if (named.length === 1) {
       await recordBankSettlement(named[0].id, order, "invoice-number");
     } else if (named.length > 1) {

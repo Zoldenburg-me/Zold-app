@@ -68,7 +68,7 @@ const issuerExtras = async (invoice: Invoice) => {
   ]
     .filter(Boolean)
     .join(" · ");
-  const settled = invoice.state === "PAID" || invoice.state === "RECONCILED";
+  const settled = invoice.state === "PAID" || invoice.state === "RECONCILED" || invoice.state === "REPLACED";
   return {
     bank: org ? (await invoiceBankOf(org)) : undefined,
     footerNote: footerNote || undefined,

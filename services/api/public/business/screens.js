@@ -238,7 +238,7 @@ RENDER.members = async () => {
    Invoices
    ========================================================================== */
 
-const INV_FILTERS = [["open", "Open"], ["paid", "Paid"], ["overdue", "Overdue"]];
+const INV_FILTERS = [["open", "Open"], ["paid", "Paid"], ["overdue", "Overdue"], ["replaced", "Replaced"]];
 export const iv = { filter: "open", side: "issued", invoices: [] };
 
 /* Who an invoice is to or from. A draft made from receipts has no recipient
@@ -252,6 +252,7 @@ const monthWord = (m) => new Date(`${m}-15T12:00:00Z`).toLocaleDateString("en-GB
 export function invWord(i) {
   if (i.state === "DRAFT") return "DRAFT";
   if (["PAID", "RECONCILED"].includes(i.state)) return "PAID";
+  if (i.state === "REPLACED") return "REPLACED";
   if (i.state === "PAYING") return "IN FLIGHT";
   if (i.state === "LINK_CREATED") return "WAITING";
   return i.overdue ? "OVERDUE" : "OPEN";
@@ -261,7 +262,7 @@ export const invAmount = (i) => (i.issued && Number.isFinite(i.issued.grossCents
   : { value: Number(i.total) || 0, currency: i.currency || "EUR" });
 const invIn = (f, i) => {
   const w = invWord(i);
-  return f === "paid" ? w === "PAID" : f === "overdue" ? w === "OVERDUE" : w !== "PAID";
+  return f === "paid" ? w === "PAID" : f === "overdue" ? w === "OVERDUE" : f === "replaced" ? w === "REPLACED" : w !== "PAID" && w !== "REPLACED";
 };
 
 META.invoices = () => ({
@@ -363,6 +364,8 @@ export function invoiceDrawer(i, trigger) {
     [out ? "Customer" : "Supplier", who],
     ["Amount", Z.formatMoney(a.value, a.currency)],
     ["Due", i.dueDate ? day(ymd(i.dueDate)) : "None"],
+    ...(i.issued?.corrects ? [["Corrects", `${i.issued.corrects.number} of ${day(ymd(i.issued.corrects.issueDate))}`]] : []),
+    ...(i.replacedBy ? [["Replaced by", `${i.replacedBy.number} of ${day(ymd(i.replacedBy.issueDate))}`]] : []),
   ];
   document.getElementById("inv-drawer")?.remove();
   document.body.insertAdjacentHTML("beforeend", Z.overlay({

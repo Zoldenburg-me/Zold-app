@@ -324,6 +324,11 @@ Say this plainly rather than letting the surface imply otherwise:
   wallet and resumes from the same block once the ceiling is raised. One
   person owns at most 20 business orgs; a second account, or handing an
   org's ownership to one, still gets around that.
+- **No corrected invoice has been issued outside the test suite.** `POST
+  /api/orgs/:org/invoices/:id/correct` (routes/business/invoicing.ts) has run
+  only in `scripts/invoice-correction-test.ts`: no customer has received one,
+  no tax adviser has read the printed reference, and no payment has yet
+  settled a correction through a replaced invoice's number or deposit.
 - **Invoices made from wallet receipts have run only against local hardhat**
   (2026-10-03: a payer rule saved, one EURe receipt of €300.00 collected into
   a draft, two unlisted-token receipts listed as not included, and the draft

@@ -1033,6 +1033,32 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/pay`, { method: "POST", body: {} });
     toast(plain(r.note) || "Payment run drafted. It’s in Approvals.");
   },
+  "correct-invoice": (el) => {
+    const id = el.dataset.id;
+    const correct = async (acceptWarnings) => {
+      const r = await api(`/api/orgs/${org.id}/invoices/${id}/correct`, { method: "POST", body: acceptWarnings ? { acceptWarnings: true } : {} });
+      const showLink = () => setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} replaces ${el.dataset.number}`,
+        "Send your customer this link. The old invoice’s link now says it was replaced, and its payment link no longer takes money.", location.origin + r.linkPath), 0);
+      try { await render(); } finally { showLink(); }
+    };
+    Z.closeOverlay("inv-drawer");
+    dialog(`Correct invoice ${el.dataset.number}?`,
+      `<p class="desc">A new invoice with the next number and today’s date, the same customer, lines and amount, and your business details as they are now. It says which invoice it replaces.</p>
+       <p class="desc" style="margin-top:8px">The old invoice stays in your records, marked replaced. Any payment on it counts for the new one.</p>`,
+      async () => {
+        try {
+          await correct(false);
+        } catch (e) {
+          if (e.status === 409 && e.warnings?.length) {
+            setTimeout(() => dialog("Issue it with these warnings?", `<ul class="desc" style="margin:8px 0 0 18px">${e.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
+              <p class="desc" style="margin-top:12px">Your acceptance is recorded on the invoice.</p>`, () => correct(true), { okLabel: "Issue anyway" }), 0);
+            return;
+          }
+          throw e;
+        }
+      }, { okLabel: "Issue corrected invoice" });
+    return "keep";
+  },
   "reconcile-invoice": (el) => dialog("Mark this invoice as paid",
     `${field("d-note", 'Note <span class="desc">(optional)</span>', 'placeholder="Paid from the company’s other bank account on 3 Sept…"')}`,
     async () => {

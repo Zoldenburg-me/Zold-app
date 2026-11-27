@@ -40,7 +40,7 @@ import { safeDebitBlocker } from "../orchestrator.js";
 import { walletBlocker } from "../domain/wallet-tier.js";
 import { midRates, referenceRate } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
-import { buildCryptoSettlement, settlementRef, settlementUpdate } from "../domain/invoices.js";
+import { buildCryptoSettlement, liveInvoiceId, settlementRef, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
 import { conversionOutputs, depositOwner } from "../transfers/conversion-outputs.js";
@@ -668,9 +668,11 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
 export async function recordInvoiceSettlement(deposit: CryptoDeposit): Promise<void> {
   if (!deposit.invoiceId || !(await store.findInvoice(deposit.invoiceId))) return;
   const s = buildCryptoSettlement(deposit);
+  // A replaced invoice's money is its correction's.
+  const invoiceId = await liveInvoiceId(deposit.invoiceId, (id) => store.findInvoice(id));
   // Computed from the stored row; a converted deposit rewrites its own
   // settlement under the same ref (withSettlement), never adds a second.
-  await store.settleInvoice(deposit.invoiceId, settlementRef(s), (row) => settlementUpdate(row, s), true);
+  await store.settleInvoice(invoiceId, settlementRef(s), (row) => settlementUpdate(row, s), true);
 }
 
 

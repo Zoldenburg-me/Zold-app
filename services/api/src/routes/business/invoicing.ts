@@ -29,7 +29,7 @@ import { VAT_ID_FORMATS, vatIdShape } from "../../domain/vat-ids.js";
 import { cachedVatCheck, checkVatId } from "../../adapters/vies.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
-import { issueOutgoing } from "./issue-outgoing.js";
+import { correctable, correctionBody, issueOutgoing } from "./issue-outgoing.js";
 import { payLinkForInvoice } from "./invoice-pay-link.js";
 import { baseUrlFor } from "../payment-requests.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
@@ -313,6 +313,39 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     if (!issued) return res.status(answer.status).json(answer.body);
     const payment = await payLinkForInvoice(ctx, issued, baseUrlFor(req));
     res.status(201).json({ ...answer.body, payment });
+  }));
+
+  /**
+   * Issue a correction of an issued invoice (§ 31 Abs. 5 UStDV): a new number
+   * printing "corrects invoice N of date", with the issuer's details as the
+   * profile has them now, in place of the original. The original is kept as
+   * REPLACED, never deleted; its payments move with it and its open link is
+   * cancelled. The amount cannot change here.
+   */
+  r.post("/:orgId/invoices/:invoiceId/correct", wrap(async (req, res) => {
+    const ctx = await ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "invoices.manage")) return;
+    const original = await store.findInvoice(String(req.params.invoiceId));
+    if (!original || original.orgId !== ctx.org.id || original.direction !== "outgoing" || !original.issued) {
+      return res.status(404).json({ error: "no such invoice" });
+    }
+    if (!correctable(original)) {
+      return res.status(409).json({
+        error: original.replacedBy
+          ? `This invoice was already replaced by ${original.replacedBy.number}. Correct that one instead.`
+          : "Only an open or paid invoice you issued can be corrected here.",
+      });
+    }
+    const answer = await issueOutgoing(ctx, correctionBody(original, req.body?.acceptWarnings === true), undefined, undefined, original);
+    const issuedId = answer.status === 201 ? (answer.body.invoice as { id?: string } | undefined)?.id : undefined;
+    const issued = issuedId ? (await store.findInvoice(issuedId)) : undefined;
+    if (!issued) return res.status(answer.status).json(answer.body);
+    await store.audit(auditEntry("org.invoice_corrected", { orgId: ctx.org.id, memberId: ctx.member.id, invoiceId: original.id, correctionId: issued.id }, ctx.userId));
+    // A paid original's money is the correction's: nothing is left to collect.
+    const payment = issued.state === "PAID" ? undefined : await payLinkForInvoice(ctx, issued, baseUrlFor(req));
+    res.status(201).json({ ...answer.body, ...(payment ? { payment } : {}) });
   }));
 
   // ── Chart of accounts ─────────────────────────────────────────────────────

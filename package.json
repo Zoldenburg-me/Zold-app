@@ -187,6 +187,7 @@
     "draft:test": "tsx scripts/draft-execution-test.ts",
     "draft:failure:test": "tsx scripts/draft-batch-failure-test.ts",
     "invoicing:test": "tsx scripts/invoicing-test.ts",
+    "invoice-correction:test": "tsx scripts/invoice-correction-test.ts",
     "invoice-form:test": "tsx scripts/invoice-form-test.ts",
     "invoicing-profile:test": "tsx scripts/invoicing-profile-test.ts",
     "send-link:test": "tsx scripts/send-link-test.ts",

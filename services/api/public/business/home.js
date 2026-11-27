@@ -353,7 +353,7 @@ function attention({ waiting, invoices, lines, accounts }) {
       "Submitted through your invoice link",
       `<button type="button" class="z-btn z-btn--primary" data-act="inv-suppliers"><span>Review</span></button>`));
   }
-  const late = (invoices || []).filter((i) => i.direction === "outgoing" && i.overdue && !["PAID", "RECONCILED", "DELETED", "DRAFT"].includes(i.state));
+  const late = (invoices || []).filter((i) => i.direction === "outgoing" && i.overdue && !["PAID", "RECONCILED", "REPLACED", "DELETED", "DRAFT"].includes(i.state));
   if (late.length) {
     const first = late[0];
     const who = first.issued?.recipient?.name || "Customer";
@@ -499,7 +499,7 @@ RENDER.overview = async () => {
   const cards = [];
   if (invoices) {
     const out = invoices.filter((i) => i.direction === "outgoing" && i.state !== "DELETED");
-    const open = out.filter((i) => !["PAID", "RECONCILED", "DRAFT"].includes(i.state));
+    const open = out.filter((i) => !["PAID", "RECONCILED", "REPLACED", "DRAFT"].includes(i.state));
     const late = open.filter((i) => i.overdue);
     const paid = out.filter((i) => ["PAID", "RECONCILED"].includes(i.state) && within(i.payment?.paidAt || i.payment?.manual?.at, 30));
     // Euros are summed; an invoice in another currency is counted beside the sum, never added into it.

@@ -674,9 +674,14 @@ export function invoiceActions(i, payLink) {
       <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="discard-receipt-draft" data-id="${esc(i.id)}">Discard draft</button>`;
   }
   if (i.direction === "outgoing") {
-    return i.state === "SUBMITTED" && payLink?.allowed
-      ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-pay-link" data-id="${esc(i.id)}">Payment link</button>`
+    // A correction replaces an open or paid invoice (POST …/correct): the
+    // same states the API accepts, for a member who may issue.
+    const correct = i.issued && !i.replacedBy && ["SUBMITTED", "PAID"].includes(i.state) && roleCan(org.role, "invoices")
+      ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="correct-invoice" data-id="${esc(i.id)}" data-number="${esc(i.issued.number)}">Issue corrected invoice</button>`
       : "";
+    return `${i.state === "SUBMITTED" && payLink?.allowed
+      ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-pay-link" data-id="${esc(i.id)}">Payment link</button>`
+      : ""}${correct}`;
   }
   // A member who may not act on it sees no button the API would refuse.
   if (["SUBMITTED", "PAID"].includes(i.state) && !mayActOnInvoice(i)) return "";

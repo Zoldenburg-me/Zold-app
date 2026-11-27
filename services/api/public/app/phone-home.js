@@ -133,7 +133,7 @@ async function phLoadHomeData() {
 }
 
 /* Invoices sent and not paid yet. A draft was never sent, so it is not open. */
-const PH_INV_CLOSED = ["DRAFT", "PAID", "RECONCILED", "DELETED"];
+const PH_INV_CLOSED = ["DRAFT", "PAID", "RECONCILED", "REPLACED", "DELETED"];
 /* What is still owed, in euro, the way the API closes an invoice
    (domain/invoices.ts settlementUpdate): the euro figure frozen at issue
    less the payments already put on it. An invoice with no frozen figure is
