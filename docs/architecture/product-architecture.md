@@ -885,7 +885,6 @@ go (Lexware CSV, a GetMyInvoices bank account, MT940 or CAMT).
 | add-on | gated by | status |
 |---|---|---|
 | **Gnosis Pay card** | user segment (`gnosis_pay`, EU_FULL only) | BUILT, UNPROVEN, read-only. The user signs in with their own browser wallet (SIWE on Gnosis Chain) and sees balances, cards and transactions. Zold never stores the token. Sign-up, KYC, card issuance and funding are not built. |
-| **Privacy Bundle** (eSIM + VPN) | per user, KYC approved, only where `capabilities.privacyBundle` is true: `PRIVACY_BUNDLE_ENABLED=1` AND `KOKIO_LIVE=1` AND `MYSTERIUM_LIVE=1` (off by default) | NOT LIVE. Nothing bills it and no partner is called. While the capability is false the app draws no offer and `POST /users/:id/privacy-bundle` answers 503 `PRIVACY_BUNDLE_UNAVAILABLE` before recording anything. |
 | **Zold card (Immersve)** | — | NOT BUILT. Proposal only. `cards` is unavailable in every plan. |
 
 ---

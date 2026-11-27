@@ -393,6 +393,9 @@ try {
     MONERIUM_REDIRECT_URI: `${API}/api/monerium/oauth/callback`,
     MONERIUM_TOKEN_ENCRYPTION_KEY: ENC_KEY,
     MONERIUM_POLL_MS: "3600000",
+    // Every account read re-checks a pending IBAN: the steps below poll it
+    // back to back.
+    MONERIUM_IBAN_CHECK_MS: "0",
     CANDIDE_CHAIN_ID: "31337",
     CANDIDE_RPC_URL: RPC_URL,
     // Blank on purpose: a passkey-only Safe links to Monerium with no

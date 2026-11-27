@@ -1,5 +1,5 @@
 /**
- * Accounts: signup, the account read, the KYC state, and the privacy bundle.
+ * Accounts: signup, the account read and the KYC state.
  *
  * The country, citizenship and US answers resolve to a segment, whose
  * capabilities every later route checks: at signup when the body carries
@@ -15,16 +15,15 @@
 import express from "express";
 import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
-import { EMAIL_VERIFICATION, KYC, PRIVACY_BUNDLE, privacyBundleLive } from "../config.js";
+import { EMAIL_VERIFICATION, KYC } from "../config.js";
 import { accountBalances } from "../chain.js";
 import { auditEntry, redact } from "../audit.js";
 import { normaliseCountryCode } from "../country-policy.js";
 import { resolveSegment, type Segment } from "../domain/segments.js";
 import { store, type User } from "../store.js";
-import { requireKycApproved } from "../http/guards.js";
 import { publicUser, withSession } from "../users/public-user.js";
 import { cleanName, cleanPersonName, nameChange } from "../users/display-name.js";
-import { findIbanBic, refreshPendingIban, verifyIbanBinding } from "../adapters/monerium-sandbox.js";
+import { findIbanBic, refreshPendingIbanThrottled, verifyIbanBinding } from "../adapters/monerium-sandbox.js";
 import { normalizeIban } from "../sepa.js";
 import { emailHeldBy, emailLooksValid } from "../domain/email.js";
 import { describeCause, redactedMessage } from "../http/log-cause.js";
@@ -41,23 +40,6 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string
 export interface UserDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 }
-
-
-function publicPrivacyPlan(plan: (typeof PRIVACY_BUNDLE.plans)[number]) {
-  const grossMarginBps = Math.round(((plan.priceEur - plan.estimatedCostEur) / plan.priceEur) * 10_000);
-  return {
-    ...plan,
-    grossMarginBps,
-    marginProtected: grossMarginBps >= PRIVACY_BUNDLE.minMarginBps,
-  };
-}
-
-function nextMonthlyRenewal() {
-  const d = new Date();
-  d.setUTCMonth(d.getUTCMonth() + 1);
-  return d.toISOString();
-}
-
 
 /** Wording versions: the three separate questions, and the single combined
  *  one the app asks now. Recorded with every answer so a later reading knows
@@ -285,23 +267,25 @@ export function createUserRouter(deps: UserDeps) {
           ? { mode: "sandbox", status: "active", detail: "hardhat harness account — no Monerium IBAN exists on this chain" }
           : { mode: "sandbox", status: "kyc_pending" },
         createdAt: new Date().toISOString(),
+        accountType: type,
+        ...(orgName ? { companyName: orgName } : {}),
       };
-      await store.addUser(user);
-      await store.updateUser(user.id, { accountType: type, ...(orgName ? { companyName: orgName } : {}) });
-      if (d) await applyDecision(user.id, d, req.body?.softSignals);
-      else {
-        await store.setSegment(user.id, { value: "UNDECIDED", reasonCode: "residence_not_given", decidedAt: new Date().toISOString(), decidedBy: "system" });
-      }
-      // One consent per kind and partner, at most MAX_SIGNUP_CONSENTS, in one
-      // write: the list comes from an unauthenticated body, and every store
-      // write rewrites the whole database file.
+      // One consent per kind and partner, at most MAX_SIGNUP_CONSENTS: the
+      // list comes from an unauthenticated body.
       const given = new Map<string, any>();
       for (const c of Array.isArray(consents) ? consents.slice(0, MAX_SIGNUP_CONSENTS) : []) {
         if (c?.kind !== "zold_terms" && c?.kind !== "partner_share") continue;
         const partner = typeof c.partner === "string" && c.partner ? c.partner.slice(0, 80) : undefined;
         given.set(`${c.kind}:${partner ?? ""}`, { ...c, partner });
       }
+      // One transaction: a row left without its segment or account type by a
+      // failed later write would be an account no route can decide.
       await store.tx(async () => {
+        await store.addUser(user);
+        if (d) await applyDecision(user.id, d, req.body?.softSignals);
+        else {
+          await store.setSegment(user.id, { value: "UNDECIDED", reasonCode: "residence_not_given", decidedAt: new Date().toISOString(), decidedBy: "system" });
+        }
         for (const c of given.values()) {
           await store.addConsent(user.id, {
             kind: c.kind,
@@ -312,12 +296,12 @@ export function createUserRouter(deps: UserDeps) {
             // address stored here was echoed to the operator's user list.
           });
         }
+        await store.audit(auditEntry("segment.decided", {
+          ...(d ? decisionAudit(d, type) : { accountType: type, segment: "UNDECIDED", reasonCode: "residence_not_given" }),
+          softUsSignals: d?.decision.review?.softUsSignals ?? [],
+          outcome: "account_created",
+        }, user.id));
       });
-      await store.audit(auditEntry("segment.decided", {
-        ...(d ? decisionAudit(d, type) : { accountType: type, segment: "UNDECIDED", reasonCode: "residence_not_given" }),
-        softUsSignals: d?.decision.review?.softUsSignals ?? [],
-        outcome: "account_created",
-      }, user.id));
       // The row as stored: the segment, consents and patch above went onto it.
       res.status(201).json(await withSession((await store.findUser(user.id))!));
     }),
@@ -329,12 +313,9 @@ export function createUserRouter(deps: UserDeps) {
       let user = await store.findUser(req.params.id);
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!(await requireUserSession(req, res, user.id))) return;
-      if (user.funding?.status === "iban_pending") {
-        user = await refreshPendingIban(user);
-      } else {
-        // Throttled per user; a failed read changes nothing.
-        user = await verifyIbanBinding(user);
-      }
+      // Both throttled per user (the app polls this every few seconds); a
+      // failed read changes nothing.
+      user = user.funding?.status === "iban_pending" ? await refreshPendingIbanThrottled(user) : await verifyIbanBinding(user);
       const balances = await accountBalances(user.address);
       res.json({ ...(await publicUser(user)), ...balances });
     }),
@@ -443,94 +424,6 @@ export function createUserRouter(deps: UserDeps) {
         kyc: user.kyc,
         funding: user.funding,
       });
-    }),
-  );
-
-
-
-  router.get(
-    "/privacy-bundles",
-    wrap(async (_req, res) => {
-      res.json({
-        enabled: privacyBundleLive(),
-        guardrails: {
-          minMarginBps: PRIVACY_BUNDLE.minMarginBps,
-          noUnlimitedUsage: true,
-          downgradeWhenMarginUnsafe: true,
-        },
-        plans: PRIVACY_BUNDLE.plans.map(publicPrivacyPlan),
-      });
-    }),
-  );
-
-  router.post(
-    "/users/:id/privacy-bundle",
-    wrap(async (req, res) => {
-      const user = await store.findUser(req.params.id);
-      if (!user) return res.status(404).json({ error: "user not found" });
-      if (!(await requireUserSession(req, res, user.id))) return;
-      // Fail closed before any record: nothing bills it or delivers it yet.
-      if (!privacyBundleLive()) return res.status(503).json({ error: "privacy bundle is not available", code: "PRIVACY_BUNDLE_UNAVAILABLE" });
-      if (!requireKycApproved(user, res)) return;
-
-      const plan = PRIVACY_BUNDLE.plans.find((p) => p.id === req.body?.planId);
-      if (!plan) return res.status(400).json({ error: "unknown privacy bundle plan" });
-      const publicPlan = publicPrivacyPlan(plan);
-      if (!publicPlan.marginProtected) {
-        return res.status(409).json({
-          error: "plan is below the configured margin floor",
-          plan: publicPlan,
-        });
-      }
-
-      const now = new Date().toISOString();
-      const updated = await store.updateUser(user.id, {
-        privacyBundle: {
-          planId: plan.id,
-          // Nothing here bills or calls Kokio or Mysterium, so nothing is active yet.
-          status: "pending_fulfillment",
-          startedAt: now,
-          renewsAt: nextMonthlyRenewal(),
-          esim: {
-            provider: "kokio",
-            status: "pending",
-            dataGb: plan.esimGb,
-            region: plan.esimRegion,
-          },
-          vpn: {
-            provider: "mysterium",
-            status: "pending",
-            bandwidthGb: plan.vpnGb,
-            devices: plan.vpnDevices,
-          },
-          usage: {
-            esimGb: 0,
-            vpnGb: 0,
-            periodStartedAt: now,
-          },
-        },
-      });
-      res.status(201).json({ user: await publicUser(updated), plan: publicPlan });
-    }),
-  );
-
-  router.post(
-    "/users/:id/privacy-bundle/cancel",
-    wrap(async (req, res) => {
-      const user = await store.findUser(req.params.id);
-      if (!user) return res.status(404).json({ error: "user not found" });
-      if (!(await requireUserSession(req, res, user.id))) return;
-      if (!user.privacyBundle || user.privacyBundle.status === "canceled") {
-        return res.status(409).json({ error: "no active privacy bundle" });
-      }
-      const updated = await store.updateUser(user.id, {
-        privacyBundle: {
-          ...user.privacyBundle,
-          status: "canceled",
-          canceledAt: new Date().toISOString(),
-        },
-      });
-      res.json(await publicUser(updated));
     }),
   );
 

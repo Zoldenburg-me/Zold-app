@@ -64,7 +64,7 @@ const phView = (s) => (s.desk && PH_DESK.on() ? s.desk : s);
 
 /* Routes that open an older screen in #dashboard. */
 const PH_LEGACY = {
-  plus: "plus", bundle: "bundle", card: "card", documents: "documents",
+  card: "card", documents: "documents",
   signers: "signers", "monerium-settings": "monerium", "recovery-settings": "recovery", "page-settings": "payment",
 };
 
@@ -141,7 +141,7 @@ function phOpen(route, { focus = false } = {}) {
     phSig = "";
     window.scrollTo(0, 0);
     // The share composer needs its payment; the others open by name.
-    document.title = `${{ plus: "Privacy Bundle", bundle: "Privacy Bundle", card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", "share-compose": "Share receipt" }[route.name] || "Zold"} · Zold`;
+    document.title = `${{ card: "Card", documents: "Documents", signers: "Who approves payments", "monerium-settings": "Monerium", "recovery-settings": "Recovery", "page-settings": "Your page", "share-compose": "Share receipt" }[route.name] || "Zold"} · Zold`;
     if (route.name === "share-compose") {
       // Back or a pasted hash can still land on the old #share/ name.
       if (/^#share\//.test(location.hash)) history.replaceState(history.state, "", `${location.pathname}${location.search}${phHref(route.name, route.arg)}`);

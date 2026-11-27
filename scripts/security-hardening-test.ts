@@ -26,8 +26,6 @@ process.env.PARTNER_RATE_LIMIT_PER_MIN = "30";
 process.env.DOCUMENT_RATE_LIMIT_PER_MIN = "10";
 process.env.SHOPIFY_RATE_LIMIT_PER_MIN = "600";
 process.env.OPERATOR_RATE_LIMIT_PER_MIN = "300";
-// The Privacy Bundle refusal check needs the bundle off, whatever the shell sets.
-for (const f of ["PRIVACY_BUNDLE_ENABLED", "KOKIO_LIVE", "MYSTERIUM_LIVE"]) delete process.env[f];
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });
 
 const express = (await import("express")).default;
@@ -1493,31 +1491,6 @@ await check("operator scripts print a configured URL by its origin only", async 
   assert.deepEqual(offenders, []);
 });
 
-await check("capabilities.privacyBundle is true only when the bundle is switched on AND both partners fulfil it", async () => {
-  // A fresh process per env: the config is read once, at import.
-  const caps = new URL("../services/api/src/capabilities.ts", import.meta.url).href;
-  const FLAGS = ["PRIVACY_BUNDLE_ENABLED", "KOKIO_LIVE", "MYSTERIUM_LIVE"] as const;
-  const liveWith = (on: readonly string[]) => {
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const f of FLAGS) delete env[f];
-    for (const f of on) env[f] = "1";
-    const r = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
-      `const { capabilities } = await import(${JSON.stringify(caps)}); process.stdout.write(String((await capabilities()).privacyBundle));`],
-      { env, encoding: "utf8" });
-    assert.equal(r.status, 0, r.stderr);
-    return r.stdout;
-  };
-  assert.equal(liveWith([]), "false");
-  assert.equal(liveWith(["PRIVACY_BUNDLE_ENABLED"]), "false");
-  assert.equal(liveWith(["PRIVACY_BUNDLE_ENABLED", "KOKIO_LIVE"]), "false");
-  assert.equal(liveWith(["KOKIO_LIVE", "MYSTERIUM_LIVE"]), "false");
-  assert.equal(liveWith(FLAGS), "true");
-  const html = readFileSync("services/api/public/index.html", "utf8");
-  for (const id of ["privacy-card", "set-privacy-card"]) {
-    assert.match(html, new RegExp(`class="[^"]*\\bhidden\\b[^"]*" id="${id}"`), id);
-  }
-});
-
 await check("capabilities.moneriumOAuth is false without a data encryption key: connect/start would refuse it", async () => {
   const caps = new URL("../services/api/src/capabilities.ts", import.meta.url).href;
   const oauthWith = (key: string | undefined) => {
@@ -1533,26 +1506,6 @@ await check("capabilities.moneriumOAuth is false without a data encryption key: 
   };
   assert.equal(oauthWith(undefined), "false");
   assert.equal(oauthWith(`k1:${randomBytes(32).toString("base64")}`), "true");
-});
-
-await check("POST /users/:id/privacy-bundle refuses while the capability is off, and records nothing", async () => {
-  const { createUserRouter } = await import("../services/api/src/routes/users.js");
-  const uid = "u_bundle";
-  await store.addUser({ id: uid, name: "Bundle", country: "DE", kycStatus: "approved", address: "0x0", createdAt: new Date().toISOString() } as any);
-  const app = express().use(sendAfterCommit).use(express.json()).use("/api", createUserRouter({ requireUserSession: async () => true }));
-  const server = app.listen(0);
-  try {
-    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
-    const r = await fetch(`${base}/users/${uid}/privacy-bundle`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ planId: "travel-shield" }),
-    });
-    assert.equal(r.status, 503);
-    assert.equal(((await r.json()) as any).code, "PRIVACY_BUNDLE_UNAVAILABLE");
-    assert.equal((await store.findUser(uid))!.privacyBundle, undefined);
-    assert.equal(((await (await fetch(`${base}/privacy-bundles`)).json()) as any).enabled, false);
-  } finally {
-    server.close();
-  }
 });
 
 rmSync(process.env.TRANSF_DB_PATH!, { force: true });

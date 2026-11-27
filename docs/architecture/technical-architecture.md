@@ -1409,8 +1409,6 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /users/:id` (U) | Account read. |
 | `GET /users/:id/kyc` (U) | Account read. |
 | `GET /users/:id/bic` (U) | The BIC Monerium lists for the account's IBAN (`GET /ibans`), read once per IBAN and kept as `ibanBic`; `null` when there is no IBAN or Monerium lists none. The account read then carries it as `bic`. |
-| `GET /privacy-bundles` | Privacy Bundle catalogue. |
-| `POST /users/:id/privacy-bundle[/cancel]` (U) | Subscribe to or cancel the Privacy Bundle. |
 | `POST /users/:id/authorizer/challenge` (U) | Single-use `AuthorizerBinding` typed data for one address, for the device key to sign. |
 | `POST /users/:id/authorizer` (U + step-up + key signature) | Bind the device key. |
 

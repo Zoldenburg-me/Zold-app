@@ -174,6 +174,87 @@ function storedIbanOnProfile(user: User, ibans: any[], profileId: string): boole
   );
 }
 
+type MoneriumConnection = NonNullable<User["monerium"]>;
+
+/**
+ * What connecting a Monerium login writes, for OAuth and API keys alike, once
+ * the profile of this signup's kind is picked. ADDRESS-MATCHED ONLY: any other
+ * IBAN in the list is somebody's money routing, not this account's. An account
+ * Zold may not bank gains no IBAN, keeps none and gets no kyc verdict. An
+ * approved account keeps its approval record; only a pending one is approved,
+ * and only by an IBAN that already pays this Safe. Written from the row as
+ * stored, held: `user` was read before the Monerium calls.
+ */
+async function recordMoneriumConnection(
+  user: User,
+  profileId: string,
+  found: { profiles: any[]; ibans: any[]; addresses: any[] },
+  connection: Omit<MoneriumConnection, "connectedAt" | "profileId" | "profiles" | "ibans" | "addresses"> & { method: "oauth" | "api_keys" },
+  audit: Record<string, unknown> = {},
+): Promise<User> {
+  const keys = connection.method === "api_keys";
+  const now = new Date().toISOString();
+  const { updated, ownIban, dropIban, dropped } = await store.tx(async () => {
+    const fresh = (await store.lockUser(user.id)) ?? user;
+    const refused = ibanActivationRefusal(fresh);
+    const notOffered = refused?.code === "IBAN_NOT_OFFERED";
+    const ownIban = notOffered ? "" : ownIbanOf(found.ibans, fresh.address, profileId);
+    // A stored IBAN stays only if this login lists it on the picked profile.
+    const keepsIban = !notOffered && !ownIban && fresh.funding?.status === "active" && storedIbanOnProfile(fresh, found.ibans, profileId);
+    const dropIban = Boolean(fresh.iban) && !ownIban && !keepsIban;
+    const updated = await store.updateUser(fresh.id, {
+      moneriumConnect: undefined,
+      moneriumRefusal: undefined,
+      ...(notOffered || !mayApproveOnIban(fresh)
+        ? {}
+        : ownIban
+          ? {
+              kycStatus: "approved" as const,
+              kyc: {
+                provider: "monerium" as const,
+                onboardingPath: "existing_monerium" as const,
+                checkedAt: now,
+                applicantId: profileId,
+                reason: `approved via connected Monerium profile ${profileId} (IBAN already attributed to this account)`,
+              },
+            }
+          : {
+              kyc: {
+                provider: "monerium" as const,
+                onboardingPath: "existing_monerium" as const,
+                applicantId: profileId,
+                reason: `${keys ? "own Monerium API keys" : "existing Monerium account"} connected; activate IBAN with passkey`,
+              },
+            }),
+      ...(ownIban ? { iban: ownIban, moneriumIbanElsewhere: undefined } : dropIban ? { iban: undefined } : {}),
+      funding: notOffered
+        ? refusedFunding(fresh, profileId, refused.error)
+        : {
+            ...(fresh.funding ?? {}),
+            mode: "sandbox" as const,
+            status: ownIban || keepsIban ? ("active" as const) : ("provisioning" as const),
+            moneriumProfileId: profileId,
+            detail: ownIban
+              ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
+              : keepsIban
+                ? `${keys ? "own Monerium keys" : "Monerium account"} connected; the existing IBAN is kept and Monerium calls for this account now use ${keys ? "your keys" : "your sign-in"}`
+                : dropIban
+                  ? "the IBAN this account had is not on the Monerium profile now connected; approve IBAN issuance with your passkey"
+                  : "own Monerium account connected — approve IBAN issuance with your passkey",
+          },
+      monerium: { ...connection, connectedAt: now, profileId, profiles: found.profiles, ibans: found.ibans, addresses: found.addresses },
+    });
+    return { updated, ownIban, dropIban, dropped: fresh.iban };
+  });
+  forgetUserClient(user.id);
+  await store.audit(auditEntry(
+    "partner.credentials_connected",
+    { partner: "monerium", method: connection.method, environment: moneriumEnvironment(), profileId, ibanAttributed: Boolean(ownIban), ...(dropIban && dropped ? { ibanDroppedLast4: dropped.slice(-4) } : {}), ...audit },
+    user.id,
+  ));
+  return updated;
+}
+
 type Hex = `0x${string}`;
 type ActiveSafeUser = User & {
   passkey: NonNullable<User["passkey"]>;
@@ -341,7 +422,10 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         return res.status(503).json({ error: `${keyProblem}, so Monerium tokens cannot be stored` });
       }
       if (!(await approvesMoneriumChange(user, req.body, res))) return;
-      const state = randomBytes(24).toString("base64url");
+      // Prefixed with the account id so the callback reads one row, not every
+      // user; the random part is what proves it. The id is in the URL path of
+      // every API call already.
+      const state = `${user.id}.${randomBytes(24).toString("base64url")}`;
       const codeVerifier = randomBytes(48).toString("base64url");
       // The redirect target is ours or nothing: the configured URI, or the
       // callback path on an origin this deployment already trusts for passkeys.
@@ -415,7 +499,8 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       };
       const state = typeof req.query.state === "string" ? req.query.state : "";
       const code = typeof req.query.code === "string" ? req.query.code : "";
-      const user = state ? (await store.list("users")).find((u) => u.moneriumConnect?.state === state) : undefined;
+      const holder = state.includes(".") ? await store.findUser(state.slice(0, state.indexOf("."))) : undefined;
+      const user = holder?.moneriumConnect?.state === state ? holder : undefined;
       if (!state || !code || !user?.moneriumConnect) {
         return await backToApp(user?.id, "The sign-in at Monerium did not finish. Connect again from here.");
       }
@@ -476,49 +561,14 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         ));
         return res.redirect("/app?monerium=refused");
       }
-      const profileId = pick.profile.id;
-      // An account Zold may not bank (rejected, manual_review, a segment
-      // without a bank account) is still connected, but is told no IBAN is
-      // coming, records no "activate IBAN" verdict, and keeps no IBAN.
-      const refused = ibanActivationRefusal(user);
-      const notOffered = refused?.code === "IBAN_NOT_OFFERED";
-      // An IBAN from another profile is not carried into this connection.
-      const dropIban = Boolean(user.iban) && (notOffered || !storedIbanOnProfile(user, snapshot.ibans, profileId));
-
-      await store.updateUser(user.id, {
-        moneriumConnect: undefined,
-        moneriumRefusal: undefined,
-        ...(dropIban ? { iban: undefined } : {}),
-        ...(notOffered
-          ? { funding: refusedFunding(user, profileId, refused.error) }
-          : {
-              kyc: {
-                provider: "monerium" as const,
-                onboardingPath: "existing_monerium" as const,
-                checkedAt: undefined,
-                applicantId: profileId,
-                reason: "existing Monerium account connected; activate IBAN with passkey",
-              },
-              funding: {
-                mode: "sandbox" as const,
-                status: "provisioning" as const,
-                moneriumProfileId: profileId,
-                detail: "smart wallet deployed — approve IBAN issuance with your passkey",
-              },
-            }),
-        monerium: {
-          connectedAt: new Date().toISOString(),
-          profileId,
-          accountEmail: snapshot.accountEmail,
-          accessTokenEnc: SECRETS.moneriumAccessToken.seal(user.id, token.access_token),
-          refreshTokenEnc: token.refresh_token ? SECRETS.moneriumRefreshToken.seal(user.id, token.refresh_token) : undefined,
-          expiresAt: token.expires_in
-            ? new Date(Date.now() + token.expires_in * 1000).toISOString()
-            : undefined,
-          profiles: snapshot.profiles,
-          ibans: snapshot.ibans,
-          addresses: snapshot.addresses,
-        },
+      // No session rides on this redirect, so other sessions are not revoked
+      // here: replacing an identity already needed the passkey at connect/start.
+      await recordMoneriumConnection(user, pick.profile.id, snapshot, {
+        method: "oauth",
+        accountEmail: snapshot.accountEmail,
+        accessTokenEnc: SECRETS.moneriumAccessToken.seal(user.id, token.access_token),
+        refreshTokenEnc: token.refresh_token ? SECRETS.moneriumRefreshToken.seal(user.id, token.refresh_token) : undefined,
+        expiresAt: token.expires_in ? new Date(Date.now() + token.expires_in * 1000).toISOString() : undefined,
       });
       // The app lives at /app, not /, since the landing page took the root.
       res.redirect("/app?monerium=connected");
@@ -1119,84 +1169,17 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         ));
         return res.status(pick.status).json({ error: pick.error, code: pick.code });
       }
-      const profileId = pick.profile.id;
-      // ADDRESS-MATCHED ONLY, for the reason activate gives: any other IBAN in
-      // the snapshot is somebody's money routing, not this account's. And only
-      // for an account Zold may bank: a refused one gains no IBAN and keeps none.
-      const refused = ibanActivationRefusal(user);
-      const notOffered = refused?.code === "IBAN_NOT_OFFERED";
-      const ownIban = notOffered ? "" : ownIbanOf(verified.ibans, user.address, profileId);
-      // A stored IBAN stays only if this login lists it on the picked profile.
-      const keepsIban = !notOffered && !ownIban && user.funding?.status === "active" && storedIbanOnProfile(user, verified.ibans, profileId);
-      const dropIban = Boolean(user.iban) && !ownIban && !keepsIban;
-      const now = new Date().toISOString();
-      // The row as stored, held: `user` was read before the Monerium calls, and
-      // KYC may have moved (manual_review, rejected) since. Approve from this.
-      const updated = await store.tx(async () => { const fresh = (await store.lockUser(user.id)) ?? user;
-      const wasApproved = fresh.kycStatus === "approved";
-      return await store.updateUser(user.id, {
-        moneriumConnect: undefined,
-        moneriumRefusal: undefined,
-        ...(wasApproved || !mayApproveOnIban(fresh)
-          ? {}
-          : ownIban
-            ? {
-                kycStatus: "approved" as const,
-                kyc: {
-                  provider: "monerium" as const,
-                  onboardingPath: "existing_monerium" as const,
-                  checkedAt: now,
-                  applicantId: profileId,
-                  reason: `approved via connected Monerium profile ${profileId ?? "(unnamed)"} (IBAN already attributed to this account)`,
-                },
-              }
-            : {
-                kyc: {
-                  provider: "monerium" as const,
-                  onboardingPath: "existing_monerium" as const,
-                  applicantId: profileId,
-                  reason: "own Monerium API keys connected; activate IBAN with passkey",
-                },
-              }),
-        ...(ownIban ? { iban: ownIban, moneriumIbanElsewhere: undefined } : dropIban ? { iban: undefined } : {}),
-        funding: notOffered
-          ? refusedFunding(user, profileId, refused.error)
-          : {
-              ...(user.funding ?? {}),
-              mode: "sandbox" as const,
-              status: ownIban || keepsIban ? ("active" as const) : ("provisioning" as const),
-              moneriumProfileId: profileId,
-              detail: ownIban
-                ? `IBAN attributed to this account by your Monerium (${moneriumEnvironment()}) account`
-                : keepsIban
-                  ? "own Monerium keys connected; the existing IBAN is kept and Monerium calls for this account now use your keys"
-                  : dropIban
-                    ? "the IBAN this account had is not on the Monerium profile now connected; approve IBAN issuance with your passkey"
-                    : "own Monerium account connected — approve IBAN issuance with your passkey",
-            },
-        monerium: {
-          connectedAt: now,
-          method: "api_keys",
-          profileId,
-          apiKeys: {
-            clientId: input.clientId,
-            clientSecretEnc: SECRETS.moneriumApiSecret.seal(user.id, input.clientSecret),
-            baseUrl: MONERIUM.baseUrl,
-            label: input.label,
-            verifiedAt: now,
-            accountEmail: typeof verified.context?.email === "string" ? verified.context.email : undefined,
-          },
-          profiles: verified.profiles,
-          ibans: verified.ibans,
-          addresses: verified.addresses,
+      const updated = await recordMoneriumConnection(user, pick.profile.id, verified, {
+        method: "api_keys",
+        apiKeys: {
+          clientId: input.clientId,
+          clientSecretEnc: SECRETS.moneriumApiSecret.seal(user.id, input.clientSecret),
+          baseUrl: MONERIUM.baseUrl,
+          label: input.label,
+          verifiedAt: new Date().toISOString(),
+          accountEmail: typeof verified.context?.email === "string" ? verified.context.email : undefined,
         },
-      }); });
-      forgetUserClient(user.id);
-      await store.audit(auditEntry(
-        "partner.credentials_connected",
-        { partner: "monerium", method: "api_keys", clientId: input.clientId, environment: moneriumEnvironment(), profileId, ibanAttributed: Boolean(ownIban), ...(dropIban && user.iban ? { ibanDroppedLast4: user.iban.slice(-4) } : {}) },
-        user.id,
-      ));
+      }, { clientId: input.clientId });
       if (replacing) await revokeOtherSessions(user.id, session.id);
       const balances = await shownBalances(updated.address);
       res.status(201).json({ ...(await publicUser(updated)), ...balances });

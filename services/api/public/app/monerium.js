@@ -368,46 +368,6 @@ function renderFundingActions(u = user) {
       : "";
 }
 
-async function loadPrivacyCatalog() {
-  if (privacyCatalog) return privacyCatalog;
-  privacyCatalog = await api("/api/privacy-bundles");
-  return privacyCatalog;
-}
-
-/** A bundle subscription that is not canceled. It keeps its status and its
- *  cancel button even where the offer is switched off. */
-function bundleSubscribed(u) {
-  return Boolean(u?.privacyBundle?.status && u.privacyBundle.status !== "canceled");
-}
-
-function bundlePlan(planId) {
-  return privacyCatalog?.plans?.find((p) => p.id === planId);
-}
-
-function usageLine(label, used, limit) {
-  const pct = limit ? Math.min(100, Math.round((used / limit) * 100)) : 0;
-  return `<div class="bundle-line"><span>${label}</span><span>${fmt(used, 1)} / ${fmt(limit, 0)} GB</span></div><div class="bundle-meter"><span style="width:${pct}%"></span></div>`;
-}
-
-async function subscribePrivacyBundle(planId) {
-  clearErr("privacy-err");
-  try {
-    const result = await api(`/api/users/${user.id}/privacy-bundle`, { planId });
-    user = result.user;
-    renderUser(user);
-  } catch (e) { showErr("privacy-err", e); }
-}
-
-async function cancelPrivacyBundle() {
-  clearErr("privacy-err");
-  try {
-    user = await api(`/api/users/${user.id}/privacy-bundle/cancel`, {});
-    renderUser(user);
-    // Where the offer is off the bundle screen is now empty: go back to Settings.
-    if (!caps.privacyBundle) phGo("settings", null, { replace: true });
-  } catch (e) { showErr("privacy-err", e); }
-}
-
 /* The settings row reads the account row; Profile → Recovery reads the chain
    and holds every control. */
 async function loadRecoveryInfo() {
@@ -430,74 +390,6 @@ function renderRecoveryInfo() {
 
 function startRecoveryRequest() {
   mobileNav("recovery");
-}
-
-async function renderPrivacyBundle() {
-  const card = $("privacy-card");
-  if (!card || !user) return;
-  const live = caps.privacyBundle === true;
-  const active = bundleSubscribed(user);
-  $("set-privacy-card").classList.toggle("hidden", !live);
-  if (!live && !active) {
-    card.classList.add("hidden");
-    return;
-  }
-  // Only the offer needs the catalog: a subscriber's status and Cancel read the
-  // record, so where the offer is off it is not fetched, and a failed fetch only
-  // swaps the plans for an error and Try again.
-  let catalogErr = null;
-  if (live) try { await loadPrivacyCatalog(); } catch (e) { catalogErr = e; }
-  card.classList.toggle("hidden", !kycApproved(user) && !active);
-  const activePlan = active ? bundlePlan(user.privacyBundle.planId) : null;
-  const chip = $("privacy-chip");
-  chip.textContent = active ? user.privacyBundle.status.replace("_", " ").toUpperCase() : "OPTIONAL";
-  chip.className = active && user.privacyBundle.status === "active" ? "chip ok" : active ? "chip pend" : "chip review";
-  // Where the offer is off, a subscriber sees their status and cancel, no plans.
-  $("privacy-plans").innerHTML = catalogErr
-    ? `<div class="error" role="alert">The plans could not be loaded: ${esc(catalogErr.message)}</div>
-      <button class="ghost" id="btn-privacy-retry">Try again</button>`
-    : (live ? privacyCatalog?.plans || [] : []).map((p) => {
-    const isActive = activePlan?.id === p.id;
-    const disabled = !p.marginProtected || isActive;
-    const label = isActive ? "Selected" : p.marginProtected ? "Add" : "Paused";
-    return `<div class="plan ${isActive ? "active" : ""}">
-      <div class="pn">${esc(p.name)}</div>
-      <div class="pp">€${fmt(p.priceEur)}/mo</div>
-      <div class="pd">${esc(p.esimGb)} GB eSIM · ${esc(p.vpnGb)} GB VPN · ${esc(p.vpnDevices)} devices</div>
-      <div class="pm">${esc(p.esimRegion)} coverage · monthly allowance</div>
-      <button class="${isActive ? "ghost" : ""}" data-plan="${esc(p.id)}" ${disabled ? "disabled" : ""}>${label}</button>
-    </div>`;
-  }).join("");
-  // A failed read left privacyCatalog empty, so this reads it again, once: the
-  // button is disabled until the render that replaces it.
-  if (catalogErr) {
-    const retry = $("btn-privacy-retry");
-    retry.addEventListener("click", () => {
-      retry.disabled = true;
-      return renderPrivacyBundle();
-    });
-  }
-  document.querySelectorAll("[data-plan]").forEach((b) => {
-    b.onclick = () => subscribePrivacyBundle(b.dataset.plan);
-  });
-  const status = $("privacy-status");
-  if (!active) {
-    status.classList.add("hidden");
-    status.innerHTML = "";
-    return;
-  }
-  const b = user.privacyBundle;
-  // A plan gone from the catalog still shows what the record holds, and its cancel.
-  const plan = activePlan || {};
-  status.classList.remove("hidden");
-  status.innerHTML = `
-    <div class="bundle-line"><span>Kokio eSIM</span><span>${esc(b.esim?.status || "pending")} · ${esc(b.esim?.region || plan.esimRegion || "")}</span></div>
-    ${usageLine("eSIM data", b.usage?.esimGb || 0, b.esim?.dataGb || plan.esimGb)}
-    <div class="bundle-line"><span>Mysterium VPN</span><span>${esc(b.vpn?.status || "pending")} · ${esc(b.vpn?.devices || plan.vpnDevices || "")} devices</span></div>
-    ${usageLine("VPN bandwidth", b.usage?.vpnGb || 0, b.vpn?.bandwidthGb || plan.vpnGb)}
-    <div class="bundle-line"><span>Renews</span><span>${new Date(b.renewsAt).toLocaleDateString()}</span></div>
-    <button class="ghost" id="btn-privacy-cancel">Cancel bundle</button>`;
-  $("btn-privacy-cancel").onclick = cancelPrivacyBundle;
 }
 
 function renderKycState(u = user) {

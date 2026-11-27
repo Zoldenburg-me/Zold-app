@@ -63,7 +63,7 @@
 
   <!-- ============ older screens ============
        Settings and what hangs off it (recovery, documents, signers, Monerium
-       keys), the card and the Privacy Bundle, until their own redesign steps. -->
+       keys) and the card, until their own redesign steps. -->
   <section id="dashboard">
     <aside class="side">
       <div class="logo"><span class="tri" aria-hidden="true">▽</span> Zold</div>
@@ -172,7 +172,7 @@
       <!-- Sub-screen header for the desktop cards still reached from the nav. -->
       <div class="m-head m-subhead">
         <button class="m-iconbtn" id="m-back" aria-label="Back"><span class="material-symbols-rounded" aria-hidden="true" style="font-size:19px">arrow_back</span></button>
-        <div class="m-name" id="m-subtitle">Privacy Bundle</div>
+        <div class="m-name" id="m-subtitle"></div>
       </div>
 
       <div class="card hidden" id="kyc-card">
@@ -230,20 +230,6 @@
           <button id="btn-monerium-dashboard">Verify your identity</button>
         </div>
         <div class="hint hidden" id="funding-action-hint"></div>
-      </div>
-
-      <div class="card hidden" id="privacy-card">
-        <h2>Premium</h2>
-        <div class="bundle-head">
-          <div>
-            <div class="bundle-title">Privacy Bundle</div>
-            <div class="bundle-sub">Kokio eSIM data plus Mysterium VPN with clear monthly allowances.</div>
-          </div>
-          <span class="chip pend" id="privacy-chip">OPTIONAL</span>
-        </div>
-        <div class="bundle-grid" id="privacy-plans"></div>
-        <div class="bundle-status hidden" id="privacy-status"></div>
-        <div class="error hidden" role="alert" id="privacy-err"></div>
       </div>
 
       <div class="card" id="fund-card">
@@ -348,11 +334,6 @@
             <div class="setting-row"><div><div class="st">Recovery</div><div class="sd" id="set-recovery">—</div></div><button class="ghost" id="btn-recovery-start">Start</button></div>
             <div class="error hidden" role="alert" id="recovery-err"></div>
             <div class="setting-row"><div><div class="st">Session</div><div class="sd">Stored only in this browser.</div></div><button class="ghost" id="btn-signout">Sign out</button></div>
-          </div>
-          <div class="card hidden" id="set-privacy-card">
-            <h2>Privacy bundle</h2>
-            <div class="setting-row"><div><div class="st">Traffic routing</div><div class="sd">VPN traffic should go device to Mysterium nodes, not through Zold.</div></div></div>
-            <div class="setting-row"><div><div class="st">Data stored</div><div class="sd">Billing status and aggregate allowance only.</div></div></div>
           </div>
         </div>
       </section>
