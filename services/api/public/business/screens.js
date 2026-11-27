@@ -345,7 +345,6 @@ function payToHtml(p) {
   return `<section><h3 class="z-eyebrow" style="margin-bottom:8px">How the supplier wants to be paid</h3><dl class="z-kv z-card">${rows.join("")}</dl></section>`;
 }
 
-/** One invoice in a drawer: its parties, what it is for, how it was paid. */
 /** The drawer's rarer actions, behind "More": a correction replaces an open
  *  or paid invoice (POST …/correct), the states the API accepts, for a member
  *  who may issue. Not in the list's rows: it is not what a row is opened for. */
@@ -356,6 +355,7 @@ function moreMenu(i) {
     <div class="zb-more-menu__list"><button type="button" class="zb-more-menu__item" data-act="correct-invoice" data-id="${esc(i.id)}" data-number="${esc(i.issued.number)}">${Z.icon("edit")}<span>Issue corrected invoice</span></button></div></details>`;
 }
 
+/** One invoice in a drawer: its parties, what it is for, how it was paid. */
 export function invoiceDrawer(i, trigger) {
   const out = i.direction === "outgoing";
   const a = invAmount(i);
