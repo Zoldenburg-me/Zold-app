@@ -571,7 +571,7 @@ await check("pending: the OAuth callback still sets the account up for IBAN acti
 });
 
 await check("the poller does not approve from a copy read before KYC moved to manual_review", async () => {
-  const u = await addUser(13);
+  const u = await addUser(42);
   await store.updateUser(u.id, { iban: "", kycStatus: "pending", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
   const stale = (await store.findUser(u.id))!;
   await store.updateUser(u.id, { kycStatus: "manual_review" });

@@ -345,9 +345,6 @@ export async function refreshPendingIban(user: User): Promise<User> {
       return user;
     }
     if (iban) {
-      // A move (PATCH /ibans) that Monerium has now carried out: record it
-      // and take the IBAN off whichever account it used to pay.
-      await releaseIbanFromOtherUsers(iban, user.id);
       // An address-matched IBAN is what approves an account (activate does the
       // same when the IBAN is there at once). Without this, an IBAN issued
       // after activation was stored but the account stayed pending, and the
@@ -359,6 +356,10 @@ export async function refreshPendingIban(user: User): Promise<User> {
         // answered, and KYC may have moved (manual_review, rejected) since.
         const fresh = (await store.lockUser(user.id)) ?? user;
         if (fresh.funding?.status !== "iban_pending") return fresh;
+        // A move (PATCH /ibans) that Monerium has now carried out: record it
+        // and take the IBAN off whichever account it used to pay. Inside the
+        // hold, so a row that stopped waiting releases nobody's IBAN.
+        await releaseIbanFromOtherUsers(iban, user.id);
         const approve = mayApproveOnIban(fresh);
         return await store.updateUser(fresh.id, {
           iban,
