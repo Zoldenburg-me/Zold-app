@@ -532,5 +532,17 @@ console.log("ok - store suite on the JSON backend");
   const testnet = run({ STORE_BACKEND: "postgres", DATABASE_URL: url, TRANSF_CHAIN_ID: "84532" });
   assert.equal(testnet.status, 0, testnet.stderr);
   assert.equal(run({ STORE_BACKEND: "json" }).status, 0);
-  console.log("ok - STORE_BACKEND: json or postgres; postgres needs DATABASE_URL, on any chain");
+  // Production asks for the JSON store's acknowledgement only when the JSON store is used.
+  const prod = (env: Record<string, string | undefined>) =>
+    spawnSync(process.execPath, ["--import", "tsx", "-e", "await import('./services/api/src/config/production.ts')"], {
+      env: { ...process.env, DATABASE_URL: undefined, TRANSF_CHAIN_ID: "8453", NODE_ENV: "production", ALLOW_PLAINTEXT_STORE: undefined, ...env },
+      encoding: "utf8",
+    });
+  const prodJson = prod({});
+  assert.match(prodJson.stderr, /production configuration is incomplete/, prodJson.stderr);
+  assert.match(prodJson.stderr, /ALLOW_PLAINTEXT_STORE=1 is required/);
+  const prodPg = prod({ STORE_BACKEND: "postgres", DATABASE_URL: url });
+  assert.match(prodPg.stderr, /production configuration is incomplete/, prodPg.stderr);
+  assert.doesNotMatch(prodPg.stderr, /ALLOW_PLAINTEXT_STORE/);
+  console.log("ok - STORE_BACKEND: json or postgres; postgres needs DATABASE_URL, on any chain; production asks ALLOW_PLAINTEXT_STORE of json only");
 }

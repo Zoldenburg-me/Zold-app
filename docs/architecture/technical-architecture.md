@@ -1147,8 +1147,8 @@ flowchart LR
   there must be one writer process. The path is `TRANSF_DB_PATH`, or
   `data/db.json` for `npm run api`. `npm run dev` uses `data/db.dev.json`,
   which it deletes on each start. Tests use `$TMPDIR/zold-test-db-<pid>.json`.
-- Production requires `ALLOW_PLAINTEXT_STORE=1`, which acknowledges the file
-  store. Only Monerium tokens and secrets and Shopify tokens are
+- Production on this store requires `ALLOW_PLAINTEXT_STORE=1`, which
+  acknowledges the file store; `STORE_BACKEND=postgres` does not ask for it. Only Monerium tokens and secrets and Shopify tokens are
   field-encrypted. Emails, names, recovery channel targets and IBANs are
   plaintext.
 - Collections:
@@ -1273,7 +1273,7 @@ only self-hosted fonts.
   - Monerium: a sandbox URL or chain name, no OAuth client and no encryption
     key, no webhook secret while app credentials are set, or a non-https
     redirect.
-  - Store: `ALLOW_PLAINTEXT_STORE` missing.
+  - Store: `ALLOW_PLAINTEXT_STORE` missing on the JSON store.
   - Bridge: live without a key.
   - Candide: a CANDIDE chain that differs from the app chain, a recovery
     signer without https or a token, the 3-minute recovery module, or no
