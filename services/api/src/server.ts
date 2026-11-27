@@ -237,7 +237,7 @@ app.use("/api", createMerchantLinkRouter(requireSession));
 
 
 
-// Accounts: signup, the account read, KYC state and the privacy bundle.
+// Accounts: signup, the account read and KYC state.
 app.use("/api", createUserRouter({ requireUserSession }));
 // Confirming the account's email with a code. Off unless EMAIL_VERIFICATION.
 app.use("/api", createEmailVerificationRouter({ requireUserSession }));

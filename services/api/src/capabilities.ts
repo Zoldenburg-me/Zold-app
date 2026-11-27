@@ -7,7 +7,7 @@
  * 3,800-line file.
  */
 import { CHAIN_ID, TURNKEY } from "./config.js";
-import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled, orgPayoutsEnabled, privacyBundleLive, cryptoSendEnabled } from "./config.js";
+import { EMAIL_VERIFICATION, ENS_GATEWAY, ENS_LOOKUP, FORWARDING, HARNESS, MONERIUM, SHOPIFY, TESTNET_FAUCET, moneriumOAuthEnabled, orgPayoutsEnabled, cryptoSendEnabled } from "./config.js";
 import { moneriumApiKeysAvailable, moneriumEnvironment } from "./adapters/monerium-connection.js";
 import { cashRailOpen } from "./orchestrator.js";
 import { testUsdc, usdLabel } from "./usd-token.js";
@@ -37,10 +37,6 @@ export async function capabilities() {
     /** Is the cash (EUR -> KES) corridor open? Bridge live AND an anchor
      *  configured; the UI hides the corridor rather than quote into a wall. */
     cashRail: cashRailOpen(),
-    /** May a user subscribe to the Privacy Bundle (eSIM + VPN)? Only where
-     *  it is switched on and both partners fulfil; otherwise the app draws no
-     *  offer and POST /users/:id/privacy-bundle refuses. */
-    privacyBundle: privacyBundleLive(),
     /** May the app offer Send → Crypto wallet? Off unless CRYPTO_SEND_ENABLED. */
     cryptoSend: cryptoSendEnabled(),
     /** May a company pay a bank account from its own IBAN? Off unless

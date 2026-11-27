@@ -105,16 +105,6 @@ export const publicUser = async (u: User) => ({
         ),
       }
     : {}),
-  ...(u.privacyBundle
-    ? {
-        privacyBundle: {
-          ...pick(u.privacyBundle, ["planId", "status", "startedAt", "renewsAt", "canceledAt"] as const),
-          ...(u.privacyBundle.esim ? { esim: pick(u.privacyBundle.esim, ["provider", "status", "dataGb", "region"] as const) } : {}),
-          ...(u.privacyBundle.vpn ? { vpn: pick(u.privacyBundle.vpn, ["provider", "status", "bandwidthGb", "devices"] as const) } : {}),
-          usage: pick(u.privacyBundle.usage, ["esimGb", "vpnGb", "periodStartedAt"] as const),
-        },
-      }
-    : {}),
   // Whether replacing the Monerium connection needs the passkey: the app asks
   // for it up front rather than after a 401 (routes/monerium.ts
   // approvesMoneriumChange).

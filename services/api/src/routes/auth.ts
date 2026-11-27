@@ -16,7 +16,7 @@ import { wrap } from "./util.js";
 import { randomUUID } from "node:crypto";
 import { CHAIN_ID, EMAIL_VERIFICATION, HARNESS, SECURITY } from "../config.js";
 import { emailHeldBy, emailLockKey } from "../domain/email.js";
-import { accountBalances, shownBalances } from "../chain.js";
+import { shownBalances } from "../chain.js";
 import { store, type User } from "../store.js";
 import { rateLimit } from "../http/policy.js";
 import { requireSession, revokeOtherSessions, SessionEpochMoved, tokenHash } from "../http/sessions.js";
@@ -356,15 +356,7 @@ export function createAuthRouter(deps: AuthDeps) {
           !authenticatorData || !clientDataJSON || !signature) {
         return res.status(400).json({ error: "authenticatorData, clientDataJSON and signature required" });
       }
-      const balances = await accountBalances(user.address);
-      if (balances.safeBalanceEur > 0) {
-        return res.status(409).json({
-          error: "current account still has funds; move balances before activating the passkey Safe address",
-          ...balances,
-        });
-      }
-      // Claimed BEFORE the assertion's await, and only by the request that
-      // still finds it after the balance read: two parallel submits of one
+      // Claimed BEFORE the assertion's await: two parallel submits of one
       // signature must not both send the deployment operation.
       if (!pendingPasskeySafeDeployments.delete(req.params.requestId)) {
         return res.status(404).json({ error: "passkey Safe deployment request not found or expired" });

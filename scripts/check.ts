@@ -96,7 +96,6 @@ const scripts = [
   "unread-balance:ui:test",
   "signout:test",
   "money-in:ui:test",
-  "privacy-bundle:ui:test",
   "execution:test",
   "gas:test",
   "faucet:test",

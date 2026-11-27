@@ -39,7 +39,7 @@ Other rails are not engaged (`docs/roadmap.md` items 0–1).
   rejected account keeps the wallet. Deposit conversion and auto-convert are
   wallet features (user-signed swap from the user's own Safe, `feeAmount: 0n`).
 - **Fiat features** keep `requireKycApproved`: `transfers/build.ts`,
-  `routes/transfers.ts`, `POST /users/:id/privacy-bundle`. A SEPA quote also
+  `routes/transfers.ts`. A SEPA quote also
   needs the `monerium` capability, so `WALLET_ONLY` and `IN_COLLECTIONS` are
   refused 403 before KYC is consulted.
 - **The app** asks `bankOffered()` (`public/app/dashboard.js`): the segment

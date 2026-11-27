@@ -7,7 +7,7 @@ json → securityHeaders → originPolicy → /api rate limit → pages → rout
 | Mount | File | Routes |
 |---|---|---|
 | /api | routes/auth.ts | session, webauthn challenge, passkey register/login, passkey-Safe deployment |
-| /api | routes/users.ts | POST /users, /users/:id, display name (locked once Monerium verifies), bic, kyc, privacy bundles |
+| /api | routes/users.ts | POST /users, /users/:id, display name (locked once Monerium verifies), bic, kyc |
 | /api | routes/transfers.ts | POST /quotes, POST /transfers, activity, authorize, refresh-payout |
 | /api | routes/monerium.ts (1175 l) | OAuth connect/callback, API keys, link-signature, activate, move-iban |
 | /api | routes/monerium-webhook.ts | POST /webhooks/monerium |

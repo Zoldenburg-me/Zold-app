@@ -637,7 +637,7 @@ There is no CCTP code. Only the on-ledger Stellar payment half has ever run
 | piece | implementation |
 |---|---|
 | Credentials | Three sources, resolved in `adapters/monerium-connection.ts`: the user's **own API keys** (client credentials), the user's **OAuth tokens**, or **app credentials** from env (only for accounts the app provisioned). |
-| OAuth | Authorization Code + PKCE S256. `state` is 24 random bytes. It is **bound to the browser** by an HttpOnly `zold_monerium_connect` nonce cookie (`Path=/api/monerium/oauth`, 10 min, SameSite=Lax), and the server stores the nonce's SHA-256. Refresh uses the same client id, de-duplicated per user. |
+| OAuth | Authorization Code + PKCE S256. `state` is the user id, a dot and 24 random bytes; the callback reads that one row and requires the full stored state to match. It is **bound to the browser** by an HttpOnly `zold_monerium_connect` nonce cookie (`Path=/api/monerium/oauth`, 10 min, SameSite=Lax), and the server stores the nonce's SHA-256. Refresh uses the same client id, de-duplicated per user. |
 | API keys | Validated for shape, then **verified against Monerium before storing**. On success Zold reads context, profiles, IBANs and addresses. An address-matched IBAN approves immediately. |
 | Secrets at rest | AES-256-GCM v2 (`crypto-at-rest.ts`, `stored-secrets.ts`) under `DATA_ENCRYPTION_KEYS`: access and refresh tokens and the API secret, each bound to the user row. Rows written before v2 still read under `MONERIUM_TOKEN_ENCRYPTION_KEY` until `npm run reencrypt` moves them. With no key, the route answers 503 and never stores plaintext. |
 | IBAN activation | The passkey signs the SafeMessage of `LINK_MESSAGE`. The server assembles the passkey's EIP-1271 signature and calls `POST /addresses` then `POST /ibans`. It **only accepts the IBAN whose address is the user's Safe**. It never unlinks, because a wrongly-bound address is "burned" at Monerium (verified live). |
@@ -1409,8 +1409,6 @@ All paths are under `/api`. **S** = session, **U** = session for `:id`,
 | `GET /users/:id` (U) | Account read. |
 | `GET /users/:id/kyc` (U) | Account read. |
 | `GET /users/:id/bic` (U) | The BIC Monerium lists for the account's IBAN (`GET /ibans`), read once per IBAN and kept as `ibanBic`; `null` when there is no IBAN or Monerium lists none. The account read then carries it as `bic`. |
-| `GET /privacy-bundles` | Privacy Bundle catalogue. |
-| `POST /users/:id/privacy-bundle[/cancel]` (U) | Subscribe to or cancel the Privacy Bundle. |
 | `POST /users/:id/authorizer/challenge` (U) | Single-use `AuthorizerBinding` typed data for one address, for the device key to sign. |
 | `POST /users/:id/authorizer` (U + step-up + key signature) | Bind the device key. |
 

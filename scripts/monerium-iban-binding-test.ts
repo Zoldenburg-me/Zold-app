@@ -87,7 +87,7 @@ const { MONERIUM, SECURITY } = await import("../services/api/src/config.js");
 const { createMoneriumRouter } = await import("../services/api/src/routes/monerium.js");
 const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
 const { makeSoftwarePasskey } = await import("./_software-passkey.js");
-const { verifyIbanBinding, applyIbanBinding, refreshPendingIban, ibanActivationRefusal, pollDepositsOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
+const { verifyIbanBinding, applyIbanBinding, refreshPendingIban, refreshPendingIbanThrottled, ibanActivationRefusal, pollDepositsOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
 const { accountBankOf } = await import("../services/api/src/routes/business/shared.js");
 
 let passed = 0;
@@ -300,6 +300,20 @@ await check("one user is re-read at most once per MONERIUM_IBAN_CHECK_MS", async
   assert.equal(after.iban, u.iban);
 });
 
+await check("a pending IBAN is checked with Monerium at most once per MONERIUM_IBAN_CHECK_MS", async () => {
+  const u = await addUser(46);
+  await store.updateUser(u.id, { iban: "", kycStatus: "pending", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
+  ibansOf.set(u.token, []);
+  const before = fake.reads;
+  await refreshPendingIbanThrottled((await store.findUser(u.id))!);
+  const reads = fake.reads;
+  assert.ok(reads > before, "the first call reads Monerium");
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  const after = await refreshPendingIbanThrottled((await store.findUser(u.id))!);
+  assert.equal(fake.reads, reads, "the second call within the interval reads nothing");
+  assert.equal(after.iban, "", "nothing attaches until the interval has passed");
+});
+
 console.log("\nMoving back");
 
 await check("an IBAN on our chain at this address again is re-attached and the elsewhere record cleared", async () => {
@@ -496,7 +510,7 @@ for (const [n, refusal] of [[16, "rejected"], [17, "manual_review"], [18, "walle
  * the fake Monerium exchanges for `token`.
  */
 async function oauthCallback(userId: string, token: string) {
-  const state = `state-${userId}`, nonce = `nonce-${userId}`, code = `code-${userId}`;
+  const state = `${userId}.state`, nonce = `nonce-${userId}`, code = `code-${userId}`;
   OAUTH_CODES.set(code, token);
   await store.updateUser(userId, {
     moneriumConnect: {
@@ -568,6 +582,36 @@ await check("pending: the OAuth callback still sets the account up for IBAN acti
   assert.ok(after.monerium?.accessTokenEnc);
   assert.equal(after.funding?.status, "provisioning");
   assert.match(after.kyc?.reason ?? "", /activate IBAN with passkey/);
+});
+
+await check("pending: an IBAN that pays this Safe but names no profile neither approves nor attaches", async () => {
+  const u = await addUser(47);
+  await store.updateUser(u.id, { kycStatus: "pending", iban: "", monerium: undefined, funding: { mode: "sandbox", status: "kyc_pending" } } as any);
+  const { profile: _, ...unnamed } = listed(u.iban, u.address);
+  ibansOf.set(u.token, [unnamed]);
+  assert.equal((await oauthCallback(u.id, u.token)).location, "/app?monerium=connected");
+  const after = (await store.findUser(u.id))!;
+  assert.equal(after.kycStatus, "pending", "no approval from an IBAN without its profile");
+  assert.equal(after.iban, "");
+  assert.equal(after.funding?.status, "provisioning");
+  const polled = await refreshPendingIban({ ...after, funding: { ...after.funding!, status: "iban_pending" } } as any);
+  assert.equal(polled.iban, "", "the pending check does not attach it either");
+});
+
+await check("approved: reconnecting by OAuth keeps the approval record and the IBAN, and is audited", async () => {
+  const u = await addUser(45);
+  const approval = { provider: "monerium", onboardingPath: "existing_monerium", checkedAt: "2026-10-01T00:00:00.000Z", applicantId: PROFILE, reason: "approved via connected Monerium profile" };
+  await store.updateUser(u.id, { kyc: approval } as any);
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  const r = await oauthCallback(u.id, u.token);
+  assert.equal(r.location, "/app?monerium=connected");
+  const after = (await store.findUser(u.id))!;
+  assert.equal(after.kycStatus, "approved");
+  assert.deepEqual(after.kyc, approval, "the original approval record is untouched");
+  assert.equal(after.iban, u.iban);
+  assert.equal(after.funding?.status, "active", "an IBAN that pays this Safe stays live");
+  const audit = (await store.auditFor(u.id, 50)).find((e) => e.kind === "partner.credentials_connected");
+  assert.equal((audit as any)?.data?.method, "oauth", "the OAuth connection is in the audit log");
 });
 
 await check("the poller does not approve from a copy read before KYC moved to manual_review", async () => {

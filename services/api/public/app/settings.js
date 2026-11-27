@@ -70,12 +70,11 @@ function phSecurityChecks() {
 PH.settings = {
   title: "Settings",
   live: () => JSON.stringify([user?.name, user?.email, user?.monerium?.method, user?.monerium?.connectedAt, user?.paymentPage?.handle, user?.paymentPage?.settlementAsset, user?.paymentPage?.autoConvert,
-    phKey?.protection, phSecurityChecks(), user?.privacyBundle?.status, caps.privacyBundle, user?.kycStatus]),
+    phKey?.protection, phSecurityChecks(), user?.kycStatus]),
   html() {
     const u = user || {};
     const checks = phSecurityChecks();
     const mon = u.monerium?.method === "api_keys" ? "Connected with your own keys" : hasConnectedMonerium(u) ? "Connected" : "Not connected";
-    const bundle = bundleSubscribed(u);
     const account = [
       Z.row({ lead: Z.iconTile({ icon: "person" }), title: "Account", sub: [ownAccountName(u), u.email].filter(Boolean).join(" · "), href: "#account-details" }),
       Z.row({ lead: Z.iconTile({ icon: "shield_lock" }), title: "Security", sub: "Recovery, sign-in, who can approve and spend", right: checks ? Z.tag(`${checks} to check`, "amber") : "", href: "#security" }),
@@ -84,13 +83,9 @@ PH.settings = {
     ];
     // Accounting software connects to a space in Zold Business, not here.
     const connections = HAS("monerium") ? [Z.row({ lead: Z.iconTile({ icon: "account_balance" }), title: "Monerium", sub: mon, href: "#monerium-settings" })] : [];
-    // The bundle's only entry: where the offer is live and the account may subscribe
-    // (the API needs approval), or for an account that holds one.
-    const bundleRow = bundle || (caps.privacyBundle === true && kycApproved(u)) ? Z.listGroup({ rows: [Z.row({ lead: Z.iconTile({ icon: "vpn_lock" }), title: "Privacy Bundle", sub: !bundle ? "eSIM and VPN" : u.privacyBundle.status === "active" ? "Active" : "Awaiting partner setup", href: "#bundle" })] }) : "";
     return `${phTop("Settings", "more")}${phMain(`
       ${Z.listGroup({ rows: account })}
       ${connections.length ? `<section class="z-group"><h2 class="z-eyebrow">Connections</h2>${Z.listGroup({ rows: connections })}</section>` : ""}
-      ${bundleRow}
       ${Z.button({ full: true, icon: "logout", label: "Sign out", id: "ph-signout" })}
     `)}`;
   },
