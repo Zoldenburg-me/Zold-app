@@ -149,7 +149,8 @@ async function groupedRows(): Promise<Rows> {
   const cryptoSends = groupBy((await store.list("cryptoSends")).filter((c) => !c.safeOpId), (c) => c.userId);
   const orgSends = groupBy((await store.list("cryptoSends")).filter((c) => c.safeOpId), (c) => c.orgId);
   const sweeps = groupBy(await store.list("conversionSweeps"), (s) => s.userId);
-  const paymentRequests = groupBy(await store.list("paymentRequests"), (r) => r.userId);
+  // A company link is the company's, not its creator's (store.paymentRequestsForUser).
+  const paymentRequests = groupBy((await store.list("paymentRequests")).filter((r) => !r.accountId), (r) => r.userId);
   const invoices = groupBy(await store.list("invoices"), (i) => i.orgId);
   const paid = invoicePayments(await store.list("invoices"));
   const rules = groupBy(await store.list("accountRules"), (r) => r.orgId);
@@ -293,6 +294,17 @@ async function writeProjected(inp: StatementInputs, since: string | undefined, r
       const { entries } = applyRules(await rows.rulesOf(inp.orgId), toAdd);
       await store.addLedgerEntries(entries);
       rows.added(inp.orgId, entries);
+    }
+    if (toUpdate.some((u) => u.patch.txType)) {
+      // A changed type is re-coded by the rules, as on insert; a code a human set stays (applyRules).
+      const rules = await rows.rulesOf(inp.orgId);
+      const byId = new Map((await store.ledgerOf(inp.orgId)).map((e) => [e.id, e]));
+      toUpdate = toUpdate.map((u) => {
+        const cur = byId.get(u.id);
+        if (!u.patch.txType || !cur) return u;
+        const [e] = applyRules(rules, [{ ...cur, ...u.patch }]).entries;
+        return e.accountCode === cur.accountCode ? u : { ...u, patch: { ...u.patch, accountCode: e.accountCode, accountCodeAuto: true } };
+      });
     }
     for (const u of toUpdate) await store.updateLedgerEntry(u.id, u.patch);
     return { added: toAdd.length, updated: toUpdate.length };

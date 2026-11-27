@@ -1136,6 +1136,8 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
  * USDC recorded with no receipt value because no rate could be read at
  * detection. The ECB fixing for the day it arrived does not change, so it is
  * read now and stamped once, and the books get the receipt line they lacked.
+ * An invoice or pay link it already settled at €0 is rewritten in place under
+ * the same ref, in the same transaction: never a second payment.
  *
  * Only while nothing has been converted: a conversion of an unvalued deposit
  * books its proceeds as the payment instead, and a receipt beside that would
@@ -1144,16 +1146,31 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
  */
 export async function valueUnratedReceipts(): Promise<number> {
   let n = 0;
+  // A day the feed could not answer is not asked again this pass.
+  const noRate = new Set<string>();
   for (const d of [...await store.list("cryptoDeposits")]) {
-    if (d.token !== "USDC" || d.receipt || !d.arrivedAt || unvaluable(d)) continue;
+    if (d.token !== "USDC" || d.receipt || !d.arrivedAt || unvaluable(d) || noRate.has(d.arrivedAt.slice(0, 10))) continue;
     const receipt = await valueAtReceipt(d.amountUsdc ?? usd.fromUnits(BigInt(d.amountUnits)), d.arrivedAt);
-    if (!receipt) continue;
-    const valued = await store.patchCryptoDeposit(d.id, (row) => (row.receipt || unvaluable(row) ? null : { receipt, amountEur: receipt.amountEur }));
-    if (!valued) continue;
-    // An invoice it was tied to was settled at €0 without a value: rewritten
-    // under the same ref at the value it now has.
-    if (valued.invoiceId) await recordInvoiceSettlement(valued);
-    n++;
+    if (!receipt) {
+      noRate.add(d.arrivedAt.slice(0, 10));
+      continue;
+    }
+    const valued = await store.tx(async () => {
+      // The owner's row is the lock every writer of a deposit's money takes:
+      // the person's, or for a company Safe its org's.
+      if (d.userId) await store.lockUser(d.userId);
+      else if (d.accountId) {
+        const account = await store.findAccount(d.accountId);
+        if (account) await store.lockOrganisation(account.orgId);
+      }
+      const row = await store.patchCryptoDeposit(d.id, (r) => (r.receipt || unvaluable(r) ? null : { receipt, amountEur: receipt.amountEur }));
+      if (row?.settledAt) {
+        await recordInvoiceSettlement(row);
+        await noteDepositSettled(row);
+      }
+      return row;
+    });
+    if (valued) n++;
   }
   return n;
 }

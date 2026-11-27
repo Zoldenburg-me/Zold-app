@@ -13,6 +13,8 @@
  * - An account names the member whose Safe backs it.
  * - A company's own payment page shows its bank details under its name; its
  *   handle shares one namespace with members' pages.
+ * - A company on its own Safe makes links into its own account: bank only,
+ *   under its page, never a member's IBAN, page or matching.
  *
  *   npm run org-accounts:test
  */
@@ -39,7 +41,7 @@ const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createPaymentRequestRouter } = await import("../services/api/src/routes/payment-requests.js");
 const { createPaymentPageRouter } = await import("../services/api/src/routes/payment-page.js");
-const { linkMethods, linkPayee } = await import("../services/api/src/routes/business/invoice-pay-link.js");
+const { linkMethods, linkPayee, openLinkPath } = await import("../services/api/src/routes/business/invoice-pay-link.js");
 const { accountIsSpendable } = await import("../services/api/src/domain/accounts.js");
 
 let failed = 0;
@@ -429,6 +431,14 @@ await check("the holder shown is the name Monerium has for the profile", async (
     assert.equal(p.body.bank.holder, "Lindner Holzbau GmbH & Co. KG");
   } finally { await store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH", checkedAt: now } } as any); }
 });
+await check("an invoice prints the holder Monerium has for the account, as the pay page does", async () => {
+  const { invoiceBankOf } = await import("../services/api/src/routes/business/shared.js");
+  await store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH & Co. KG", checkedAt: now } } as any);
+  try {
+    const bank = await invoiceBankOf((await store.findOrganisation("org_co"))!);
+    assert.equal(bank?.holder, "Lindner Holzbau GmbH & Co. KG");
+  } finally { await store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH", checkedAt: now } } as any); }
+});
 await check("a claimed page closes, without bank details, when the profile turns out personal", async () => {
   await store.updateAccount("acc_co", { moneriumProfile: { id: "prof_sara", kind: "personal", name: "Sara Lindner", checkedAt: now } } as any);
   try {
@@ -507,6 +517,129 @@ await check("an IBAN set in the profile is printed instead, and the account's is
   assert.equal(r.body.invoiceBank.iban, other);
   assert.equal(r.body.accountBank.iban, IBAN);
 });
+
+console.log("a company's own account");
+{
+  const CO_SAFE = `0x${"dd".repeat(20)}` as const;
+  const CO_IBAN = "DE02120300000000202051";
+  await store.addOrganisation(companyOrg("org_own", "Weber Bau", "Weber Bau GmbH"));
+  await store.addMember(member("m8", "org_own", "u_co", "owner"));
+  await store.addMember(member("m9", "org_own", "u_admin", "admin"));
+  await store.addMember(member("m10", "org_own", "u_view", "viewer"));
+  await store.addAccount(activeEurAccount("acc_own", "org_own", { iban: CO_IBAN, address: CO_SAFE }));
+  await store.addInvoice({
+    id: "inv_own", direction: "outgoing", orgId: "org_own", linkTokenHash: "y", state: "SUBMITTED", lines: [], currency: "EUR", total: "238.00",
+    supplier: { orgName: "Weber Bau GmbH", email: "", invoiceNumber: "WB-2026-0001" },
+    issued: { number: "WB-2026-0001", issueDate: "2026-11-02", grossCents: 23800, netCents: 20000, vatCents: 3800, currency: "EUR" },
+    createdAt: now, updatedAt: now,
+  } as any);
+  const offer = async (u = "u_admin") => (await call("GET", "/api/orgs/org_own/payment-requests", undefined, u)).body.payLink;
+
+  await check("an IBAN not yet on the company's verified profile makes no link, and the reason names no wallet", async () => {
+    const o = await offer();
+    assert.equal(o.allowed, false);
+    assert.equal(o.code, "ACCOUNT_NOT_OPEN");
+    assert.doesNotMatch(o.reason, /wallet/);
+    assert.equal((await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: 40 }, "u_admin")).status, 409);
+  });
+  await check("verified but with no company page, the link waits for the page", async () => {
+    await store.updateAccount("acc_own", { moneriumProfile: { id: "prof_wb", kind: "corporate", name: "Weber Bau GmbH", checkedAt: now } } as any);
+    const o = await offer();
+    assert.equal(o.allowed, false);
+    assert.equal(o.code, "NO_COMPANY_PAGE");
+    assert.equal((await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: 40 }, "u_admin")).status, 409);
+  });
+  let ownCode = "";
+  await check("with its page, any member who manages invoices makes a bank-only link into the company account", async () => {
+    assert.equal((await call("POST", "/api/orgs/org_own/payment-page", { handle: "weber-bau" })).status, 200);
+    assert.deepEqual(await offer(), { allowed: true });
+    assert.equal((await call("GET", "/api/orgs/org_own/invoices", undefined, "u_admin")).body.payLink?.allowed, true, "the invoice list offers Payment link");
+    const r = await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: 40 }, "u_admin");
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.match(r.body.url, /\/pay\/weber-bau\//);
+    const link = (await store.findPaymentRequest(r.body.id))!;
+    assert.equal(link.accountId, "acc_own");
+    assert.equal(link.userId, "u_admin", "the member who made it");
+    assert.equal(link.createdBy, undefined);
+    assert.deepEqual(link.methods, ["bank"]);
+    ownCode = r.body.code;
+    const crypto = await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: 40, methods: ["crypto"] }, "u_admin");
+    assert.equal(crypto.status, 409, JSON.stringify(crypto.body));
+    assert.equal((await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: 40 }, "u_view")).status, 403);
+  });
+  await check("the payer sees the company's IBAN under its name, and nothing of the member who made it", async () => {
+    const pub = await call("GET", `/api/pay/weber-bau/${ownCode}`, undefined, "");
+    assert.equal(pub.status, 200, JSON.stringify(pub.body));
+    assert.deepEqual(Object.keys(pub.body.methods), ["bank"]);
+    assert.equal(pub.body.methods.bank.iban, CO_IBAN);
+    assert.equal(pub.body.methods.bank.holder, "Weber Bau GmbH");
+    assert.equal(pub.body.displayName, "Weber Bau GmbH");
+    const json = JSON.stringify(pub.body);
+    for (const secret of ["u_admin", "acc_own", "org_own", "accountId", (await store.findUser("u_admin"))!.iban, IBAN, CO_SAFE, `0x${"bb".repeat(20)}`, "Jonas", "jonas"]) {
+      assert.ok(!json.includes(secret), `leaked ${secret}`);
+    }
+    assert.equal((await call("GET", `/api/pay/jonas/${ownCode}`, undefined, "")).status, 404, "never under the creator's personal page");
+    assert.equal((await fetch(`${API}/api/pay/weber-bau/${ownCode}/sepa-qr.svg`)).status, 200);
+    assert.equal((await fetch(`${API}/api/pay/weber-bau/${ownCode}/qr.svg`)).status, 404);
+  });
+  await check("a company link is not its creator's: not in their list, their routes or their matching", async () => {
+    const id = (await store.findPaymentRequestByCode(ownCode))!.id;
+    const mine = await call("GET", "/api/users/u_admin/payment-requests", undefined, "u_admin");
+    assert.ok(!mine.body.requests.some((x: any) => x.id === id));
+    assert.equal((await call("GET", `/api/users/u_admin/payment-requests/${id}`, undefined, "u_admin")).status, 404);
+    assert.equal((await call("POST", `/api/users/u_admin/payment-requests/${id}/cancel`, undefined, "u_admin")).status, 404);
+    assert.ok(!(await store.paymentRequestsForUser("u_admin")).some((x) => x.id === id));
+  });
+  await check("an issued invoice gets its link into the company account, for its amount", async () => {
+    const r = await call("POST", "/api/orgs/org_own/payment-requests", { invoiceId: "inv_own" }, "u_co");
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.equal(r.body.amountEur, 238);
+    assert.equal((await store.findPaymentRequest(r.body.id))!.accountId, "acc_own");
+  });
+  await check("an invoice paid through its link gets no second link before the bank credit settles it", async () => {
+    const link = (await store.list("paymentRequests")).find((x) => x.invoiceId === "inv_own")!;
+    await store.updatePaymentRequest(link.id, { state: "PAID" } as any);
+    try {
+      const again = await call("POST", "/api/orgs/org_own/payment-requests", { invoiceId: "inv_own" }, "u_co");
+      assert.equal(again.status, 409, JSON.stringify(again.body));
+      assert.match(again.body.error, /already been paid through its payment link/);
+    } finally { await store.updatePaymentRequest(link.id, { state: "OPEN" } as any); }
+  });
+  await check("a price like €19.99 is whole cents; €19.991 is not", async () => {
+    const ok = await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: "19.99" }, "u_admin");
+    assert.equal(ok.status, 201, JSON.stringify(ok.body));
+    assert.equal(ok.body.amountEur, 19.99);
+    assert.equal((await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: 19.991 }, "u_admin")).status, 400);
+  });
+  await check("the company's former handle, claimed by the creator, never opens a company link", async () => {
+    const org = (await store.findOrganisation("org_own"))!;
+    const u = (await store.findUser("u_admin"))!;
+    await store.updateOrganisation("org_own", { paymentPage: { ...org.paymentPage!, handle: "weber-bau-gmbh" } });
+    await store.updateUser("u_admin", { paymentPage: { ...u.paymentPage!, handle: "weber-bau" } } as any);
+    try {
+      assert.equal((await call("GET", `/api/pay/weber-bau/${ownCode}`, undefined, "")).status, 404);
+      assert.equal((await call("GET", `/api/pay/weber-bau-gmbh/${ownCode}`, undefined, "")).status, 200);
+    } finally {
+      await store.updateUser("u_admin", { paymentPage: u.paymentPage } as any);
+      await store.updateOrganisation("org_own", { paymentPage: org.paymentPage });
+    }
+  });
+  await check("once the IBAN is no longer the company's verified one, no link is offered and open ones stop resolving", async () => {
+    assert.ok(await openLinkPath({ id: "inv_own", orgId: "org_own" }), "the Pay button while the account qualifies");
+    await store.updateAccount("acc_own", { moneriumProfile: { id: "prof_x", kind: "personal", name: "Sara Lindner", checkedAt: now } } as any);
+    assert.equal((await offer()).allowed, false);
+    assert.equal((await call("GET", `/api/pay/weber-bau/${ownCode}`, undefined, "")).status, 404);
+    assert.equal(await openLinkPath({ id: "inv_own", orgId: "org_own" }), undefined, "no Pay button that leads to a 404");
+  });
+  await check("a company link without its account's bank details shows none, never the creator's", async () => {
+    const { publicPaymentRequest } = await import("../services/api/src/payment-requests.js");
+    const r = (await store.findPaymentRequestByCode(ownCode))!;
+    const u = (await store.findUser("u_admin"))!;
+    const pub = publicPaymentRequest(r, u, { chainId: 31337, token: { symbol: "USDC", address: SAFE, decimals: 6 }, baseUrl: "http://x", cryptoLive: true });
+    assert.deepEqual(pub.methods, {});
+    assert.equal(pub.displayName, undefined);
+  });
+}
 
 server.close();
 if (failed) { console.error(`\n${failed} check(s) failed`); process.exit(1); }

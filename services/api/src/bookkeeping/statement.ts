@@ -147,17 +147,22 @@ const ownDeposit = (inp: StatementInputs, d: CryptoDeposit) =>
 
 function sepaInLines(inp: StatementInputs): LineDraft[] {
   const out: LineDraft[] = [];
-  for (const o of inp.issueOrders) {
+  // One mint is one order's: two equal credits on a day never cite the same tx.
+  const claimed = new Set<string>();
+  const mintAt = (d: CryptoDeposit) => Date.parse(d.receipt?.blockTimestamp ?? d.arrivedAt ?? d.detectedAt);
+  for (const o of [...inp.issueOrders].sort((a, b) => a.processedAt.localeCompare(b.processedAt) || a.orderId.localeCompare(b.orderId))) {
     const mine = o.accountId ? o.accountId === inp.accountId : !!inp.userId && o.userId === inp.userId;
     if (!mine || !(o.amountEur > 0)) continue;
     const req = requestFor(inp, undefined, o.memo);
     const inv = invoiceByRef(inp.invoices, `monerium:${o.orderId}`) ?? (req?.invoiceId ? inp.invoices.find((i) => i.id === req.invoiceId) : undefined);
     // The chain's view of the same money: the mint into the Safe.
-    const mint = inp.deposits.find(
-      (d) => d.token === "EURE" && (d.from ?? ZERO) === ZERO && ownDeposit(inp, d) &&
-        Math.abs((d.amountEur ?? 0) - o.amountEur) < 0.005 &&
-        Math.abs(Date.parse(d.receipt?.blockTimestamp ?? d.detectedAt) - Date.parse(o.processedAt)) < 3 * 24 * 3600_000,
-    );
+    // The nearest unclaimed mint of the same amount within three days.
+    const at = Date.parse(o.processedAt);
+    const mint = inp.deposits
+      .filter((d) => d.token === "EURE" && (d.from ?? ZERO) === ZERO && ownDeposit(inp, d) && !claimed.has(d.id) &&
+        Math.abs((d.amountEur ?? 0) - o.amountEur) < 0.005 && Math.abs(mintAt(d) - at) < 3 * 24 * 3600_000)
+      .sort((a, b) => Math.abs(mintAt(a) - at) - Math.abs(mintAt(b) - at) || a.id.localeCompare(b.id))[0];
+    if (mint) claimed.add(mint.id);
     out.push({
       event: "sepa_in",
       key: `monerium:issue:${o.orderId}`,
@@ -581,10 +586,8 @@ export function projectStatementLines(inp: StatementInputs, now = new Date().toI
  */
 function bookedAsOneLine(byKey: Map<string, LedgerEntry>, key: string): boolean {
   const m = /^deposit:(.+?):(held|disposal(?::p\d+)?)$/.exec(key);
-  if (!m) return false;
-  const converted = `deposit:${m[1]}:converted`;
-  for (const k of byKey.keys()) if (k === converted || k.startsWith(`${converted}:p`)) return true;
-  return false;
+  // Parts are numbered from p1, so a first part is always :p1.
+  return !!m && (byKey.has(`deposit:${m[1]}:converted`) || byKey.has(`deposit:${m[1]}:converted:p1`));
 }
 
 /** An invoice number alone is an external invoice on a pay link. */
@@ -626,6 +629,7 @@ export function mergeStatementLines(
       cur.amount !== p.amount ||
       cur.direction !== p.direction ||
       cur.at !== p.at ||
+      cur.txType !== p.txType ||
       (cur.txHash ?? "") !== (p.txHash ?? "") ||
       JSON.stringify(cur.counterparty ?? {}) !== JSON.stringify(p.counterparty ?? {});
     if (changed) {
@@ -636,6 +640,8 @@ export function mergeStatementLines(
           fiatValue: p.fiatValue,
           direction: p.direction,
           at: p.at,
+          // An invoice linked after arrival makes the money in its payment.
+          ...(cur.txType !== p.txType ? { txType: p.txType } : {}),
           ...(p.txHash ? { txHash: p.txHash } : {}),
           counterparty: { ...(cur.counterparty ?? {}), ...(p.counterparty ?? {}) },
           statement: facts,

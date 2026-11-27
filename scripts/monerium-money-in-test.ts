@@ -283,10 +283,11 @@ await check("a SEPA credit to a company's own Safe is booked to the company's ac
 await check("a company's own Safe is watched for crypto in; a person's Safe, a clash and twin accounts are not watched as a company", async () => {
   const { watchedAddresses } = await import("../services/api/src/adapters/crypto-deposits.js");
   const watched = await watchedAddresses();
-  const company = watched.filter((w) => w.source === "company-safe").map((w) => w.account!.id);
-  assert.deepEqual(company, ["acc_co"]);
+  const company = watched.filter((w) => w.source === "company-safe").map((w) => w.account!.id).sort();
+  // Postgres refuses the second twin, so the first is that address's only account there.
+  assert.deepEqual(company, twinsPossible ? ["acc_co"] : ["acc_co", "acc_twin_1"]);
   assert.equal(watched.find((w) => w.address.toLowerCase() === addr("d"))?.user?.id, "u_clash", "a user's Safe stays the user's");
-  assert.ok(!watched.some((w) => w.address.toLowerCase() === addr("e")), "two accounts on one address name no holder");
+  if (twinsPossible) assert.ok(!watched.some((w) => w.address.toLowerCase() === addr("e")), "two accounts on one address name no holder");
 });
 
 await check("EURe and USDC landing on a company's own Safe are booked in the company's books, never a person's", async () => {
@@ -327,10 +328,25 @@ await check("USDC that arrived while no rate could be read is valued later at it
   await store.addCryptoDeposit(row("co-unrated", 911) as any);
   await store.addCryptoDeposit(row("co-unrated-converted", 912, { holding: "converted", creditedEur: 99, settlementAsset: "EURE" }) as any);
   await store.addCryptoDeposit(row("co-unrated-no-time", 913, { arrivedAt: undefined }) as any);
+  // Each may have been swapped already: valuing it now could book the income twice.
+  await store.addCryptoDeposit(row("co-unrated-intent", 914, { conversionIntent: { at, amountUnits: "110000000", safeAddress: COMPANY_SAFE, quote: { provider: "dex", rate: "1", minOut: "1" } } }) as any);
+  await store.addCryptoDeposit(row("co-unrated-partial", 915, { partials: [{ creditedEur: 10, provider: "dex", rate: 1.1, conversion: { txHash: H(916) } }] }) as any);
+  await store.addCryptoDeposit(row("co-unrated-unconfirmed", 917, { holding: "unconfirmed" }) as any);
+  // Settled on arrival against an invoice at €0, as a pay link's deposit is when no rate was read.
+  await store.addInvoice({
+    id: "inv_co_unrated", orgId: "org_co", direction: "outgoing", state: "SUBMITTED", linkTokenHash: "b".repeat(32),
+    lines: [{ description: "Work", quantity: "1", unitPrice: "100.00", amount: "100.00" }], currency: "EUR", total: "100.00",
+    createdByMemberId: "m_x", createdAt: at, updatedAt: at,
+    issued: { number: "RE-UNRATED", issueDate: at.slice(0, 10), netCents: 10000, vatCents: 0, grossCents: 10000, currency: "EUR" },
+  } as any);
+  const inv = await store.addCryptoDeposit(row("co-unrated-inv", 918, { invoiceId: "inv_co_unrated" }) as any);
+  const { recordInvoiceSettlement } = await import("../services/api/src/adapters/crypto-deposits.js");
+  await recordInvoiceSettlement(inv);
+  assert.equal((await store.findInvoice("inv_co_unrated"))!.state, "SUBMITTED", "a €0 payment leaves it open");
   const before = process.env.TRANSF_RATES_FIXED;
   process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, KES: 147.53 });
   try {
-    assert.equal(await valueUnratedReceipts(), 1);
+    assert.equal(await valueUnratedReceipts(), 2);
     assert.equal(await valueUnratedReceipts(), 0, "stamped once");
   } finally {
     if (before === undefined) delete process.env.TRANSF_RATES_FIXED; else process.env.TRANSF_RATES_FIXED = before;
@@ -341,10 +357,39 @@ await check("USDC that arrived while no rate could be read is valued later at it
   assert.equal(valued.receipt?.rateAsOf, "2026-10-06", "the fixing of the day it arrived");
   assert.equal((await byId("co-unrated-converted")).receipt, undefined, "its proceeds already are the payment");
   assert.equal((await byId("co-unrated-no-time")).receipt, undefined, "no block time, no day to value it at");
+  for (const id of ["co-unrated-intent", "co-unrated-partial", "co-unrated-unconfirmed"]) {
+    assert.equal((await byId(id)).receipt, undefined, `${id} may have converted already`);
+  }
+  const paidInv = (await store.findInvoice("inv_co_unrated"))!;
+  assert.equal(paidInv.state, "PAID", "the valued payment covers the invoice");
+  assert.deepEqual(paidInv.settlements!.map((s) => [s.ref, s.amountEur]), [["deposit:co-unrated-inv", 100]], "rewritten in place, not a second payment");
   await writeStatementLines();
   const line = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "deposit:co-unrated:held");
   assert.equal(line?.statement?.amountCents, 10000, "the books get the receipt they lacked");
   assert.equal(line?.txType, "transfer_in", "nobody invoiced it");
+  assert.equal(line?.accountCode, "4100");
+
+  // Tied to an invoice afterwards: the line becomes that invoice's payment and is re-coded by the rules.
+  await store.addInvoice({
+    id: "inv_co_late", orgId: "org_co", direction: "outgoing", state: "SUBMITTED", linkTokenHash: "a".repeat(32),
+    lines: [{ description: "Work", quantity: "1", unitPrice: "100.00", amount: "100.00" }], currency: "EUR", total: "100.00",
+    createdByMemberId: "m_x", createdAt: at, updatedAt: at,
+    issued: { number: "RE-LATE", issueDate: at.slice(0, 10), netCents: 10000, vatCents: 0, grossCents: 10000, currency: "EUR" },
+  } as any);
+  await store.updateCryptoDeposit("co-unrated", { invoiceId: "inv_co_late" });
+  await writeStatementLines();
+  const linked = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "deposit:co-unrated:held")!;
+  assert.equal(linked.txType, "invoice_payment");
+  assert.equal(linked.accountCode, "4000", "re-coded as the payment it now is");
+  assert.equal(linked.statement!.links.invoiceNumber, "RE-LATE");
+  // A code a human set survives the next change of type.
+  await store.updateLedgerEntry(linked.id, { accountCode: "4100", accountCodeAuto: false });
+  await store.updateCryptoDeposit("co-unrated", { invoiceId: undefined });
+  await writeStatementLines();
+  const kept = (await store.ledgerOf("org_co")).find((e) => e.id === linked.id)!;
+  assert.equal(kept.txType, "transfer_in");
+  assert.equal(kept.accountCode, "4100");
+  assert.equal(kept.accountCodeAuto, false);
 });
 
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {

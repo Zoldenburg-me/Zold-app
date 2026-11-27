@@ -8,12 +8,12 @@
  * Three rule sets:
  *
  *   DE       statutory  - German paragraphs are encoded and enforced.
- *   EU       unsupported- the member state's national rules are not encoded.
- *                         Only the issuing profile, the unique number and what
- *                         is printed on the document are checked; the invoice
- *                         goes out on the issuer's own verification.
- *   GENERIC  unsupported- same as EU. India's GST, US sales tax, UK VAT and
- *                         everything else land here.
+ *   EU       directive  - the content Art. 226 of the VAT Directive requires
+ *                         is checked (invoicing.ts, checkDirectiveContent); the
+ *                         member state's national rules are not encoded.
+ *   GENERIC  unsupported- only the issuing profile, the unique number and what
+ *                         is printed are checked. India's GST, US sales tax,
+ *                         UK VAT and everything else land here.
  *
  * Every report says which one ran, and the non-DE reports say "not
  * supported", so "valid" never claims more coverage than we have.
@@ -138,11 +138,10 @@ export function jurisdictionFor(country?: string): JurisdictionProfile {
       currency: "EUR",
       // Member states may set their own simplified-invoice threshold; we have
       // not checked 26 of them, so no shortcut is offered.
-      basis: "Not supported — no national rules encoded",
+      basis: "EU VAT Directive, Art. 226 — no national rules encoded",
       disclaimer:
-        `Zold does not support ${name}'s invoicing rules. The invoice is checked only for the ` +
-        `issuing profile and a unique number — nothing else is verified against ${name}'s or the ` +
-        `EU's tax law. Add what ${name} requires as your own fields and notes, and verify the ` +
+        `Zold checks the invoice content the EU VAT Directive requires, not ${name}'s national ` +
+        `invoicing rules. Add what ${name} requires as your own fields and notes, and verify the ` +
         "invoice with your accountant.",
       notVerified: [
         `${name}'s national invoicing rules, thresholds and required wording.`,

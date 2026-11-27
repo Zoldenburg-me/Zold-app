@@ -2,7 +2,7 @@
 # (docs/oracle-host.md). No secret and no host credential: deploys stay a
 # pull from the host (scripts/oracle-host/deploy.sh), so nothing here can
 # reach the host. It runs the aarch64 toolchain check against the
-# `production` branch and the provisioning SQL suite against PGDG
+# `production` branch and `npm run check:pg` against PGDG
 # Postgres 17 on arm64; the host itself runs the same toolchain check in S7b.
 name: oracle-host
 
@@ -26,7 +26,13 @@ jobs:
         run: |
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y -q postgresql-17 postgresql-client-17 pgbackrest
-          sudo systemctl start postgresql@17-main
+          # The runner creates no 17 main cluster on install, and another cluster holds 5432 in its config.
+          pg_lsclusters -h | grep -q '^17 main' || sudo pg_createcluster --port 5432 17 main
+          # The suites log in over the socket as throwaway roles, some with no password, and
+          # check the refusal comes from the grants (42501): trust, as a local dev cluster.
+          # The runner's own cluster; with no host line, TCP logins are refused. The host's pg_hba is provision.sh's.
+          printf 'local all all trust\n' | sudo tee /etc/postgresql/17/main/pg_hba.conf >/dev/null
+          sudo pg_ctlcluster 17 main start
           sudo -u postgres createuser --superuser "$USER"
       - name: age, the pinned linux-arm64 build
         run: |
@@ -36,5 +42,15 @@ jobs:
       - name: Toolchain check on production
         run: NODE_DIR="$(dirname "$(dirname "$(command -v node)")")" PATH="/usr/lib/postgresql/17/bin:$PATH" scripts/oracle-host/toolchain-check.sh
       - run: npm ci --no-audit --no-fund
-      - name: Provisioning SQL, pg_hba and the migration CLI on Postgres 17
-        run: PG_BIN=/usr/lib/postgresql/17/bin TEST_DATABASE_URL="postgresql:///postgres?host=/var/run/postgresql" npx tsx scripts/oracle-host-test.ts --pg
+      - name: npm run check on linux-arm64 (it also writes the chain-31337 deployments.json the Postgres reruns read)
+        run: npm run check
+      - name: check:pg on Postgres 17 (the store suite, then the provisioning SQL, pg_hba and the migration CLI)
+        env:
+          PG_BIN: /usr/lib/postgresql/17/bin
+          TEST_DATABASE_URL: postgresql:///postgres?host=/var/run/postgresql
+          # As npm run check sets them: both rate feeds on a closed port (fail closed) and a
+          # pinned swapper seed; store-pg-test picks the RPC port itself.
+          DEPLOY_EURUSD_RATE: "1137900"
+          TRANSF_RATES_URL: http://127.0.0.1:9/latest/EUR
+          TRANSF_ECB_RATES_URL: http://127.0.0.1:9/v1
+        run: npm run check:pg

@@ -153,6 +153,10 @@ export interface PaymentRequest {
   /** The member who made the link, when that was not the payee: an admin or
    *  payer making a link into the account another member's Safe backs. */
   createdBy?: string;
+  /** A company link: the company's own EUR account (on its own Safe, no
+   *  backing user) it pays into. `userId` is then the member who made it,
+   *  never the payee: no personal IBAN, page or Safe is ever this link's. */
+  accountId?: string;
   cryptoQuotes: CryptoQuote[];
   payments: RequestPayment[];
   source: PaymentRequestSource;
@@ -217,7 +221,7 @@ export interface CreateInput {
 
 /** Which methods this payee can actually offer, with the reason for each gap.
  *  Rendered to the owner so a missing option says what would add it. */
-export function availableMethods(user: User): { method: PaymentMethod; available: boolean; needs?: string }[] {
+export function availableMethods(user: Pick<User, "iban" | "paymentPage">): { method: PaymentMethod; available: boolean; needs?: string }[] {
   return [
     {
       method: "crypto",
@@ -232,13 +236,18 @@ export function availableMethods(user: User): { method: PaymentMethod; available
   ];
 }
 
-export function validateCreate(body: any, user: User, now = new Date()): CreateInput {
+/** At most two decimals, read past binary rounding: 19.99 * 100 is 1998.9999999999998. */
+export function wholeCents(n: number): boolean {
+  return Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+}
+
+export function validateCreate(body: any, user: Pick<User, "iban" | "paymentPage">, now = new Date()): CreateInput {
   const b = body ?? {};
   let amountEur: number | undefined;
   if (b.amountEur !== undefined && b.amountEur !== null && b.amountEur !== "") {
     const n = Number(b.amountEur);
     if (!Number.isFinite(n) || n <= 0) throw new PaymentRequestError("amountEur must be a positive number");
-    if (Math.round(n * 100) !== n * 100) throw new PaymentRequestError("amountEur has at most two decimals");
+    if (!wholeCents(n)) throw new PaymentRequestError("amountEur has at most two decimals");
     if (n > MAX_REQUEST_EUR) throw new PaymentRequestError("amountEur is above the €1,000,000 ceiling");
     amountEur = n;
   }
@@ -638,6 +647,9 @@ export function publicPaymentRequest(
     quote?: CryptoQuote;
     /** A company's name, for a link booked under it: the holder of the IBAN. */
     payeeName?: string;
+    /** A company link's bank details: its account's IBAN under the company's
+     *  name. Without it a company link shows no bank details at all. */
+    companyBank?: { iban: string; bic?: string; holder: string };
     /** Whether the page's deposit address may be shown (livePaymentPage).
      *  Required, and only true shows it: a caller that did not ask gets no
      *  address, rather than a lapsed forwarder's. */
@@ -651,7 +663,8 @@ export function publicPaymentRequest(
   const handle = ctx.handle ?? r.handle;
   const state = effectiveState(r, now);
   const paid = paidEur(r);
-  const page = user.paymentPage;
+  // A company link shows nothing of the member who made it.
+  const page = r.accountId ? undefined : user.paymentPage;
   const methods: PublicPaymentRequest["methods"] = {};
   if (r.methods.includes("crypto") && page?.depositAddress && ctx.cryptoLive === true) {
     const q = ctx.quote;
@@ -669,11 +682,13 @@ export function publicPaymentRequest(
         : `${ctx.baseUrl}/api/pay/${encodeURIComponent(handle)}/${displayCode(r.code)}/qr.svg`,
     };
   }
-  if (r.methods.includes("bank") && user.iban) {
+  const bic = reportedBic(user);
+  const bank = r.accountId ? ctx.companyBank : user.iban ? { iban: user.iban, ...(bic ? { bic } : {}), holder: ctx.payeeName ?? user.name } : undefined;
+  if (r.methods.includes("bank") && bank) {
     methods.bank = {
-      iban: user.iban,
-      ...(reportedBic(user) ? { bic: reportedBic(user) } : {}),
-      holder: ctx.payeeName ?? user.name,
+      iban: bank.iban,
+      ...(bank.bic ? { bic: bank.bic } : {}),
+      holder: bank.holder,
       reference: displayCode(r.code),
       appUrl: `${ctx.baseUrl}/app?pay=${encodeURIComponent(handle)}/${displayCode(r.code)}`,
     };

@@ -20,6 +20,7 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-sta
 process.env.TRANSF_CHAIN_ID = "31337";
 
 const { lineId, linesInMonth, mergeStatementLines, projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
+const { LEDGER_EXPORT_COLUMNS, ledgerExportRows, vatSplits } = await import("../services/api/src/domain/ledger.js");
 type Inputs = import("../services/api/src/bookkeeping/statement.js").StatementInputs;
 
 let passed = 0;
@@ -77,6 +78,20 @@ await check("a processed issue order is one SEPA-in line with the bank facts and
   assert.deepEqual(s.links.txHashes, [H(1)], "the mint transaction is linked, not a second line");
   assert.equal(s.bookingDate, "2026-09-03");
   assert.equal(lines[0].id, lineId("org_1", "monerium:issue:ord-1"));
+});
+
+await check("two equal credits on one day cite two mints, the nearest each, never the same one", () => {
+  const inp = base();
+  const order = (id: string, at: string) => ({ orderId: id, userId: "u_1", amountEur: 100, processedAt: at, recordedAt: at });
+  const mint = (id: string, n: number, at: string) => ({ id, userId: "u_1", chainId: 31337, token: "EURE", txHash: H(n), logIndex: 0, amountUnits: "100000000000000000000",
+    from: `0x${"00".repeat(20)}` as any, amountEur: 100, creditedEur: 100, holding: "none", settledAt: at, settlementAsset: "EURE", txs: [], arrivedAt: at, detectedAt: at, updatedAt: at });
+  inp.issueOrders = [order("ord-b", "2026-09-07T15:00:00.000Z"), order("ord-a", "2026-09-07T09:00:00.000Z")];
+  inp.deposits = [mint("m-1", 41, "2026-09-07T09:00:10.000Z"), mint("m-2", 42, "2026-09-07T15:00:10.000Z")] as any;
+  const byOrder = Object.fromEntries(projectStatementLines(inp).map((l) => [l.statement!.links.orderId, l.statement!.links.depositId]));
+  assert.deepEqual(byOrder, { "ord-a": "m-1", "ord-b": "m-2" });
+  inp.deposits = [mint("m-1", 41, "2026-09-07T09:00:10.000Z")] as any;
+  const one = projectStatementLines(inp).map((l) => l.statement!.links.depositId);
+  assert.deepEqual(one.filter(Boolean), ["m-1"], "one mint is one order's; the other credit cites none");
 });
 
 await check("a PAID SEPA payout is a debit line plus a fee line when a fee was taken", () => {
@@ -271,6 +286,18 @@ await check("a deposit already booked as one :converted line gets no receipt or 
   assert.equal(mergeStatementLines(partLegacy, valuedLater).toAdd.length, 0, "no receipt beside a part already booked as the payment");
 });
 
+await check("a receipt tied to an invoice after it was written is refreshed to the invoice's payment", () => {
+  const inp = base();
+  const before = projectStatementLines({ ...inp, deposits: [usdcDeposit({ paymentRequestId: undefined }) as any] });
+  inp.invoices = [{ id: "inv_1", orgId: "org_1", issued: { number: "RE-1" } } as any];
+  const after = projectStatementLines({ ...inp, deposits: [usdcDeposit({ paymentRequestId: undefined, invoiceId: "inv_1" }) as any] });
+  const { toAdd, toUpdate } = mergeStatementLines(before, after);
+  assert.equal(toAdd.length, 0);
+  const held = toUpdate.find((u) => u.id === before.find((l) => l.statement!.key === "deposit:d-1:held")!.id)!;
+  assert.equal(held.patch.txType, "invoice_payment");
+  assert.ok(!toUpdate.some((u) => u.patch.txType && u.id !== held.id), "the disposal keeps its type");
+});
+
 await check("USDC nobody invoiced or asked for is money in, as the same EURe would be; a pay link's or an invoice's is the payment", () => {
   const inp = base();
   inp.deposits = [usdcDeposit({ paymentRequestId: undefined }) as any];
@@ -457,6 +484,42 @@ await check("a human's account code survives a later fact change; the Monerium i
   const sepa = rows.find((e) => e.statement!.key === "monerium:issue:ord-9")!;
   assert.equal(sepa.statement!.counterparty.iban, "DE02120300000000202051");
   assert.equal(sepa.amount, "20.00");
+});
+
+await check("an invoice payment's VAT follows what it put against the invoice, cumulatively", () => {
+  let n = 0;
+  const entry = (invoiceId: string, amountCents: number, links: Record<string, unknown>, txType = "invoice_payment") =>
+    ({ txType, at: "2026-11-27", direction: "in", asset: "EUR", amount: String(amountCents / 100), tags: [],
+       statement: { key: `k${String(++n).padStart(2, "0")}`, valueDate: `2026-11-${String(n).padStart(2, "0")}`, amountCents,
+         links: { invoiceId, txHashes: [], ...links } } }) as never;
+  const invoices = new Map<string, { grossCents: number; vatCents: number; settledCents?: Record<string, number> }>([
+    ["crypto", { grossCents: 11900, vatCents: 1900, settledCents: { "deposit:d1": 11900 } }],
+    ["parts", { grossCents: 11900, vatCents: 1900, settledCents: { "deposit:d3": 11900 } }],
+    ["over", { grossCents: 11900, vatCents: 1900, settledCents: { "monerium:o1": 6000, "monerium:o2": 6000 } }],
+    ["exact", { grossCents: 11906, vatCents: 1901, settledCents: { "monerium:o3": 5953, "monerium:o4": 5953 } }],
+    ["manual", { grossCents: 11900, vatCents: 1900 }],
+  ]);
+  const quoted = entry("crypto", 11960, { depositId: "d1" });           // USDC valued €0.60 above its quote
+  const gain = entry("crypto", 60, { depositId: "d1" }, "realised_gain");
+  const partA = entry("parts", 6001, { depositId: "d3" });              // one receipt booked in two lines
+  const partB = entry("parts", 6000, { depositId: "d3" });
+  const over1 = entry("over", 6000, { orderId: "o1", depositId: "mint1" }, "transfer_in"); // two SEPA credits, €1 over
+  const over2 = entry("over", 6000, { orderId: "o2", depositId: "mint2" }, "transfer_in");
+  const ex1 = entry("exact", 5953, { orderId: "o3" }, "transfer_in");  // two halves that add up exactly
+  const ex2 = entry("exact", 5953, { orderId: "o4" }, "transfer_in");
+  const manual = entry("manual", 11900, {});                          // linked by hand, no settlement
+  const split = vatSplits([quoted, gain, partA, partB, over1, over2, ex1, ex2, manual], invoices);
+  const vat = (...es: never[]) => es.reduce((t, e) => t + split.get(e)!.vatCents, 0);
+  assert.deepEqual(split.get(quoted), { netCents: 10060, vatCents: 1900 }, "the invoiced VAT, not more");
+  assert.equal(split.get(gain), undefined, "a gain is not revenue with VAT in it");
+  assert.equal(vat(partA, partB), 1900, "two lines of one receipt share its VAT");
+  assert.equal(vat(over1, over2), 1900, "an overpayment carries no VAT");
+  assert.equal(vat(ex1, ex2), 1901, "installments add up to the invoiced VAT, not a cent more");
+  assert.deepEqual(split.get(manual), { netCents: 10000, vatCents: 1900 });
+  const row = ledgerExportRows([manual], invoices)[0];
+  assert.equal(row.netValue, "100.00");
+  assert.equal(row.vatValue, "19.00");
+  assert.ok(LEDGER_EXPORT_COLUMNS.includes("vatValue" as never));
 });
 
 console.log(`\nstatement-lines: ${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);
