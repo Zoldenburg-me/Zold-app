@@ -67,6 +67,8 @@ const { initStore, store } = await import("../services/api/src/store.js");
 
 const dbm = await import("../services/api/src/store/db.js");
 const { createDraftRoutes } = await import("../services/api/src/routes/business/drafts.js");
+const { createInvoiceRoutes } = await import("../services/api/src/routes/business/invoices.js");
+const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
 const { createCryptoSendsRouter, createCryptoSendPreparer } = await import("../services/api/src/routes/crypto-sends.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
@@ -111,6 +113,8 @@ const who = (req: any) => req.header("x-user");
 const requireSession = (req: any, res: any) => (who(req) ? { userId: who(req) } : (res.status(401).json({ error: "no session" }), undefined));
 const noSepa = async () => { throw new Error("a wallet run builds no SEPA transfer"); };
 app.use("/api/orgs", createDraftRoutes({ ctxOf: async (req, res) => await resolveOrg(req, res, requireSession as any) }, noSepa as any, async () => ({ safeBalanceEur: 1000 }), createCryptoSendPreparer(stubs)));
+app.use("/api/orgs", createInvoiceRoutes({ ctxOf: async (req, res) => await resolveOrg(req, res, requireSession as any) }));
+app.use("/api/invoice-links", createInvoiceLinkRouter());
 app.use("/api", createCryptoSendsRouter({
   requireUserSession: async (req, res, userId) => (who(req) === userId ? { id: "s" } : (res.status(403).json({ error: "not yours" }), undefined)),
   ...stubs,
@@ -320,20 +324,80 @@ try {
     assert.equal(s.status, 200, JSON.stringify(s.data));
   });
 
-  await t("the invoice a run pays follows its send: Paid when sent, waiting again when it fails", async () => {
+  /** A supplier's invoice through the real routes: requested, filled in with a wallet, and Pay pressed. */
+  const paidInvoice = async (currency: "EUR" | "USD", total = "10.00") => {
+    const link = await call("POST", "/orgs/org_1/invoices", "u_owner", { currency });
+    assert.equal(link.status, 201, JSON.stringify(link.data));
+    const filled = await call("POST", `/invoice-links/${link.data.linkToken}/submit`, "", {
+      supplier: { orgName: "Alice Claims Ltd", email: "a@studio.example", invoiceNumber: `A-${link.data.invoice.id.slice(4, 10)}` },
+      lines: [{ description: "Work", quantity: "1", unitPrice: total }],
+      payTo: { kind: "wallet", chainId: 31337, address: ALICE },
+    });
+    assert.equal(filled.status, 200, JSON.stringify(filled.data));
+    const pay = await call("POST", `/orgs/org_1/invoices/${link.data.invoice.id}/pay`, "u_owner", {});
+    assert.equal(pay.status, 201, JSON.stringify(pay.data));
+    return { inv: link.data.invoice.id as string, draft: pay.data.draft };
+  };
+  const approve = async (id: string) => {
+    const s = await call("POST", `/orgs/org_1/drafts/${id}/submit`, "u_owner");
+    if (s.status !== 200) return s;
+    return await call("POST", `/orgs/org_1/drafts/${id}/review`, "u_admin", { approve: true });
+  };
+
+  await t("a supplier's invoice paid to their wallet follows its send: Paid when sent, waiting again when it fails", async () => {
+    // A gated dollar account beside the euro one: the run is still funded from the euro account's Safe.
+    dbm.db.accounts.push({ id: "acc_usd", orgId: "org_1", currency: "USD", status: "gated", label: "USD", createdAt: now, updatedAt: now } as any);
     for (const ok of [true, false]) {
-      const inv = `inv_${ok}`;
-      await store.addInvoice({ id: inv, orgId: "org_1", state: "SUBMITTED", createdAt: now, updatedAt: now } as any);
-      const id = await approvedRun([walletLine({ invoiceId: inv })]);
-      await store.updateInvoice(inv, { state: "PAYING", payment: { draftId: id } } as any);
-      const [cs] = (await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_owner")).data.cryptoSends;
+      const { inv, draft } = await paidInvoice(ok ? "USD" : "EUR");
+      assert.equal(draft.source.accountId, "acc_1");
+      assert.equal(draft.lines[0].asset, ok ? "USDC" : "EURE");
+      assert.equal(draft.lines[0].contactId, "c_w", "matched by wallet address, not by the name the supplier gave");
+      assert.equal((await approve(draft.id)).status, 200);
+      const x = await call("POST", `/orgs/org_1/drafts/${draft.id}/execute`, "u_owner");
+      assert.equal(x.status, 201, JSON.stringify(x.data));
+      const [cs] = x.data.cryptoSends;
+      assert.deepEqual([cs.token, cs.amount, cs.to.toLowerCase()], [ok ? "USDC" : "EURE", "10", ALICE]);
       assert.equal((await store.findInvoice(inv))!.payment?.cryptoSendId, cs.cryptoSendId);
-      if (ok) await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) });
+      if (ok) assert.equal((await call("POST", `/crypto-sends/${cs.cryptoSendId}/authorize`, "u_owner", { executionAssertion: await passkey.assert(cs.safeExecution.challenge) })).status, 200);
       else await store.updateCryptoSend(cs.cryptoSendId, { state: "FAILED", error: "test" });
       const after = await syncInvoicePayment((await store.findInvoice(inv))!);
       assert.equal(after.state, ok ? "PAID" : "SUBMITTED");
       if (!ok) assert.equal(after.payment?.draftId, undefined, "free to be paid by a new run");
     }
+  });
+
+  await t("a run edited to pay less, or elsewhere, than its invoice bills is refused before review", async () => {
+    for (const edit of [{ amount: "9.00" }, { amount: "10.000001" }, { asset: "USDC" }, { destination: { kind: "wallet", chainId: 31337, address: MALLORY, displayName: "Alice Studio" } }]) {
+      const { inv, draft } = await paidInvoice("EUR");
+      const [l] = draft.lines;
+      await store.updateContact("c_w", { wallets: [{ id: "cw_1", chainId: 31337, address: ALICE as `0x${string}` }, { id: "cw_2", chainId: 31337, address: MALLORY as `0x${string}` }] });
+      const p = await call("PATCH", `/orgs/org_1/drafts/${draft.id}`, "u_owner", { lines: [{ id: l.id, contactId: l.contactId, invoiceId: l.invoiceId, destination: l.destination, asset: l.asset, amount: l.amount, ...edit }] });
+      assert.equal(p.status, 200, JSON.stringify(p.data));
+      const s = await call("POST", `/orgs/org_1/drafts/${draft.id}/submit`, "u_owner");
+      assert.equal(s.status, 422, JSON.stringify(s.data));
+      assert.match(s.data.error, /exactly what it bills/);
+      assert.equal((await store.findInvoice(inv))!.state, "PAYING");
+      await call("POST", `/orgs/org_1/drafts/${draft.id}/cancel`, "u_owner");
+    }
+    await setWallet(ALICE);
+  });
+
+  await t("a run sent back keeps its invoice and can be sent again; cancelled, it frees the invoice and can never pay it", async () => {
+    const { inv, draft } = await paidInvoice("EUR");
+    await call("POST", `/orgs/org_1/drafts/${draft.id}/submit`, "u_owner");
+    assert.equal((await call("POST", `/orgs/org_1/drafts/${draft.id}/review`, "u_admin", { approve: false, note: "add a note" })).status, 200);
+    const listed = async () => (await call("GET", "/orgs/org_1/invoices", "u_owner")).data.invoices.find((i: any) => i.id === inv);
+    assert.equal((await listed()).state, "PAYING", "reading the list does not release it: no second Pay beside the sent-back run");
+    assert.equal((await call("PATCH", `/orgs/org_1/drafts/${draft.id}`, "u_owner", {})).status, 200);
+    assert.equal((await approve(draft.id)).status, 200);
+    assert.equal((await call("POST", `/orgs/org_1/drafts/${draft.id}/cancel`, "u_owner")).status, 200);
+    assert.equal((await listed()).state, "SUBMITTED");
+    // A second run stamped with the freed invoice's id is not its payment.
+    const d = await call("POST", "/orgs/org_1/drafts", "u_owner", { source: { kind: "account", accountId: "acc_1" }, lines: [walletLine({ invoiceId: inv, amount: "10.00" })] });
+    const s = await call("POST", `/orgs/org_1/drafts/${d.data.draft.id}/submit`, "u_owner");
+    assert.equal(s.status, 422, JSON.stringify(s.data));
+    assert.match(s.data.error, /no longer pays its invoice/);
+    await call("POST", `/orgs/org_1/drafts/${d.data.draft.id}/cancel`, "u_owner");
   });
 
   await t("an expired approval reads FAILED, cannot be submitted, and the run says so", async () => {

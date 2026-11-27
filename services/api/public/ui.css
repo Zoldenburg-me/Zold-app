@@ -742,7 +742,7 @@ button.z-side__org:hover { border-color: var(--z-line-hover); }
   .z-tbl td { display: block; height: auto; min-width: 0; padding: 0; border: 0; }
   .z-tbl td:empty { display: none; }
   .z-tbl td.z-tbl__num { margin-left: auto; }
-  .z-tbl td[data-label] { flex-basis: 100%; display: flex; justify-content: space-between; gap: var(--z-space-3); }
+  .z-tbl td[data-label] { flex-basis: 100%; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 var(--z-space-3); text-align: right; }
   .z-tbl td[data-label]::before { content: attr(data-label); color: var(--z-dim); }
 }
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=End hub_app sessions past their timeouts, every 10 s (%i)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=10s
+AccuracySec=1s
+Unit=zold-pgops@%i-watchdog.service
+
+[Install]
+WantedBy=timers.target

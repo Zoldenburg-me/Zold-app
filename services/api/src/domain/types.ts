@@ -851,9 +851,11 @@ export interface Invoice {
   /** The organisation this row belongs to: payor when incoming, issuer when
    *  outgoing. */
   orgId: string;
-  /** Hash of the one-time link token. The supplier holds the plaintext; we
-   *  never store it, so a leaked database does not hand over open invoices. */
+  /** Hash of the link token: the lookup key. */
   linkTokenHash: string;
+  /** The token itself, sealed (stored-secrets.ts), so the link can be read
+   *  again by its maker. A leaked database alone does not open it. */
+  linkTokenEnc?: string;
   /** Optional password gate on the link, hashed the same way. */
   linkPasswordHash?: string;
   state: InvoiceState;

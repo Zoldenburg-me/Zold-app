@@ -168,8 +168,8 @@ function phInvoicesCard() {
 
 /* Send links: a link this person shares; whoever gets it fills in the amount,
    up to the limit, and where to be paid, and this person pays it from Send.
-   They live in the personal space. The link itself is shown once when made:
-   the server keeps only a hash of it, so it is held here for this visit only. */
+   They live in the personal space. The link is held here for this visit, and
+   read again from the server's sealed copy (GET …/link) when it is not. */
 let phSendLinkUrls = {};
 
 /* A payment that went out for a link but was not yet recorded on it, per device and person. */

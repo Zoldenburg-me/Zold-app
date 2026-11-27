@@ -11,7 +11,7 @@
  * what exists. Every renderer reads the live `org` from core.js.
  */
 import { isOwnCompanyOrg } from "./access-model.js";
-import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd, zipMode } from "./core.js";
+import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, mayPayInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd, zipMode } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -538,6 +538,8 @@ window.addEventListener("beforeunload", (e) => { if ($("#org-form")?.dataset.dir
 // A tap on another screen never leaves the document, so it asks here, before the link's own handler.
 // shortcut: Back and search results are not asked, keep the typed profile across views if that loses work.
 document.addEventListener("click", (e) => {
+  // A modifier-click opens a tab and the form stays.
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   if (e.target.closest?.("a[data-view], a[data-view-link]") && $("#org-form")?.dataset.dirty
     && !confirm("Leave without saving your changes?")) { e.preventDefault(); e.stopPropagation(); }
 }, true);
@@ -661,8 +663,8 @@ RENDER["invoicing-settings"] = async () => {
 
 /* What can be done with an invoice, by state. An issued one still open gets a
    payment link where the API would make one (`payLink` from GET invoices). For an incoming one, "Pay" only appears
-   when the supplier gave an IBAN: a wallet-only invoice says so instead of
-   offering a button that the API would refuse. */
+   when the supplier gave an IBAN or a wallet address, and "Mark paid" stays
+   beside it: one paid another way is recorded from here. */
 export function invoiceActions(i, payLink) {
   if (i.state === "DRAFT") {
     // Issue only where the API would accept it: receipts on the draft, and a
@@ -679,11 +681,12 @@ export function invoiceActions(i, payLink) {
   // A member who may not act on it sees no button the API would refuse.
   if (["SUBMITTED", "PAID"].includes(i.state) && !mayActOnInvoice(i)) return "";
   if (i.state === "SUBMITTED") {
-    if (i.payTo?.kind === "bank" && i.payTo.bank?.iban) return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="pay-invoice" data-id="${esc(i.id)}">Pay</button>`;
-    return `<span class="desc">${i.payTo?.kind === "wallet" ? "Wallet only: ask for an IBAN" : "No bank details given"}</span>
-      <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="reconcile-invoice" data-id="${esc(i.id)}">Mark paid</button>`;
+    const payable = i.payTo?.bank?.iban || i.payTo?.address;
+    return `${payable ? "" : `<span class="desc">No payment details given</span>`}
+      ${mayPayInvoice(i) ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="pay-invoice" data-id="${esc(i.id)}">Pay</button>` : ""}
+      ${roleCan(org.role, "invoices") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="reconcile-invoice" data-id="${esc(i.id)}">Mark paid</button>` : ""}`;
   }
-  if (i.state === "PAYING") return `<span class="desc">${i.payment?.transferId ? "Sent, waiting for the bank" : "In Approvals"}</span>`;
+  if (i.state === "PAYING") return `<span class="desc">${i.payment?.transferId ? "Sent, waiting for the bank" : i.payment?.cryptoSendId ? "Waiting for a signature" : "In Approvals"}</span>`;
   if (i.state === "PAID") return `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="reconcile-invoice" data-id="${esc(i.id)}">Reconcile</button>`;
   return "";
 }

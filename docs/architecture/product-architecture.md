@@ -681,7 +681,7 @@ There is one `Invoice` record with two directions:
 
 | direction | flow | status |
 |---|---|---|
-| **Incoming (Invoice-Me)** | The org creates a one-time link, optionally password-protected. The supplier fills in the invoice and their IBAN and submits. The org presses Pay, which creates a draft. Four eyes apply, then the transfer runs. The invoice goes PAID when the transfer does. The SEPA reference is "Invoice <no.> <org>". | LIVE up to the draft. PAYING → PAID has never run on a real transfer. |
+| **Incoming (Invoice-Me)** | The org creates a link in EUR or USD, optionally password-protected, and can read it again. The supplier fills in the invoice and their IBAN, or a wallet address (EURe for euro, USDC for dollars), and submits. The org presses Pay, which creates a draft. Four eyes apply, then the transfer runs. The invoice goes PAID when the transfer does. The SEPA reference is "Invoice <no.> <org>". | LIVE up to the draft. PAYING → PAID has never run on a real transfer. |
 | **Outgoing (issued)** | The org fills an editor. A live compliance check runs per jurisdiction. Issuing freezes a numbered snapshot and returns a link to a printable A4 sheet. | LIVE. It is not signed, produces no PDF bytes, no e-invoice, and no email. |
 
 ```

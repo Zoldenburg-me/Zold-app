@@ -20,6 +20,7 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-inv
 process.env.TRANSF_CHAIN_ID = "31337";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:18545";
 process.env.LOCAL_HARNESS = "";
+process.env.CRYPTO_SEND_ENABLED = "1";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { holdUntil } = await import("./_interleave.js");
@@ -564,6 +565,17 @@ await check("the link offers only the chain this deployment runs on, by name", a
   const view = await call("GET", `/api/invoice-links/${token}`);
   assert.equal(view.status, 200, JSON.stringify(view.data));
   assert.deepEqual(view.data.payoutChains, [{ chainId: 31337, name: "Local test chain" }]);
+});
+
+await check("where sending to a wallet is off, the link offers no chain and takes no wallet", async () => {
+  const { token } = await requestLink();
+  delete process.env.CRYPTO_SEND_ENABLED;
+  try {
+    assert.deepEqual((await call("GET", `/api/invoice-links/${token}`)).data.payoutChains, []);
+    const r = await call("POST", `/api/invoice-links/${token}/submit`, undefined, submitBody({ kind: "wallet", address: WALLET, chainId: 31337 }));
+    assert.equal(r.status, 400, JSON.stringify(r.data));
+    assert.match(r.data.error, /not open here/);
+  } finally { process.env.CRYPTO_SEND_ENABLED = "1"; }
 });
 
 await check("a wallet on another chain is refused, and the invoice stays open", async () => {

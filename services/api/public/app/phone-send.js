@@ -815,8 +815,8 @@ PH["send/link"] = {
         ${head}
         ${url
           ? `<div class="z-card">${Z.copyRow({ label: "Link", value: url, display: url.replace(/^https?:\/\//, ""), mono: true })}</div>
-             ${Z.note({ text: "Copy or share it now: Zold shows a link only once and keeps no readable copy." })}`
-          : Z.note({ text: "The link was shown once, when you made it. If you no longer have it, delete this one and make a new one." })}
+`
+          : Z.note({ text: inv.linkKept ? "Reading the link…" : "No copy of this link was kept. Delete it and make a new one." })}
         <p class="z-err" id="ph-sl-err" role="alert" hidden></p>
       `)}${phFoot(`<div class="z-pair">${Z.button({ icon: "delete", label: "Delete", id: "ph-sl-del", className: url ? "" : "z-btn--full" })}${url ? Z.button({ variant: "primary", icon: "ios_share", label: "Share", id: "ph-sl-share" }) : ""}</div>`)}`;
     }
@@ -876,6 +876,12 @@ PH["send/link"] = {
     }
     const inv = (phCache.sendLinks.list || []).find((x) => x.id === id);
     if (!inv) return;
+    // The link again, from the server's sealed copy; a failed read is said and not retried.
+    if (inv.state === "LINK_CREATED" && inv.linkKept && !phSendLinkUrls[inv.id]) {
+      api(`/api/orgs/${encodeURIComponent(phCache.sendLinks.org.id)}/invoices/${encodeURIComponent(inv.id)}/link`)
+        .then((r) => { phSendLinkUrls[inv.id] = `${location.origin}${r.linkPath}`; if (phRoute?.name === "send/link") phRender(); })
+        .catch(fail);
+    }
     const share = root.querySelector("#ph-sl-share");
     if (share) share.onclick = () => phShare("Send link",
       `${inv.sendLink.note ? `${inv.sendLink.note}. ` : ""}I’d like to pay you, up to ${phEur(Number(inv.sendLink.maxTotal))}. Tell me how much and where to send it:`,

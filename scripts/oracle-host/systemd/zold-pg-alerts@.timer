@@ -1,0 +1,10 @@
+[Unit]
+Description=Archiver, disk and hub-size alerts, every minute (%i)
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=5s
+Unit=zold-pgops@%i-alerts.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,40 @@
+# The Oracle host's checks on GitHub's own linux-arm64 runner, by hand
+# (docs/oracle-host.md). No secret and no host credential: deploys stay a
+# pull from the host (scripts/oracle-host/deploy.sh), so nothing here can
+# reach the host. It runs the aarch64 toolchain check against the
+# `production` branch and the provisioning SQL suite against PGDG
+# Postgres 17 on arm64; the host itself runs the same toolchain check in S7b.
+name: oracle-host
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: npm
+      - name: Postgres 17 and pgBackRest from PGDG
+        run: |
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -q postgresql-17 postgresql-client-17 pgbackrest
+          sudo systemctl start postgresql@17-main
+          sudo -u postgres createuser --superuser "$USER"
+      - name: age, the pinned linux-arm64 build
+        run: |
+          scripts/fetch-age.sh
+          sudo install -d /opt/age
+          sudo cp .toolchain/age-v1.3.2/age/age /opt/age/age
+      - name: Toolchain check on production
+        run: NODE_DIR="$(dirname "$(dirname "$(command -v node)")")" PATH="/usr/lib/postgresql/17/bin:$PATH" scripts/oracle-host/toolchain-check.sh
+      - run: npm ci --no-audit --no-fund
+      - name: Provisioning SQL, pg_hba and the migration CLI on Postgres 17
+        run: PG_BIN=/usr/lib/postgresql/17/bin TEST_DATABASE_URL="postgresql:///postgres?host=/var/run/postgresql" npx tsx scripts/oracle-host-test.ts --pg

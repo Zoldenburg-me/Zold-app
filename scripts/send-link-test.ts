@@ -19,6 +19,7 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-sen
 process.env.TRANSF_CHAIN_ID = "31337";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:18545";
 process.env.LOCAL_HARNESS = "";
+process.env.CRYPTO_SEND_ENABLED = "1";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 
@@ -371,6 +372,24 @@ await check("another member of the personal org cannot tie their payment to the 
   assert.equal(r.status, 403, JSON.stringify(r.data));
   assert.equal((await listed(l.id)).state, "SUBMITTED", "the link stays the maker's to pay");
   assert.equal((await call("POST", `/api/orgs/org_p/invoices/${l.id}/paying`, "u_tony", { transferId: await transfer() })).status, 200);
+});
+
+await check("the maker reads a send link again; another member cannot", async () => {
+  const l = await newLink("13");
+  const again = await call("GET", `/api/orgs/org_p/invoices/${l.id}/link`, "u_tony");
+  assert.equal(again.status, 200, JSON.stringify(again.data));
+  assert.equal(again.data.linkPath, l.linkPath);
+  await store.updateMember("m_other_p", { role: "admin" });
+  assert.equal((await call("GET", `/api/orgs/org_p/invoices/${l.id}/link`, "u_other")).status, 403);
+});
+
+await check("reconciling an issued invoice closes its open payment link", async () => {
+  dbm.db.invoices.push({ id: "inv_out", orgId: "org_p", direction: "outgoing", linkTokenHash: "h_out", state: "SUBMITTED", lines: [], currency: "EUR", total: "50.00", createdByMemberId: "m_tony", createdAt: now, updatedAt: now } as any);
+  dbm.db.paymentRequests.push({ id: "pr_out", orgId: "org_p", userId: "u_tony", invoiceId: "inv_out", handle: "tony", code: "ABCD1234", state: "OPEN", payments: [], expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now } as any);
+  const r = await call("POST", "/api/orgs/org_p/invoices/inv_out/reconcile", "u_tony", { note: "paid by cheque" });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.invoice.state, "RECONCILED");
+  assert.equal((await store.list("paymentRequests")).find((p) => p.id === "pr_out")!.state, "CANCELLED");
 });
 
 server.close();
