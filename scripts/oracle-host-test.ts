@@ -94,7 +94,7 @@ const lines = (s: string) => s.split("\n").filter((l) => l.trim() && !l.startsWi
   check("provision: never sets archive-push-queue-max", !/^\s*echo "archive-push-queue-max/m.test(provision));
   const ss = [
     "LISTEN 0 128 127.0.0.1:3000 0.0.0.0:*", "LISTEN 0 128 [::1]:3000 [::]:*", "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*", "LISTEN 0 128 [::]:22 [::]:*",
-    "LISTEN 0 128 127.0.0.53%lo:53 0.0.0.0:*", "LISTEN 0 4096 100.109.142.100%tailscale0:37349 0.0.0.0:*", "LISTEN 0 4096 [fd7a:115c:a1e0::8c33:8e65]%tailscale0:41673 [::]:*",
+    "LISTEN 0 128 127.0.0.53%lo:53 0.0.0.0:*", "LISTEN 0 4096 100.64.0.7%tailscale0:37349 0.0.0.0:*", "LISTEN 0 4096 [fd7a:115c:a1e0::7]%tailscale0:41673 [::]:*",
     "LISTEN 0 128 0.0.0.0:5432 0.0.0.0:*", "LISTEN 0 128 10.0.0.5:8080 0.0.0.0:*", "LISTEN 0 128 [::]:443 [::]:*",
   ].join("\n") + "\n";
   const pub = sh("bash", ["-c", `R=; source "$0"; public_listeners`, path.join(DIR, "lib.sh")], {}, ss);
