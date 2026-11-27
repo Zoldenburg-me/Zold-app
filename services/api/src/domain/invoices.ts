@@ -539,9 +539,14 @@ export function settlementUpdate(
   if (invoice.direction !== "outgoing" || invoice.state !== "SUBMITTED" || due === undefined) {
     return { settlements };
   }
-  const paid = settlements.reduce((sum, x) => sum + (Number.isFinite(x.amountEur) ? x.amountEur : 0), 0);
-  if (paid + 0.005 < due) return { settlements };
-  return { settlements, state: "PAID", payment: { ...invoice.payment, paidAt: s.at } };
+  // Paid when the payments, in the order they arrived, first covered it: a
+  // receipt valued late must not date the invoice before a later payment did.
+  let paid = 0;
+  for (const x of [...settlements].sort((a, b) => a.at.localeCompare(b.at))) {
+    paid += Number.isFinite(x.amountEur) ? x.amountEur : 0;
+    if (paid + 0.005 >= due) return { settlements, state: "PAID", payment: { ...invoice.payment, paidAt: x.at } };
+  }
+  return { settlements };
 }
 
 /** Rows written before `ref` existed are keyed by their deposit id. */
