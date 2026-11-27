@@ -30,7 +30,7 @@ jobs:
           pg_lsclusters -h | grep -q '^17 main' || sudo pg_createcluster --port 5432 17 main
           # The suites log in over the socket as throwaway roles, some with no password, and
           # check the refusal comes from the grants (42501): trust, as a local dev cluster.
-          # A runner's own cluster with no TCP listener; the host's pg_hba is provision.sh's.
+          # The runner's own cluster; with no host line, TCP logins are refused. The host's pg_hba is provision.sh's.
           printf 'local all all trust\n' | sudo tee /etc/postgresql/17/main/pg_hba.conf >/dev/null
           sudo pg_ctlcluster 17 main start
           sudo -u postgres createuser --superuser "$USER"
