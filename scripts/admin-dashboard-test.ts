@@ -30,7 +30,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
-const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
+const { OPERATOR: OPERATOR_CONFIG } = await import("../services/api/src/config.js");
 const { operatorKit } = await import("./_operator.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { MONERIUM } = await import("../services/api/src/config.js");
@@ -95,7 +95,7 @@ app.use("/api", createAdminRouter());
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
-const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
+const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: OPERATOR_CONFIG.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
 const get = async (p: string, token: string | null = kit.sessionToken) => {
   const res = await realFetch(`${API}${p}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
   return { status: res.status, text: await res.text() };

@@ -10,7 +10,7 @@
  */
 import express from "express";
 import { randomBytes } from "node:crypto";
-import { OPERATOR, SECURITY } from "../config.js";
+import { OPERATOR } from "../config.js";
 import { auditEntry } from "../audit.js";
 import { redactedMessage } from "../http/log-cause.js";
 import { clientKey, forgetFailure, recordFailure, tooManyFailures } from "../http/policy.js";
@@ -36,7 +36,7 @@ function accessAllows(req: express.Request, email: string): boolean {
 function creationOptions(challenge: string, userId: string, name: string, email: string, exclude: string[]) {
   return {
     challenge,
-    rp: { id: SECURITY.rpId, name: "Zold operator" },
+    rp: { id: OPERATOR.rpId, name: "Zold operator" },
     user: { id: bufToB64url(Buffer.from(userId)), name: email, displayName: name },
     pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
     authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
@@ -80,7 +80,7 @@ export function createOperatorAuthRouter() {
       }
       let reg: ReturnType<typeof verifyRegistration>;
       try {
-        reg = verifyRegistration(req.body?.attestationObject, req.body?.clientDataJSON, SECURITY.rpId, [OPERATOR.adminOrigin], `op:enrol:${e.id}`, "operator_enrol");
+        reg = verifyRegistration(req.body?.attestationObject, req.body?.clientDataJSON, OPERATOR.rpId, [OPERATOR.adminOrigin], `op:enrol:${e.id}`, "operator_enrol");
       } catch (err) {
         return res.status(400).json({ error: redactedMessage(err, { keepHosts: true }), code: "REGISTRATION_INVALID" });
       }
@@ -115,7 +115,7 @@ export function createOperatorAuthRouter() {
     const operators = (await store.list("operators")).filter((o) => !o.disabledAt && (email === undefined || o.email === email));
     res.json({
       challenge: issueChallenge("operator_login"),
-      rpId: SECURITY.rpId,
+      rpId: OPERATOR.rpId,
       allowCredentials: operators.flatMap((o) => o.credentials.map((c) => ({ type: "public-key", id: c.credentialId }))),
       userVerification: "required",
       timeout: 120_000,
@@ -139,7 +139,7 @@ export function createOperatorAuthRouter() {
     try {
       ({ signCount } = await verifyAssertion(
         b.authenticatorData, b.clientDataJSON, b.signature, credential.key, credential.signCount,
-        SECURITY.rpId, [OPERATOR.adminOrigin], "operator_login",
+        OPERATOR.rpId, [OPERATOR.adminOrigin], "operator_login",
       ));
     } catch (err) {
       return res.status(401).json({ error: redactedMessage(err, { keepHosts: true }), code: "LOGIN_REFUSED" });
@@ -162,7 +162,7 @@ export function createOperatorAuthRouter() {
     if (!/^\/api\/admin\//i.test(path) || path.includes("?")) return res.status(400).json({ error: "path must be an /api/admin path without a query" });
     res.json({
       challenge: issueChallenge("operator_step_up", operatorStepUpBinding(operator.id, method, path, req.body?.body)),
-      rpId: SECURITY.rpId,
+      rpId: OPERATOR.rpId,
       allowCredentials: operator.credentials.map((c) => ({ type: "public-key", id: c.credentialId })),
       userVerification: "required",
       timeout: 120_000,
@@ -192,7 +192,7 @@ export function createOperatorAuthRouter() {
       }
       let reg: ReturnType<typeof verifyRegistration>;
       try {
-        reg = verifyRegistration(req.body?.attestationObject, req.body?.clientDataJSON, SECURITY.rpId, [OPERATOR.adminOrigin], `op:add:${operator.id}`, "operator_enrol");
+        reg = verifyRegistration(req.body?.attestationObject, req.body?.clientDataJSON, OPERATOR.rpId, [OPERATOR.adminOrigin], `op:add:${operator.id}`, "operator_enrol");
       } catch (err) {
         return res.status(400).json({ error: redactedMessage(err, { keepHosts: true }), code: "REGISTRATION_INVALID" });
       }

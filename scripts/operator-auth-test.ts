@@ -277,7 +277,7 @@ await check("a registration from the user app's origin is refused, and the link 
   assert.ok(existsSync(ENROLMENT_FILE));
 });
 
-const kit = await operatorKit({ base: BASE, origin: ADMIN, rpId: "localhost", dataDir, name: "Owner", email: OWNER, accessJwt: () => goodJwt });
+const kit = await operatorKit({ base: BASE, origin: ADMIN, rpId: "admin.test", dataDir, name: "Owner", email: OWNER, accessJwt: () => goodJwt });
 await check("a good enrolment creates the operator, opens a session, and uses the link up", async () => {
   assert.match(kit.sessionToken, /^zop_/);
   assert.equal(kit.operator.email, OWNER);
@@ -351,7 +351,7 @@ await check("an approval from the user app's origin, or without user verificatio
 await check("a second passkey is added only with a fresh approval from the first", async () => {
   const backup = await SoftPasskey.create();
   const options = await req("POST", "/api/admin/auth/passkeys/challenge", {}, kit.headers());
-  const body = { label: "Backup key", ...backup.attest(options.body.challenge, ADMIN, "localhost") };
+  const body = { label: "Backup key", ...backup.attest(options.body.challenge, ADMIN, "admin.test") };
   assert.equal((await req("POST", "/api/admin/auth/passkeys", body, kit.headers())).status, 403, "no approval");
   const r = await req("POST", "/api/admin/auth/passkeys", body, kit.headers(await kit.stepUp("POST", "/api/admin/auth/passkeys", body)));
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -360,7 +360,7 @@ await check("a second passkey is added only with a fresh approval from the first
 
 await check("a refused approval is audited; ten end that session and no other", async () => {
   const c = await req("POST", "/api/admin/auth/login/challenge", {});
-  const { sessionToken } = (await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "localhost"))).body;
+  const { sessionToken } = (await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "admin.test"))).body;
   const h = { authorization: `Bearer ${sessionToken}` };
   for (let i = 0; i < 9; i++) assert.equal((await req("POST", "/api/admin/test/echo", { i }, h)).status, 403);
   const tenth = await req("POST", "/api/admin/test/echo", { i: 9 }, h);
@@ -382,7 +382,7 @@ await check("a passkey is never registered twice, and an operator holds at most 
   const twice = await SoftPasskey.create();
   const add = async (pk: Awaited<ReturnType<typeof SoftPasskey.create>>, label: string) => {
     const o = await req("POST", "/api/admin/auth/passkeys/challenge", {}, kit.headers());
-    const body = { label, ...pk.attest(o.body.challenge, ADMIN, "localhost") };
+    const body = { label, ...pk.attest(o.body.challenge, ADMIN, "admin.test") };
     return req("POST", "/api/admin/auth/passkeys", body, kit.headers(await kit.stepUp("POST", "/api/admin/auth/passkeys", body)));
   };
   assert.equal((await add(twice, "Third")).status, 200);
@@ -438,34 +438,36 @@ await check("the passkey signs in on the admin origin and nowhere else; a strang
   assert.equal(c1.body.allowCredentials.length, (await store.findOperator(kit.operator.id))!.credentials.length, "the signed-in person's passkeys are offered, and only theirs");
   const wrongOrigin = await kit.passkey.assert(c1.body.challenge, "http://localhost:3000", "localhost");
   assert.equal((await req("POST", "/api/admin/auth/login", wrongOrigin)).status, 401);
+  // On the admin origin but for the app's RP ID: the passkey a user-app page could ask for.
+  assert.equal((await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c1.body.challenge, ADMIN, "localhost"))).status, 401, "the app's RP ID");
   const stranger = await SoftPasskey.create();
   const c2 = await req("POST", "/api/admin/auth/login/challenge", {});
-  assert.equal((await req("POST", "/api/admin/auth/login", await stranger.assert(c2.body.challenge, ADMIN, "localhost"))).status, 401);
+  assert.equal((await req("POST", "/api/admin/auth/login", await stranger.assert(c2.body.challenge, ADMIN, "admin.test"))).status, 401);
   const c3 = await req("POST", "/api/admin/auth/login/challenge", {});
-  const ok = await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c3.body.challenge, ADMIN, "localhost"));
+  const ok = await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c3.body.challenge, ADMIN, "admin.test"));
   assert.equal(ok.status, 200, JSON.stringify(ok.body));
   assert.match(ok.body.sessionToken, /^zop_/);
 });
 await check("logging out ends the session", async () => {
   const c = await req("POST", "/api/admin/auth/login/challenge", {});
-  const { sessionToken } = (await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "localhost"))).body;
+  const { sessionToken } = (await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "admin.test"))).body;
   const h = { authorization: `Bearer ${sessionToken}` };
   assert.equal((await req("POST", "/api/admin/auth/logout", {}, h)).status, 200);
   assert.equal((await req("GET", "/api/admin/users", undefined, h)).status, 401);
 });
 await check("a disabled operator's session and passkey stop working", async () => {
-  const other = await operatorKit({ base: BASE, origin: ADMIN, rpId: "localhost", dataDir, name: "Second", email: "second@example.com", accessJwt: () => secondJwt });
+  const other = await operatorKit({ base: BASE, origin: ADMIN, rpId: "admin.test", dataDir, name: "Second", email: "second@example.com", accessJwt: () => secondJwt });
   await store.disableOperator(other.operator.id);
   const access = { "cf-access-jwt-assertion": secondJwt };
   assert.equal((await req("GET", "/api/admin/users", undefined, other.headers())).status, 401);
   const c = await req("POST", "/api/admin/auth/login/challenge", {}, access);
-  assert.equal((await req("POST", "/api/admin/auth/login", await other.passkey.assert(c.body.challenge, ADMIN, "localhost"), access)).status, 401);
+  assert.equal((await req("POST", "/api/admin/auth/login", await other.passkey.assert(c.body.challenge, ADMIN, "admin.test"), access)).status, 401);
 });
 
 await check("a session ends when idle for thirty minutes, after eight hours, or when revoked", async () => {
   const signIn = async () => {
     const c = await req("POST", "/api/admin/auth/login/challenge", {});
-    return (await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "localhost"))).body.sessionToken as string;
+    return (await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "admin.test"))).body.sessionToken as string;
   };
   for (const [why, change] of [
     ["idle", (x: any) => { x.lastUsedAt = new Date(Date.now() - 31 * 60_000).toISOString(); }],
@@ -480,13 +482,13 @@ await check("a session ends when idle for thirty minutes, after eight hours, or 
 });
 await check("a new enrolment for an operator's email adds a passkey to that operator; a disabled operator enrols nothing", async () => {
   const before = (await store.findOperator(kit.operator.id))!.credentials.length;
-  const again = await operatorKit({ base: BASE, origin: ADMIN, rpId: "localhost", dataDir, name: "Owner", email: OWNER, accessJwt: () => goodJwt });
+  const again = await operatorKit({ base: BASE, origin: ADMIN, rpId: "admin.test", dataDir, name: "Owner", email: OWNER, accessJwt: () => goodJwt });
   assert.equal(again.operator.id, kit.operator.id);
   assert.equal((await store.findOperator(kit.operator.id))!.credentials.length, before + 1);
   const token = writeEnrolment(dataDir, "Second", "second@example.com");
   const access = { "cf-access-jwt-assertion": secondJwt };
   const o = await req("POST", "/api/admin/auth/enrol/challenge", { token }, access);
-  const r = await req("POST", "/api/admin/auth/enrol", { token, ...(await SoftPasskey.create()).attest(o.body.challenge, ADMIN, "localhost") }, access);
+  const r = await req("POST", "/api/admin/auth/enrol", { token, ...(await SoftPasskey.create()).attest(o.body.challenge, ADMIN, "admin.test") }, access);
   assert.equal(r.status, 403);
   assert.equal(r.body.code, "OPERATOR_DISABLED");
 });
@@ -497,14 +499,14 @@ await check("ten failed sign-ins lock the address, a right passkey included", as
   let refused = 0;
   for (let i = 0; i < 10; i++) {
     const c = await req("POST", "/api/admin/auth/login/challenge", {});
-    const r = await req("POST", "/api/admin/auth/login", await stranger.assert(c.body.challenge, ADMIN, "localhost"));
+    const r = await req("POST", "/api/admin/auth/login", await stranger.assert(c.body.challenge, ADMIN, "admin.test"));
     if (r.status === 429) break;
     assert.equal(r.status, 401);
     refused++;
   }
   assert.ok(refused <= 10);
   const c = await req("POST", "/api/admin/auth/login/challenge", {});
-  const r = await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "localhost"));
+  const r = await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c.body.challenge, ADMIN, "admin.test"));
   assert.equal(r.status, 429);
   assert.equal(r.body.code, "LOGIN_LOCKED");
 });

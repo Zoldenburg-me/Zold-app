@@ -6,7 +6,7 @@
  */
 import { createHash } from "node:crypto";
 import type express from "express";
-import { OPERATOR, SECURITY } from "../config.js";
+import { OPERATOR } from "../config.js";
 import { store } from "../store.js";
 import { verifyAssertion } from "../webauthn.js";
 import type { Operator } from "../store/types.js";
@@ -68,7 +68,7 @@ export async function verifyOperatorStepUp(req: express.Request, operator: Opera
       a.signature,
       credential.key,
       credential.signCount,
-      SECURITY.rpId,
+      OPERATOR.rpId,
       [OPERATOR.adminOrigin],
       "operator_step_up",
       binding,

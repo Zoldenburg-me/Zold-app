@@ -19,6 +19,10 @@ function accessHost(raw: string): string {
   }
 }
 
+const hostOf = (origin: string) => {
+  try { return new URL(origin).hostname; } catch { return ""; }
+};
+
 const explicitAdminOrigin = (process.env.ADMIN_ORIGIN ?? "").trim().replace(/\/+$/, "");
 
 export const OPERATOR = {
@@ -29,6 +33,9 @@ export const OPERATOR = {
   /** Set explicitly: /admin on any other host redirects here, and this host
    *  serves the dashboard and nothing else. */
   adminOriginExplicit: Boolean(explicitAdminOrigin),
+  /** Operator passkeys belong to the admin host alone, not to the app's
+   *  RP_ID: an operator passkey is never one a user-app page could ask for. */
+  rpId: hostOf(explicitAdminOrigin || SECURITY.origins[0] || ""),
   /** Every deployment but the local hardhat stack (zoldhq.com included,
    *  whatever its production flag): the dashboard runs only on its own
    *  origin, behind Cloudflare Access. */

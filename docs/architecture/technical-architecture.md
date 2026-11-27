@@ -150,7 +150,9 @@ With in-memory pending executions, an unknown state must not keep signing.
   `Cf-Access-Jwt-Assertion`), then an operator passkey session (`zop_`, 8 h,
   30 min idle) whose email equals the Access identity, then a fresh passkey
   approval for every non-GET, bound to its method, path and body. Operator
-  passkeys verify against `ADMIN_ORIGIN` only. There is no shared operator
+  passkeys verify against `ADMIN_ORIGIN` only, with its host as their RP ID
+  (not the app's `RP_ID`), so the admin host can be any name, such as
+  `admin.zoldhq.com`. There is no shared operator
   token, and an operator session is never a user session.
 
 ### 4.2 The three independent checks

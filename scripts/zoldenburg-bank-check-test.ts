@@ -38,7 +38,7 @@ const { createZoldenburgRecoveryRouter, sweepZoldenburgRecoveries, finalizeZolde
 const { zoldenburgChain } = await import("../services/api/src/recovery/zoldenburg-guardian.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
-const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
+const { OPERATOR: OPERATOR_CONFIG } = await import("../services/api/src/config.js");
 const { operatorKit } = await import("./_operator.js");
 const { holdUntil } = await import("./_interleave.js");
 type Reads = import("../services/api/src/recovery/zoldenburg-enrolment.js").EnrolmentReads;
@@ -379,7 +379,7 @@ await new Promise<void>((r) => server.once("listening", () => r()));
 const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 const base = `${origin}/api`;
 // The operator signs in with a passkey and approves each change (scripts/_operator.ts).
-const kit = await operatorKit({ base: origin, origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
+const kit = await operatorKit({ base: origin, origin: OPERATOR_CONFIG.adminOrigin, rpId: OPERATOR_CONFIG.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
 const opCall = async (p: string, body?: unknown) => {
   const r = await kit.call(body === undefined ? "GET" : "POST", `/api${p}`, body);
   return { status: r.status, data: r.body, text: JSON.stringify(r.body) };
