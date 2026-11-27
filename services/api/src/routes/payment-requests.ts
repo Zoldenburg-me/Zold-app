@@ -45,6 +45,7 @@ import {
   publicPaymentRequest,
   quoteCrypto,
   validateCreate,
+  wholeCents,
   withQuote,
   type CryptoQuote,
   type PaymentRequest,
@@ -53,6 +54,9 @@ import {
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { describeCause } from "../http/log-cause.js";
 import { moneyInHolder } from "../bookkeeping/money-in.js";
+import { orgPageAccount } from "./business/org-payment-page.js";
+import { orgEntity } from "../domain/org-entity.js";
+import type { Account, Organisation } from "../domain/types.js";
 
 type SessionCheck = (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 
@@ -92,7 +96,8 @@ export async function payerContext(req: express.Request, r: PaymentRequest, user
     baseUrl: baseUrlFor(req),
     quote,
     payeeName: await payeeNameFor(r),
-    cryptoLive: await livePaymentPage(user),
+    companyBank: await companyLinkBank(r),
+    cryptoLive: !r.accountId && await livePaymentPage(user),
   };
 }
 
@@ -155,7 +160,7 @@ export async function ensureQuote(r: PaymentRequest, amountEur: number | undefin
  * A settled invoice is refused: two live ways to pay one invoice lets it be
  * paid twice.
  */
-async function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, payee: User) {
+async function assertInvoiceCollectable(invoiceId: string, orgId: string | undefined, payee: User, account?: Account) {
   const invoice = await store.findInvoice(invoiceId);
   if (!invoice) throw new PaymentRequestError("no such invoice", 404);
   if (!orgId || invoice.orgId !== orgId) {
@@ -165,7 +170,8 @@ async function assertInvoiceCollectable(invoiceId: string, orgId: string | undef
   // the organisation's account — otherwise any member could raise a link that
   // routes a customer's payment for the company's invoice into their own
   // account and still close the invoice.
-  if (!(await orgsBackedBy(payee.id)).has(invoice.orgId)) {
+  // A company link pays into the invoice's own company account.
+  if (account ? account.orgId !== invoice.orgId : !(await orgsBackedBy(payee.id)).has(invoice.orgId)) {
     throw new PaymentRequestError(
       "that invoice's organisation is not paid into your account — only the person whose account backs it can collect it",
       403,
@@ -212,13 +218,38 @@ export async function orgsBackedBy(userId: string): Promise<Set<string>> {
 
 /**
  * The company page a link opens under: the business's own /pay/:handle, when
- * it has claimed one and the payee's Safe backs it. Anyone else's link, and a
- * Shopify checkout, keeps the payee's own handle.
+ * it has claimed one and the payee's Safe backs it, or, for a company link
+ * (`accountId`), while that account is still the one the page shows. Anyone
+ * else's link, and a Shopify checkout, keeps the payee's own handle.
  */
-export async function companyPageHandle(userId: string, orgId: string | undefined): Promise<string | undefined> {
+export async function companyPageHandle(userId: string, orgId: string | undefined, accountId?: string): Promise<string | undefined> {
   const org = orgId ? (await store.findOrganisation(orgId)) : undefined;
-  if (org?.type !== "business" || !org.paymentPage || !(await orgsBackedBy(userId)).has(org.id)) return undefined;
+  if (org?.type !== "business" || !org.paymentPage) return undefined;
+  if (accountId) return (await companyLinkAccount(org))?.id === accountId ? org.paymentPage.handle : undefined;
+  if (!(await orgsBackedBy(userId)).has(org.id)) return undefined;
   return org.paymentPage.handle;
+}
+
+/**
+ * The account a company's own link pays into: a company's EUR account on its
+ * own Safe (no backing user), only while its company page could show it
+ * (orgPageAccount: active, an IBAN, the company's verified profile). Judged
+ * on every read, so a link closes with the page.
+ */
+export async function companyLinkAccount(org: Organisation): Promise<Account | undefined> {
+  if (orgEntity(org) !== "company") return undefined;
+  const page = await orgPageAccount(org);
+  return "account" in page && !page.account.backingUserId ? page.account : undefined;
+}
+
+/** A company link's bank details, or none once its account no longer qualifies. */
+async function companyLinkBank(r: PaymentRequest): Promise<{ iban: string; bic?: string; holder: string } | undefined> {
+  const org = r.accountId && r.orgId ? (await store.findOrganisation(r.orgId)) : undefined;
+  if (!org || (await companyLinkAccount(org))?.id !== r.accountId) return undefined;
+  const page = await orgPageAccount(org);
+  if (!("account" in page)) return undefined;
+  const { iban, bic } = page.account.identifier;
+  return { iban: iban!, ...(bic ? { bic } : {}), holder: page.holder };
 }
 
 export async function createPaymentRequest(
@@ -235,10 +266,12 @@ export async function createPaymentRequest(
   source: PaymentRequestSource,
   orgId?: string,
   createdBy?: string,
+  /** A company link: `user` is the member making it, and this account is paid. */
+  account?: Account,
 ): Promise<PaymentRequest> {
   // Made by another member: only under the company's page, never the payee's personal one.
-  const onBehalf = !!createdBy && createdBy !== user.id;
-  const handle = (source.kind === "app" ? (await companyPageHandle(user.id, orgId)) : undefined) ?? (onBehalf ? undefined : user.paymentPage?.handle);
+  const onBehalf = (!!createdBy && createdBy !== user.id) || !!account;
+  const handle = (source.kind === "app" ? (await companyPageHandle(user.id, orgId, account?.id)) : undefined) ?? (onBehalf ? undefined : user.paymentPage?.handle);
   if (!handle) throw new PaymentRequestError("set up a payment page before creating a payment link (Get paid → Your page in the app, or Get paid → Set up the page in Zold Business)", 409);
   // Not for Shopify: its checkouts open requests at the shop's volume, signed
   // by Shopify, and each expires with its checkout.
@@ -260,13 +293,19 @@ export async function createPaymentRequest(
    */
   let amountEur = input.amountEur;
   if (input.invoiceId) {
-    const invoice = await assertInvoiceCollectable(input.invoiceId, orgId, user);
+    const invoice = await assertInvoiceCollectable(input.invoiceId, orgId, user, account);
     // One open link per invoice, whichever route asks: no await lies between
     // this check and the insert below, so two calls cannot both pass it.
     const alreadyOpen = !input.test && (await store.list("paymentRequests")).some(
       (p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && effectiveState(p) === "OPEN",
     );
     if (alreadyOpen) throw new PaymentRequestError("that invoice already has an open payment link", 409);
+    // Paid through its link before the bank credit settles the invoice itself
+    // (a Zold transfer is matched first): a second link would collect it twice.
+    const paidByLink = !input.test && (await store.list("paymentRequests")).some(
+      (p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && p.state === "PAID",
+    );
+    if (paidByLink) throw new PaymentRequestError("that invoice has already been paid through its payment link", 409);
     const due = payableEur(invoice);
     if (due === undefined) {
       throw new PaymentRequestError("that invoice has no issued amount to collect", 409);
@@ -300,6 +339,7 @@ export async function createPaymentRequest(
     ...(input.invoiceId ? { invoiceId: input.invoiceId } : {}),
     ...(input.externalInvoiceNumber ? { externalInvoiceNumber: input.externalInvoiceNumber } : {}),
     ...(createdBy && createdBy !== user.id ? { createdBy } : {}),
+    ...(account ? { accountId: account.id } : {}),
     cryptoQuotes: [],
     payments: [],
     source,
@@ -335,6 +375,7 @@ async function defaultOrgId(user: User): Promise<string | undefined> {
  *  only when the payee's Safe backs that company's account, so the IBAN it
  *  pays into is the company's. */
 async function payeeNameFor(r: PaymentRequest): Promise<string | undefined> {
+  if (r.accountId) return (await companyLinkBank(r))?.holder;
   const org = r.orgId ? (await store.findOrganisation(r.orgId)) : undefined;
   if (org?.type !== "business" || !(await orgsBackedBy(r.userId)).has(org.id)) return undefined;
   return org.legalName?.trim() || org.name;
@@ -391,7 +432,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!(await requireUserSession(req, res, user.id))) return;
       const r = await store.findPaymentRequest(req.params.reqId);
-      if (!r || r.userId !== user.id) return res.status(404).json({ error: "payment request not found" });
+      if (!r || r.userId !== user.id || r.accountId) return res.status(404).json({ error: "payment request not found" });
       res.json(ownerPaymentRequest(r, baseUrlFor(req)));
     }),
   );
@@ -405,7 +446,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       if (!user) return res.status(404).json({ error: "user not found" });
       if (!(await requireUserSession(req, res, user.id))) return;
       const r = await store.findPaymentRequest(req.params.reqId);
-      if (!r || r.userId !== user.id) return res.status(404).json({ error: "payment request not found" });
+      if (!r || r.userId !== user.id || r.accountId) return res.status(404).json({ error: "payment request not found" });
       if (r.state !== "OPEN") return res.status(409).json({ error: `this request is ${effectiveState(r).toLowerCase()}` });
       if (r.payments.length) {
         return res.status(409).json({ error: "a payment has already been recorded against this request — it cannot be cancelled" });
@@ -426,8 +467,9 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
    */
   const heldByOther = async (handle: string, r: PaymentRequest) => {
     const holder = await store.findUserByHandle(handle);
-    return (!!holder && holder.id !== r.userId)
-      || (!!(await store.findOrgByHandle(handle)) && (await companyPageHandle(r.userId, r.orgId)) !== handle);
+    // A company link's userId is its creator, never a payee: no person's handle opens it.
+    return (!!holder && (!!r.accountId || holder.id !== r.userId))
+      || (!!(await store.findOrgByHandle(handle)) && (await companyPageHandle(r.userId, r.orgId, r.accountId)) !== handle);
   };
 
   const resolvePublic = async (req: express.Request, res: express.Response) => {
@@ -445,7 +487,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
     // company page their Safe backs, but a code under anyone else's handle is
     // a 404, so a page cannot impersonate another payee.
     // A link another member made for the company never opens under the payee's personal page.
-    const handles = r && user ? [r.handle, ...(r.createdBy ? [] : [user.paymentPage?.handle]), await companyPageHandle(r.userId, r.orgId)] : [];
+    const handles = r && user ? [r.handle, ...(r.createdBy || r.accountId ? [] : [user.paymentPage?.handle]), await companyPageHandle(r.userId, r.orgId, r.accountId)] : [];
     if (!r || !user || !handles.includes(req.params.handle) || (await heldByOther(req.params.handle, r))) {
       res.status(404).json({ error: "no such payment request" });
       return undefined;
@@ -482,7 +524,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       const hit = await resolvePublic(req, res);
       if (!hit) return;
       const address = hit.user.paymentPage?.depositAddress;
-      if (!hit.r.methods.includes("crypto") || !address) return res.status(404).json({ error: "this request does not take crypto" });
+      if (hit.r.accountId || !hit.r.methods.includes("crypto") || !address) return res.status(404).json({ error: "this request does not take crypto" });
       if (!(await livePaymentPage(hit.user))) return res.status(503).json({ error: "crypto payment is unavailable on this link just now" });
       res.type("image/svg+xml");
       res.send(qrSvg(address));
@@ -502,7 +544,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
       const hit = await resolvePublic(req, res);
       if (!hit) return;
       const bank = publicPaymentRequest(hit.r, (await store.findUser(hit.user.id)) ?? hit.user, {
-        chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: await payeeNameFor(hit.r), cryptoLive: false, handle: hit.handle,
+        chainId: CHAIN_ID, token: payToken(), baseUrl: baseUrlFor(req), payeeName: await payeeNameFor(hit.r), companyBank: await companyLinkBank(hit.r), cryptoLive: false, handle: hit.handle,
       }).methods.bank;
       if (!bank) return res.status(404).json({ error: "this request does not take bank transfer" });
       const due = outstandingEur(hit.r);
@@ -536,7 +578,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
         return res.status(503).json({ error: "crypto payment is unavailable on this link just now — try bank transfer, or try again in a few minutes" });
       }
       const n = Number(req.body?.amountEur);
-      if (!Number.isFinite(n) || n <= 0 || n > MAX_REQUEST_EUR || Math.round(n * 100) !== n * 100) {
+      if (!Number.isFinite(n) || n <= 0 || n > MAX_REQUEST_EUR || !wholeCents(n)) {
         return res.status(400).json({ error: "amountEur must be a positive amount up to €1,000,000 with at most two decimals" });
       }
       if (hit.r.amountEur !== undefined && n !== hit.r.amountEur) {
@@ -808,11 +850,12 @@ export async function sweepPaymentRequests(now = new Date()): Promise<{ expired:
       continue;
     }
     if (!r.methods.includes("bank")) continue;
-    const payee = await store.findUser(r.userId);
-    if (!payee?.iban) continue;
+    // A company link is paid into its account's IBAN, never its creator's.
+    const iban = r.accountId ? (await companyLinkBank(r))?.iban : (await store.findUser(r.userId))?.iban;
+    if (!iban) continue;
     for (const t of (await store.list("transfers"))) {
       if (!t.reference || t.state !== "PAID") continue;
-      const payment = matchTransfer(t, r, payee.iban);
+      const payment = matchTransfer(t, r, iban);
       if (payment && !r.payments.some((p) => p.ref === payment.ref)) {
         await record((await store.findPaymentRequest(r.id))!, payment);
         matched++;

@@ -6,7 +6,11 @@ cluster per deployment on unix sockets, and the hub in its own database in
 mainnet's cluster. The scripts are in `scripts/oracle-host/`.
 
 **None of this has run on the host.** The scripts and SQL have run only
-against a local Postgres 17 and a throwaway cluster (`npm run check:pg`).
+against a local Postgres 17 and a throwaway cluster (`npm run check:pg`), and
+on GitHub's linux-arm64 runner (the manual `oracle-host` workflow: the
+toolchain check on `production`, `npm run check`, then `check:pg`). Those
+tests stub `systemctl` and the host, so no unit, timer or runbook step has
+run.
 Everything marked S7b below needs the owner's host and account.
 
 ## Files
@@ -138,7 +142,9 @@ never a redeploy of an older build or a hand-edited schema.
 
 ## Cut-over (S8, at the owner's time)
 
-The steps of design §6, testnet first, then mainnet:
+The steps of design §6, testnet first, then mainnet. Both deployments are
+imported: accounts, Safes, passkeys and IBANs carry over, and no one signs
+up again.
 
 1. Preconditions: `check:pg` on the release's commit against a scratch
    Postgres 17 (the host's `pg_hba` rejects its temporary roles and
@@ -161,7 +167,7 @@ The steps of design §6, testnet first, then mainnet:
 
 ## Host loss and rebuild
 
-Proposed target, for the owner to accept (design §9): service back within 4
+Target (the owner's, design §7.1): service back within 4
 hours of the decision to rebuild, losing at most the last minute of writes
 while archiving keeps up. Mainnet first, testnet the same way after.
 

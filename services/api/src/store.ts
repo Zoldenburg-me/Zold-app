@@ -794,8 +794,10 @@ export const jsonCore = {
     const norm = code.replace(/-/g, "").toUpperCase();
     return db.paymentRequests.find((r) => r.code === norm);
   },
+  /** The links this user is the payee of. A company link (`accountId`) is
+   *  its account's, not its creator's: never matched against their Safe. */
   paymentRequestsForUser(userId: string) {
-    return db.paymentRequests.filter((r) => r.userId === userId);
+    return db.paymentRequests.filter((r) => r.userId === userId && !r.accountId);
   },
   /** Shopify order and session ids are per-store sequences, so the shop is
    *  part of the key: without it one connected store's webhook finds, and can
