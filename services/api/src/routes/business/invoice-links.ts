@@ -231,9 +231,11 @@ export function createInvoiceLinkRouter(): express.Router {
     try {
       const { lines, total } = validateLines(req.body?.lines);
       const supplier = req.body?.supplier ?? {};
+      // What the form calls each field: the supplier never sees our key names.
+      const label: Record<string, string> = { orgName: "organisation", email: "email", address: "address", taxId: "VAT ID or tax number", invoiceNumber: "invoice number" };
       for (const field of ["orgName", "email", "invoiceNumber"]) {
         if (!String(supplier[field] ?? "").trim()) {
-          return res.status(400).json({ error: `Your ${field} is required.` });
+          return res.status(400).json({ error: `Your ${label[field]} is required.` });
         }
       }
       // Printed on the payor's documents; the link is reachable by anyone who
@@ -241,7 +243,7 @@ export function createInvoiceLinkRouter(): express.Router {
       const maxLength: Record<string, number> = { orgName: 200, email: 254, address: 500, taxId: 40, invoiceNumber: 60 };
       for (const [field, max] of Object.entries(maxLength)) {
         if (String(supplier[field] ?? "").trim().length > max) {
-          return res.status(400).json({ error: `Your ${field} is limited to ${max} characters.` });
+          return res.status(400).json({ error: `Your ${label[field]} is limited to ${max} characters.` });
         }
       }
       const dueDate = req.body?.dueDate;
