@@ -28,6 +28,8 @@ jobs:
           sudo apt-get install -y -q postgresql-17 postgresql-client-17 pgbackrest
           # The runner creates no 17 main cluster on install, and another cluster holds 5432 in its config.
           pg_lsclusters -h | grep -q '^17 main' || sudo pg_createcluster --port 5432 17 main
+          # The suites log in as their own throwaway roles with a password over the socket.
+          printf 'local all postgres peer\nlocal all %s peer\nlocal all all scram-sha-256\n' "$USER" | sudo tee /etc/postgresql/17/main/pg_hba.conf >/dev/null
           sudo pg_ctlcluster 17 main start
           sudo -u postgres createuser --superuser "$USER"
       - name: age, the pinned linux-arm64 build
