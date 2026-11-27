@@ -69,7 +69,8 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   /admin → Recoveries via eth_signTypedData_v4 with the relay key (`RELAY_KEY`) paying the gas.
   On Base mainnet, from the Oracle cut-over, the guardian is a Safe the
   owner holds, 1-of-3 (`0x222222222211B5eB5be634822404F66f1A3adB00`,
-  `wallets.json`): each of its three owners can act as the guardian alone. /admin checks a 65-byte ECDSA signature and refuses
+  `wallets.json`): each of its three owners is one of the owner's hardware
+  wallets and can act as the guardian alone. /admin checks a 65-byte ECDSA signature and refuses
   a contract guardian, so every mainnet recovery is confirmed from the Safe
   in Safe Cover, outside the console's gate: the operator checks the ID and
   bank steps below by hand before signing. Admin → Recoveries' guardian
