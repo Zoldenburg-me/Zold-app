@@ -33,7 +33,7 @@ import { can } from "../domain/segments.js";
 import { orgEntity } from "../domain/org-entity.js";
 import { companyEurAccount } from "../domain/org-monerium-iban.js";
 import type { Organisation } from "../domain/types.js";
-import { companyMoneriumClient, type CompanyMonerium } from "../routes/business/org-monerium-iban.js";
+import { companyMoneriumClient, recheckCompanyIbans, type CompanyMonerium } from "../routes/business/org-monerium-iban.js";
 
 /**
  * The bank facts of a processed issue order on our chain, for the statement
@@ -911,6 +911,7 @@ export function startDepositPoller() {
         if (u.funding?.status === "iban_pending") await refreshPendingIban(u);
         else if (u.funding?.status === "active" && u.iban) await verifyIbanBinding(u);
       }
+      await recheckCompanyIbans();
     } catch (err: any) {
       console.error(`monerium poll failed: ${moneriumFailureReason(err)}`);
     } finally {

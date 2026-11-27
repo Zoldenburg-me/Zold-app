@@ -139,8 +139,9 @@ Say this plainly rather than letting the surface imply otherwise:
   refused (collecting several owners' message signatures is not built).
   It needs the `profile` and `chain` fields on GET /ibans items, which are
   unverified against the real server (without `profile` it waits, failing
-  closed). An issued IBAN is re-read only when someone presses **Check
-  again**: there is no poller. Deposits are listed live from Monerium and
+  closed). An issued or moved IBAN is re-read on **Check again** and by the
+  Monerium poller, at most once per `MONERIUM_IBAN_CHECK_MS` per company
+  (as a person's is). Deposits are listed live from Monerium and
   booked nowhere.
 - **No crypto has been booked from a company's own Safe.** The scanner
   watches a company Safe that is the account's alone and books EURe and USDC

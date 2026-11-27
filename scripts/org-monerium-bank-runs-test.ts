@@ -725,6 +725,20 @@ try {
     assert.equal((await syncInvoicePayment((await store.findInvoice("inv_paying"))!)).state, "PAID");
   });
 
+  await check("a run line that pays an invoice puts the invoice on its payout row, for the statement line", async () => {
+    await reset();
+    await store.addInvoice({ id: "inv_row", orgId: "org_co", direction: "incoming", linkTokenHash: "h_inv_row", state: "SUBMITTED", supplier: { name: "Bob GmbH", invoiceNumber: "RE-9" }, lines: [], currency: "EUR", total: "25.00", payTo: { kind: "bank", bank: { iban: PAYEES[0].iban } }, createdByMemberId: "m_pia", createdAt: now, updatedAt: now } as any);
+    const d = await call("POST", "/org_co/drafts", "u_pia", { source: { kind: "account", accountId: "acc_co" }, lines: [
+      { contactId: "c_bob", invoiceId: "inv_row", destination: { kind: "bank", bankAccountId: "c_bob_b", displayName: "Bob GmbH" }, asset: "EUR", amount: "25" },
+      { contactId: "c_cara", destination: { kind: "bank", bankAccountId: "c_cara_b", displayName: "Cara Schmidt" }, asset: "EUR", amount: "5" },
+    ] });
+    const id = d.data.draft.id as string;
+    await store.updateInvoice("inv_row", { state: "PAYING", payment: { draftId: id } } as any);
+    assert.equal((await run(id)).status, 201);
+    const rows = await payouts();
+    assert.deepEqual(Object.fromEntries(rows.map((p) => [p.recipientIban, p.invoiceId ?? null])), { [PAYEES[0].iban]: "inv_row", [PAYEES[1].iban]: null });
+  });
+
   await check("New payment offers a company the account its run pays from: live, on its Safe, IBAN issued", async () => {
     const homeModel: any = await import(pathToFileURL(path.join(ROOT, "services/api/public/business/home-model.js")).href);
     const ok = { id: "a", status: "active", address: SAFE, identifier: { iban: IBAN } };
