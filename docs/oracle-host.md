@@ -33,7 +33,7 @@ Names (all from `lib.sh`), for `<dep>` = `mainnet` | `testnet`:
 |---|---|---|
 | cluster OS user and superuser | `pg-mainnet` | `pg-testnet` |
 | socket directory, port | `/run/postgresql-mainnet`, 5432 | `/run/postgresql-testnet`, 5433 |
-| data directory (own block volume) | `/srv/pg/mainnet/data` | `/srv/pg/testnet/data` |
+| data directory (own volume) | `/srv/pg/mainnet/data` | `/srv/pg/testnet/data` |
 | dump spool (same volume) | `/srv/pg/mainnet/dump-spool` | `/srv/pg/testnet/dump-spool` |
 | API OS user → role | `zold-mainnet` → `zold_app` | `zold-testnet` → `zold_app` |
 | deploy OS user → role | `zold-deploy-mainnet` → `zold_owner` | `zold-deploy-testnet` → `zold_owner` |
@@ -50,12 +50,33 @@ the host:
 
 - The OCI account, its region and second region, and the instance (Ampere
   A1, Ubuntu, aarch64) with one block volume per cluster mounted on
-  `/srv/pg/<dep>`. The OCI security list opens only SSH.
+  `/srv/pg/<dep>`. Where the free tier has no block storage left, a
+  preallocated ext4 image (root 600; `mkfs.ext4 -m 0 -E nodiscard`, then
+  `fallocate` to its full size, since a discard leaves it sparse) loop-mounted from
+  `/etc/fstab` with `loop,noatime,nofail,X-fstrim.notrim` does the same job:
+  provision checks only that `/srv/pg/<dep>` is a filesystem of its own, and
+  the free-space alerts and the cap are then the cluster's. `X-fstrim.notrim`
+  keeps the weekly trim from punching holes in the image, so its space stays
+  reserved on the boot disk (check: `fstrim -av --dry-run` skips it, and
+  `du --block-size=1` of the image equals its size); `nofail` keeps a broken image from stopping the
+  boot, and the cluster still waits for the mount. The OCI security list opens
+  only SSH.
+- A tenancy limited to one region keeps the second copy outside OCI, on
+  Cloudflare R2: `<DEP>_REPO2_ENDPOINT` and `<DEP>_DUMP_ENDPOINT` set to
+  `<account id>.r2.cloudflarestorage.com`, their region `auto`, and
+  `<DEP>_REPO2_S3_KEY`/`_S3_SECRET` an R2 token scoped to that bucket. An R2
+  token cannot be create-only, so the dump bucket's bucket lock rule (14
+  days) is what keeps the host from deleting or overwriting a dump, and a
+  lifecycle rule deletes dumps after 30 days. The pgBackRest bucket has no
+  lock, because `expire` deletes. One R2 PUT is capped at 5 GiB, so the dump
+  tar must stay under that; the first step on R2 is `pgbackrest stanza-create`
+  and `check` against the real bucket.
 - Per deployment: the two pgBackRest buckets and an OCI user with a policy
   for those two only (its customer secret key); the repository passphrase;
   the dump bucket in the second region with a 14-day time-bound retention
   rule (unlocked) and a 30-day lifecycle delete, and a key that may create
-  and read objects there, not overwrite or delete.
+  and read objects there, not overwrite or delete (on OCI; on R2 the bucket
+  lock enforces that, above).
 - `OCI_NAMESPACE`, `OWNER_AGE_RECIPIENT` (public key), `ALERT_URL`
   (`https://` only; provision refuses another scheme).
 - `/etc/zold/<dep>.env`: the lease's environment, plus `DATABASE_URL`,
@@ -68,7 +89,8 @@ the host:
   `/api/health` needs it, so the deploy copies it into every release.
 - The Cloudflare tunnel token for `cloudflared service install`.
 - For drills: an OCI user with a read-only credential (read and list) on the
-  pgBackRest and dump buckets.
+  pgBackRest and dump buckets, and an R2 Object Read only token for the
+  buckets on R2.
 
 ## Provisioning (S7b)
 
@@ -172,8 +194,12 @@ hours of the decision to rebuild, losing at most the last minute of writes
 while archiving keeps up. Mainnet first, testnet the same way after.
 
 1. New Ampere A1 instance, same image, same or second EU region; one block
-   volume per cluster mounted on `/srv/pg/<dep>`. The old instance, if it
-   returns, stays stopped.
+   volume per cluster mounted on `/srv/pg/<dep>`. A tenancy limited to one
+   region has no second OCI region to launch in while its home region is
+   down: then any Ubuntu aarch64 host elsewhere (provision needs only that),
+   restored from `repo2` on R2. With `<DEP>_REPOS=2` on R2, its own key and the dump
+   on R2, `host.env` needs no `OCI_NAMESPACE` and no shared S3 key. The old instance, if it returns, stays
+   stopped.
 2. Restore `/etc/zold-host/host.env` from the owner's copy. If a region is
    gone, set `<DEP>_REPOS` to the reachable repository only.
 3. `sudo scripts/oracle-host/provision.sh <dep> --rebuild`: everything up to
@@ -220,8 +246,10 @@ files).
 1. On the live host, per database: open a `REPEATABLE READ` transaction
    whose first statement is `SELECT pg_current_wal_lsn()`, then run
    `table-check.sql` in it. Keep the LSN and the lines.
-2. On the drill instance, with a `host.env` whose S3 key is the read-only
-   one: rebuild steps 1-4 with `--type=lsn
+2. On the drill instance, with a `host.env` whose S3 keys are all the
+   read-only ones: the shared `<DEP>_S3_KEY`/`_SECRET` and every
+   `<DEP>_REPO<n>_S3_KEY`/`_SECRET` (on R2, a read-only token), or a live
+   key stays in the drill's `pgbackrest.conf`: rebuild steps 1-4 with `--type=lsn
    --target=<Zold's database's LSN> --archive-mode=off`, and `pgbackrest stop`
    before Postgres starts (no `archive-push`, `backup` or `expire` there).
    Start Postgres; do not start the API (a restored mainnet API would run
@@ -279,7 +307,11 @@ LIMIT 0` and ends `hub_app`/`hub_owner` sessions when `hub` passes
   in design §7 whether a segment in `repo1` only is reported archived.
 - Each alert fires once (archiver failure, backlog, disk, `pgbackrest check`,
   hub size and stop) and reaches `ALERT_URL`.
-- A dump object: the dump credential is refused an overwrite and a delete.
+- A dump object: the first daily dump (`pgops.sh <dep>-dump`) is uploaded
+  and listed with the read-only credential, and the dump credential is
+  refused an overwrite and a delete (on R2, by the bucket lock). On R2 this
+  is the only test of the dump's own upload: `pgbackrest check` uses another
+  client and bucket.
 - The first restore drill and the first testnet rebuild, timed against the
   target.
 - The console check for an idle-reclamation notice on the instance.

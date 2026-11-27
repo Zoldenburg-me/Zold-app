@@ -108,15 +108,16 @@ watchdog() {
 }
 
 # PUT one file into the dump bucket over the S3-compatible API. The
-# credential may create and read only (§7); it goes to curl on stdin, never
-# on the command line.
+# credential may create and read only (§7; on R2 the bucket lock enforces
+# that); it goes to curl on stdin, never on the command line.
 put_object() { # file name
-  local region bucket sha
+  local region bucket sha host
   region="$(v DUMP_REGION)"; bucket="$(v DUMP_BUCKET)"
+  host="$(endpoint DUMP_ENDPOINT "$region")" || return 1
   sha="$(sha256sum "$1" | cut -d' ' -f1)"
   printf 'user = "%s:%s"\n' "$(v DUMP_KEY)" "$(v DUMP_SECRET)" | curl -fsS -m 3600 -K - \
     --aws-sigv4 "aws:amz:$region:s3" -H "x-amz-content-sha256: $sha" -T "$1" \
-    "https://$OCI_NAMESPACE.compat.objectstorage.$region.oraclecloud.com/$bucket/$2" >/dev/null
+    "https://$host/$bucket/$2" >/dev/null
 }
 
 dump() {
