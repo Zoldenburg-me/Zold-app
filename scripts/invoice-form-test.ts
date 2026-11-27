@@ -133,4 +133,30 @@ check("the form draws its lines and total from invoice-totals.js", () => {
   assert.doesNotMatch(html, /Number\(l(?:ines\[i\])?\.quantity \|\| 0\) \* Number/);
 });
 
+const { strokePath, canSign } = await import(pathToFileURL(path.join(PUB, "invoice-sign.js")).href);
+console.log("\nSigning pad");
+check("a tap is a dot: a path from the point to itself", () => {
+  assert.equal(strokePath([[5, 6]]), "M5,6 L5,6");
+});
+check("two points are a straight line", () => {
+  assert.equal(strokePath([[0, 0], [10, 4]]), "M0,0 L10,4");
+});
+check("a stroke starts and ends on its own points and curves through the midpoints between", () => {
+  assert.equal(strokePath([[0, 0], [10, 0], [20, 10], [30, 10]]), "M0,0 Q10,0 15,5 Q20,10 25,10 L30,10");
+});
+check("the page imports the pad's geometry from invoice-sign.js", () => {
+  assert.match(readFileSync(path.join(PUB, "invoice.js"), "utf8"), /import \{ canSign, strokePath \} from "\/invoice-sign\.js";/);
+});
+check("signing does not depend on a Pay link: a bank-only invoice can be signed", () => {
+  assert.equal(canSign({ state: "ISSUED" }, null), true); // no payPath at all
+  assert.equal(canSign({ state: "ISSUED", payPath: "/pay/acme/ABC123" }, null), true);
+  assert.equal(canSign({ state: "PAID" }, null), false);
+  assert.equal(canSign({ state: "RECONCILED" }, null), false);
+  assert.equal(canSign({ state: "ISSUED" }, new URLSearchParams("org=o&id=i")), false); // the issuer's own view
+  const js = readFileSync(path.join(PUB, "invoice.js"), "utf8");
+  assert.match(js, /const sign = canSign\(inv, own\);/);
+  assert.match(js, /\$\{sign \? `<div class="signed no-print" id="signed"/);
+  assert.match(js, /\$\{sign \? `<div class="pay-actions">/);
+});
+
 console.log(`\n${passed} passed`);
