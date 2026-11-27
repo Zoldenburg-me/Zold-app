@@ -6,7 +6,7 @@
  * leak or be lost on the next render.
  */
 import {
-  $, api, cap, countrySelect, esc, gateHtml, invoiceInputListener, org, orgs, readHealth, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
+  $, api, cap, countrySelect, zipMode, esc, gateHtml, invoiceInputListener, org, orgs, readHealth, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
   setChainId, setOrgs, setTestMode, setUsdSymbol, setView, signOut, toast, token, view,
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
@@ -107,6 +107,8 @@ export async function render({ focus = false } = {}) {
         t = setTimeout(refreshInvoiceCheck, 400);
       }, { signal: invoiceInputListener.signal });
       box.addEventListener("change", (e) => {
+        // The postcode keyboard follows the customer's country.
+        if (e.target?.id === "inv-r-country") $("#inv-r-zip").inputMode = zipMode(e.target.value);
         // Leaving the VAT ID field looks it up in VIES (which then checks
         // again); any other change just checks again.
         if (e.target?.id === "inv-r-vat") checkCustomerVatId();

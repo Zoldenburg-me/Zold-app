@@ -733,15 +733,17 @@ button.z-side__org:hover { border-color: var(--z-line-hover); }
 .z-tbl__link:focus-visible::after { outline: 2px solid var(--z-pink); outline-offset: -2px; border-radius: var(--z-radius-sm); }
 .z-tbl .z-amount { font-size: 15px; }
 /* A phone has no room for columns: each row is one wrapped line of its cells, the amount at the right.
-   shortcut: the column names are hidden here, switch to labelled cells if a table's values stop explaining themselves. */
+   The column names are hidden here: a cell whose value does not explain itself carries its own in data-label. */
 @media (max-width: 759px) {
   .z-tbl, .z-tbl tbody { display: block; }
   .z-tbl thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .z-tbl tbody tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--z-space-3); padding: var(--z-space-3) var(--z-space-4); border-bottom: 1px solid var(--z-line); }
+  .z-tbl tbody tr { display: flex; flex-wrap: wrap; align-items: center; gap: var(--z-space-2) var(--z-space-3); padding: var(--z-space-3) var(--z-space-4); border-bottom: 1px solid var(--z-line); }
   .z-tbl tbody tr:last-child { border-bottom: 0; }
   .z-tbl td { display: block; height: auto; min-width: 0; padding: 0; border: 0; }
   .z-tbl td:empty { display: none; }
   .z-tbl td.z-tbl__num { margin-left: auto; }
+  .z-tbl td[data-label] { flex-basis: 100%; display: flex; justify-content: space-between; gap: var(--z-space-3); }
+  .z-tbl td[data-label]::before { content: attr(data-label); color: var(--z-dim); }
 }
 
 /* Search (Cmd or Ctrl K): a dialog near the top, input first. */

@@ -218,15 +218,15 @@ RENDER.assets = async () => {
   const lotRow = (l) => `<tr>
       <td class="z-dim">${esc(day(l.acquiredAt))}</td>
       <td>${esc(walletName[l.walletId] || l.walletId || "Account")}${l.walletProofState && l.walletProofState !== "proven" ? ` ${Z.tag(PROOF_WORD[l.walletProofState] || l.walletProofState, "amber")}` : ""}</td>
-      <td class="z-tbl__num">${esc(l.quantity)}</td><td class="z-tbl__num">${esc(l.remaining)}</td>
-      <td class="z-tbl__num">${l.costCents === undefined ? "no value" : cents(l.costCents)}</td>
+      <td class="z-tbl__num" data-label="Quantity">${esc(l.quantity)}</td><td class="z-tbl__num" data-label="Left">${esc(l.remaining)}</td>
+      <td class="z-tbl__num" data-label="Cost">${l.costCents === undefined ? "no value" : cents(l.costCents)}</td>
       <td class="z-mono z-dim" translate="no">${esc(shortHex(l.txHash))}</td></tr>`;
   const positionsHtml = d.positions.length
     ? d.positions.map((p) => `<section class="z-card" style="margin-bottom:12px" aria-label="${esc(p.asset)}">
         <div class="z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Token</th><th scope="col" class="z-tbl__num">Held</th><th scope="col" class="z-tbl__num">Cost of what is held</th><th scope="col" class="z-tbl__num">Realised to date</th></tr></thead><tbody><tr>
-          <td>${holdingCell(p)}</td><td class="z-tbl__num">${esc(p.quantity)}</td>
-          <td class="z-tbl__num">${cents(p.costBasisCents)}${p.uncostedQuantity !== "0" ? `<span class="zb-sub2">and ${esc(p.uncostedQuantity)} with no known cost</span>` : ""}</td>
-          <td class="z-tbl__num">${signedCents(p.realisedCents)}${p.unmeasured ? `<span class="zb-sub2">${p.unmeasured} sale${p.unmeasured === 1 ? "" : "s"} not measurable</span>` : ""}</td></tr></tbody></table></div>
+          <td>${holdingCell(p)}</td><td class="z-tbl__num" data-label="Held">${esc(p.quantity)}</td>
+          <td class="z-tbl__num" data-label="Cost of what is held">${cents(p.costBasisCents)}${p.uncostedQuantity !== "0" ? `<span class="zb-sub2">and ${esc(p.uncostedQuantity)} with no known cost</span>` : ""}</td>
+          <td class="z-tbl__num" data-label="Realised to date">${signedCents(p.realisedCents)}${p.unmeasured ? `<span class="zb-sub2">${p.unmeasured} sale${p.unmeasured === 1 ? "" : "s"} not measurable</span>` : ""}</td></tr></tbody></table></div>
         <details style="padding:0 16px 12px"><summary>${p.lots.length} lot${p.lots.length === 1 ? "" : "s"}</summary>
           <div class="z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Acquired</th><th scope="col">Wallet</th><th scope="col" class="z-tbl__num">Quantity</th><th scope="col" class="z-tbl__num">Left</th><th scope="col" class="z-tbl__num">Cost</th><th scope="col">Transaction</th></tr></thead><tbody>${p.lots.map(lotRow).join("")}</tbody></table></div></details>
       </section>`).join("")
@@ -535,6 +535,12 @@ RENDER.organisation = async () => {
   } };
 };
 window.addEventListener("beforeunload", (e) => { if ($("#org-form")?.dataset.dirty) e.preventDefault(); });
+// A tap on another screen never leaves the document, so it asks here, before the link's own handler.
+// shortcut: Back and search results are not asked, keep the typed profile across views if that loses work.
+document.addEventListener("click", (e) => {
+  if (e.target.closest?.("a[data-view], a[data-view-link]") && $("#org-form")?.dataset.dirty
+    && !confirm("Leave without saving your changes?")) { e.preventDefault(); e.stopPropagation(); }
+}, true);
 
 /* ==========================================================================
    The invoicing profile

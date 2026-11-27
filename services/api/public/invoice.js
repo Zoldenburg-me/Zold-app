@@ -354,7 +354,7 @@ function render(inv) {
   if (inv.issued) {
     const settled = inv.state === "PAID" || inv.state === "RECONCILED";
     document.title = `${inv.issued.number} · ${(L[inv.issued.language] || L.en).invoice}`;
-    $("#actions").innerHTML = `${!settled && !own && inv.payPath ? `<a class="pay-btn" href="${esc(inv.payPath)}">Pay</a> ` : ""}<button class="ghost" id="print">Print / PDF</button>`;
+    $("#actions").innerHTML = `${!settled && !own && inv.payPath ? `<a class="pay-btn" lang="${L[inv.issued.language] ? inv.issued.language : "en"}" href="${esc(inv.payPath)}">${esc((L[inv.issued.language] || L.en).pay)}</a> ` : ""}<button class="ghost" id="print">Print / PDF</button>`;
     $("#print").addEventListener("click", () => window.print());
     // The payment page offers the way back here (pay-request.js); kept for this tab only.
     document.addEventListener("click", (e) => {
