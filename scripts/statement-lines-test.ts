@@ -20,6 +20,7 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-sta
 process.env.TRANSF_CHAIN_ID = "31337";
 
 const { lineId, linesInMonth, mergeStatementLines, projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
+const { LEDGER_EXPORT_COLUMNS, ledgerExportRows, vatSplits } = await import("../services/api/src/domain/ledger.js");
 type Inputs = import("../services/api/src/bookkeeping/statement.js").StatementInputs;
 
 let passed = 0;
@@ -435,6 +436,42 @@ await check("a human's account code survives a later fact change; the Monerium i
   const sepa = rows.find((e) => e.statement!.key === "monerium:issue:ord-9")!;
   assert.equal(sepa.statement!.counterparty.iban, "DE02120300000000202051");
   assert.equal(sepa.amount, "20.00");
+});
+
+await check("an invoice payment's VAT follows what it put against the invoice, cumulatively", () => {
+  let n = 0;
+  const entry = (invoiceId: string, amountCents: number, links: Record<string, unknown>, txType = "invoice_payment") =>
+    ({ txType, at: "2026-11-27", direction: "in", asset: "EUR", amount: String(amountCents / 100), tags: [],
+       statement: { key: `k${String(++n).padStart(2, "0")}`, valueDate: `2026-11-${String(n).padStart(2, "0")}`, amountCents,
+         links: { invoiceId, txHashes: [], ...links } } }) as never;
+  const invoices = new Map<string, { grossCents: number; vatCents: number; settledCents?: Record<string, number> }>([
+    ["crypto", { grossCents: 11900, vatCents: 1900, settledCents: { "deposit:d1": 11900 } }],
+    ["parts", { grossCents: 11900, vatCents: 1900, settledCents: { "deposit:d3": 11900 } }],
+    ["over", { grossCents: 11900, vatCents: 1900, settledCents: { "monerium:o1": 6000, "monerium:o2": 6000 } }],
+    ["exact", { grossCents: 11906, vatCents: 1901, settledCents: { "monerium:o3": 5953, "monerium:o4": 5953 } }],
+    ["manual", { grossCents: 11900, vatCents: 1900 }],
+  ]);
+  const quoted = entry("crypto", 11960, { depositId: "d1" });           // USDC valued €0.60 above its quote
+  const gain = entry("crypto", 60, { depositId: "d1" }, "realised_gain");
+  const partA = entry("parts", 6001, { depositId: "d3" });              // one receipt booked in two lines
+  const partB = entry("parts", 6000, { depositId: "d3" });
+  const over1 = entry("over", 6000, { orderId: "o1", depositId: "mint1" }, "transfer_in"); // two SEPA credits, €1 over
+  const over2 = entry("over", 6000, { orderId: "o2", depositId: "mint2" }, "transfer_in");
+  const ex1 = entry("exact", 5953, { orderId: "o3" }, "transfer_in");  // two halves that add up exactly
+  const ex2 = entry("exact", 5953, { orderId: "o4" }, "transfer_in");
+  const manual = entry("manual", 11900, {});                          // linked by hand, no settlement
+  const split = vatSplits([quoted, gain, partA, partB, over1, over2, ex1, ex2, manual], invoices);
+  const vat = (...es: never[]) => es.reduce((t, e) => t + split.get(e)!.vatCents, 0);
+  assert.deepEqual(split.get(quoted), { netCents: 10060, vatCents: 1900 }, "the invoiced VAT, not more");
+  assert.equal(split.get(gain), undefined, "a gain is not revenue with VAT in it");
+  assert.equal(vat(partA, partB), 1900, "two lines of one receipt share its VAT");
+  assert.equal(vat(over1, over2), 1900, "an overpayment carries no VAT");
+  assert.equal(vat(ex1, ex2), 1901, "installments add up to the invoiced VAT, not a cent more");
+  assert.deepEqual(split.get(manual), { netCents: 10000, vatCents: 1900 });
+  const row = ledgerExportRows([manual], invoices)[0];
+  assert.equal(row.netValue, "100.00");
+  assert.equal(row.vatValue, "19.00");
+  assert.ok(LEDGER_EXPORT_COLUMNS.includes("vatValue" as never));
 });
 
 console.log(`\nstatement-lines: ${passed} checks passed${process.exitCode ? " (with failures)" : ""}`);

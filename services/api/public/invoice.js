@@ -113,6 +113,8 @@ function renderIssued(inv) {
   const bilingual = show.bilingual;
   const lab = (k) => (bilingual && L.de[k] !== L.en[k] ? `${L.de[k]} / ${L.en[k]}` : t[k]);
 
+  // `display` is frozen at issue (issue-outgoing.ts), with the identifiers
+  // the treatment requires already switched on.
   const issuerLines = [
     d.issuer.name,
     ...addressOf(d.issuer, home),
@@ -178,7 +180,7 @@ function renderIssued(inv) {
           <td>${esc(l.description)}<div class="sub narrow">${esc(l.quantity)} × ${esc(decimal(l.unitPrice))}</div></td>
           <td class="num wide">${esc(l.quantity)}</td>
           <td class="num wide">${esc(decimal(l.unitPrice))}</td>
-          ${exempt ? "" : `<td class="num">${esc(d.vatTreatment.rate)} %</td>`}
+          ${exempt ? "" : `<td class="num">${esc(l.vatRate ?? d.vatTreatment.rate)} %</td>`}
           <td class="num">${esc(decimal(l.amount))}</td>
         </tr>`).join("")}
       </tbody>

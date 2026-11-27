@@ -297,10 +297,25 @@ function paper(check) {
   const unitMoney = (p) => new Intl.NumberFormat(PAPER_LOCALES[lang] || "en-GB", { style: "currency", currency: cur || "EUR", maximumFractionDigits: 6 }).format(Number(p || 0));
   const iss = profile.issuer || {};
   const rec = invoiceDraft.recipient || {};
-  const taxId = iss.taxNumber ? [t.taxNo, iss.taxNumber] : iss.vatId ? [t.vatId, iss.vatId] : [t.vatId, null];
   const totals = check.totals || pv.totals;
   const reason = invoiceDraft.vat.kind === "exempt"
     ? [...(profile.reference.exemptionReasons || []), ...(profile.reference.customReasons || [])].find((x) => x.id === invoiceDraft.vat.reason) : null;
+  // The VAT ID itself where the invoice needs it, as issueOutgoing prints it:
+  // a taxed invoice outside Germany (Art. 226(3)) or a reason that requires it.
+  const needsVatId = (invoiceDraft._jur?.ruleSet === "EU" && invoiceDraft.vat.kind === "standard") || !!reason?.requiresIssuerVatId;
+  // Mirrors the display issueOutgoing freezes: each identifier its setting
+  // shows, the VAT ID forced on where required, and at least one shown.
+  const show = profile.profile?.display || {};
+  let showVat = needsVatId || (show.issuerVatId !== false && !!iss.vatId);
+  let showTax = show.issuerTaxNumber !== false && !!iss.taxNumber;
+  if (!showVat && !showTax) {
+    if (iss.vatId || !iss.taxNumber) showVat = true;
+    else showTax = true;
+  }
+  const taxIds = [
+    showVat ? [t.vatId, iss.vatId || null] : null,
+    showTax ? [t.taxNo, iss.taxNumber] : null,
+  ].filter(Boolean);
   // Matches vatNoteFor: German text under de, English under every other
   // language; an org's own rule has the one note it was written with.
   const vatNote = !reason ? ""
@@ -314,7 +329,7 @@ function paper(check) {
   return `<article class="zb-paper" lang="${lang}" translate="no" aria-label="${esc(`${t.invoice} ${pv.number || ""}`)}">
     <header class="zb-paper__head">
       <div><p class="zb-paper__who">${esc(iss.name || "")}</p><p>${esc(addr(iss)) || `<span class="zb-paper__missing">${t.missing}</span>`}</p></div>
-      <p class="zb-paper__tax">${esc(taxId[0])} ${taxId[1] ? esc(taxId[1]) : `<span class="zb-paper__missing">${t.missing}</span>`}</p>
+      <p class="zb-paper__tax">${taxIds.map(([label, value]) => `${esc(label)} ${value ? esc(value) : `<span class="zb-paper__missing">${t.missing}</span>`}`).join("<br>")}</p>
     </header>
     <p class="zb-paper__to">${esc(rec.name || "")}<br>${esc(addr(rec))}</p>
     <h2 class="zb-paper__title">${esc(t.invoice)} ${esc(pv.number || "")}</h2>

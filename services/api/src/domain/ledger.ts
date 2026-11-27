@@ -627,6 +627,8 @@ export const LEDGER_EXPORT_COLUMNS = [
   "fiatCurrency",
   "fiatValue",
   "fiatRate",
+  "netValue",
+  "vatValue",
   "counterparty",
   "accountCode",
   "tags",
@@ -635,8 +637,85 @@ export const LEDGER_EXPORT_COLUMNS = [
   "chainId",
 ] as const;
 
-export function ledgerExportRows(entries: LedgerEntry[]): Record<string, unknown>[] {
-  return entries.map((e) => ({
+/** An issued invoice's euro figures, and what each payment put against it
+ *  (settlement ref → euro cents), as `vatSplits` reads them. */
+export interface IssuedEuroTotals {
+  grossCents: number;
+  vatCents: number;
+  settledCents?: Record<string, number>;
+}
+
+/** Payments received: a crypto receipt, or a bank credit (SEPA lines are
+ *  `transfer_in` even when matched to an invoice). */
+const PAYMENT_TYPES = new Set(["invoice_payment", "transfer_in"]);
+
+/** The settlement a statement line is: the Monerium order first (a SEPA
+ *  line also names its EURe mint as a deposit), else the deposit. */
+const settlementRefOf = (s: NonNullable<LedgerEntry["statement"]>) =>
+  s.links.orderId ? `monerium:${s.links.orderId}` : s.links.depositId ? `deposit:${s.links.depositId}` : undefined;
+
+/**
+ * The net and VAT inside each payment of an issued invoice, so revenue is not
+ * booked with the VAT in it. VAT follows what the payments put against the
+ * invoice (their settlements), allocated on the running total per invoice in
+ * date order and capped at the invoice's gross: each row gets the change in
+ * the rounded cumulative VAT, so the rows add up to the invoiced VAT exactly
+ * and an overpayment carries none. A crypto receipt valued above its quote
+ * keeps the difference in net. A settlement booked in several lines (a
+ * receipt converted in parts) is shared by line amount, the last line taking
+ * the remainder. A line with no settlement record (a manual link) counts at
+ * its amount.
+ */
+export function vatSplits(
+  entries: LedgerEntry[],
+  invoices: ReadonlyMap<string, IssuedEuroTotals>,
+): Map<LedgerEntry, { netCents: number; vatCents: number }> {
+  const payable = entries.flatMap((e) => {
+    const s = e.statement;
+    const inv = s?.links.invoiceId ? invoices.get(s.links.invoiceId) : undefined;
+    if (!s || !inv || !PAYMENT_TYPES.has(e.txType ?? "") || s.amountCents <= 0 || inv.grossCents <= 0) return [];
+    return [{ e, s, inv, invoiceId: s.links.invoiceId!, ref: settlementRefOf(s) }];
+  }).sort((x, y) => (x.s.valueDate ?? "").localeCompare(y.s.valueDate ?? "") || (x.s.key ?? "").localeCompare(y.s.key ?? ""));
+
+  const refLines = new Map<string, { total: number; left: number; assigned: number }>();
+  for (const p of payable) {
+    if (!p.ref) continue;
+    const r = refLines.get(p.ref) ?? { total: 0, left: 0, assigned: 0 };
+    r.total += p.s.amountCents;
+    r.left++;
+    refLines.set(p.ref, r);
+  }
+  const cumulative = new Map<string, { applied: number; vat: number }>();
+  const out = new Map<LedgerEntry, { netCents: number; vatCents: number }>();
+  for (const { e, s, inv, invoiceId, ref } of payable) {
+    const settled = ref ? inv.settledCents?.[ref] : undefined;
+    let applied = s.amountCents;
+    if (settled !== undefined) {
+      const r = refLines.get(ref!)!;
+      applied = --r.left === 0 ? settled - r.assigned : Math.round((settled * s.amountCents) / r.total);
+      r.assigned += applied;
+    }
+    const c = cumulative.get(invoiceId) ?? { applied: 0, vat: 0 };
+    c.applied += applied;
+    const vatSoFar = Math.round((inv.vatCents * Math.min(Math.max(c.applied, 0), inv.grossCents)) / inv.grossCents);
+    const vatCents = vatSoFar - c.vat;
+    c.vat = vatSoFar;
+    cumulative.set(invoiceId, c);
+    out.set(e, { netCents: s.amountCents - vatCents, vatCents });
+  }
+  return out;
+}
+
+const euro = (cents: number) => (cents / 100).toFixed(2);
+
+export function ledgerExportRows(
+  entries: LedgerEntry[],
+  invoices: ReadonlyMap<string, IssuedEuroTotals> = new Map(),
+): Record<string, unknown>[] {
+  const splits = vatSplits(entries, invoices);
+  return entries.map((e) => {
+    const split = splits.get(e);
+    return {
     date: e.at,
     direction: e.direction,
     asset: e.asset,
@@ -644,11 +723,14 @@ export function ledgerExportRows(entries: LedgerEntry[]): Record<string, unknown
     fiatCurrency: e.fiatCurrency ?? "",
     fiatValue: e.fiatValue ?? "",
     fiatRate: e.fiatRate ?? "",
+    netValue: split ? euro(split.netCents) : "",
+    vatValue: split ? euro(split.vatCents) : "",
     counterparty: e.counterparty?.name ?? e.counterparty?.address ?? "",
     accountCode: bookedCode(e) ?? "",
     tags: e.tags.join(";"),
     note: e.note ?? "",
     txHash: e.txHash ?? "",
     chainId: e.chainId ?? "",
-  }));
+    };
+  });
 }
