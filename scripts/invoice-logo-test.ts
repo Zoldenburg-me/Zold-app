@@ -85,7 +85,11 @@ const reverseCharge = {
   vat: { kind: "exempt", reason: "reverse_charge_eu" },
   acceptWarnings: true,
 };
-const png = (extra = "") => `data:image/png;base64,${Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(`logo${extra}`)]).toString("base64")}`;
+// A PNG header with an IHDR of the given size; the server reads no further.
+const png = (extra = "", w = 200, h = 60) => {
+  const ihdr = Buffer.alloc(8); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  return `data:image/png;base64,${Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]), Buffer.from("IHDR"), ihdr, Buffer.from(`logo${extra}`)]).toString("base64")}`;
+};
 const setLogo = (logo: unknown, asUser = "u_owner") => call("PATCH", "/api/orgs/org_de/invoicing/profile", asUser, { logo });
 const issue = async () => {
   const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
@@ -98,6 +102,11 @@ await check("a logo that is not the image it claims, an SVG or too big is refuse
   assert.equal((await setLogo(`data:image/png;base64,${Buffer.from("<svg/>").toString("base64")}`)).status, 400);
   assert.equal((await setLogo(`data:image/svg+xml;base64,${Buffer.from("<svg/>").toString("base64")}`)).status, 400);
   assert.equal((await setLogo(png("x".repeat(41_000)))).status, 400);
+  // A small file of many pixels, sent past the browser's scaling.
+  assert.equal((await setLogo(png("", 20_000, 20_000))).status, 400);
+  assert.equal((await setLogo(png("", 801, 100))).status, 400);
+  // No readable header: magic bytes alone are not an image.
+  assert.equal((await setLogo(`data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64")}`)).status, 400);
   assert.equal((await store.findOrganisation("org_de"))!.invoicing?.logoId, undefined);
 });
 
@@ -126,11 +135,12 @@ await check("a new logo, then none: the issued invoice keeps the one it was issu
   assert.equal((await printed(first.linkToken)).logo, png("A"));
 });
 
-await check("logos tried and replaced before any invoice used them are dropped; issued ones stay", async () => {
-  for (const x of ["C", "D", "E"]) assert.equal((await setLogo(png(x))).status, 200);
-  const kept = Object.values((await store.findOrganisation("org_de"))!.invoicing?.logos ?? {}).sort();
-  // A and B are on issued invoices, D is the one E replaced, E is current.
-  assert.deepEqual(kept, [png("A"), png("B"), png("D"), png("E")].sort());
+await check("no logo is ever deleted; past 20 a new one is refused, a kept one can be chosen again", async () => {
+  for (let n = 0; n < 18; n++) assert.equal((await setLogo(png(`n${n}`))).status, 200);
+  assert.equal(Object.keys((await store.findOrganisation("org_de"))!.invoicing?.logos ?? {}).length, 20);
+  const refused = await setLogo(png("one too many"));
+  assert.equal(refused.status, 409, JSON.stringify(refused.data));
+  assert.equal((await setLogo(png("A"))).status, 200);
   assert.equal((await printed(first.linkToken)).logo, png("A"));
 });
 

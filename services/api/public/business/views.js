@@ -619,9 +619,9 @@ RENDER["invoicing-settings"] = async () => {
     editProfile)}
   ${card("Logo", "Printed top right on new invoices. PNG, JPEG or WebP; Zold scales it to at most 800 × 230 pixels and 40 kB. Invoices already issued keep the logo they were issued with.",
     `<div id="i-logo-box">${p.logo ? `<img src="${esc(p.logo)}" alt="Your current logo" style="display:block;max-width:220px;max-height:64px;margin-bottom:12px;background:#fff;padding:8px;border-radius:6px">` : `<p class="desc" style="margin-bottom:12px">No logo yet.</p>`}
-     <label for="i-logo" class="z-btn z-btn--secondary z-btn--sm" style="cursor:pointer">${Z.icon("upload")}<span>${p.logo ? "Replace logo" : "Upload logo"}</span></label>
+     ${!["owner", "admin"].includes(org.role) /* org.update */ ? `<p class="desc">An owner or admin can change it.</p>` : `<label for="i-logo" class="z-btn z-btn--secondary z-btn--sm" style="cursor:pointer">${Z.icon("upload")}<span>${p.logo ? "Replace logo" : "Upload logo"}</span></label>
      <input id="i-logo" type="file" accept="image/png,image/jpeg,image/webp" class="z-sr" />
-     ${p.logo ? `<button type="button" class="z-link-btn" data-act="remove-invoice-logo" style="margin-left:12px">Remove</button>` : ""}</div>`)}
+     ${p.logo ? `<button type="button" class="z-link-btn" data-act="remove-invoice-logo" style="margin-left:12px">Remove</button>` : ""}`}</div>`)}
   ${card("Tax and numbering", "Defaults for new invoices. Each invoice can change them.",
     `<div class="grid g2"><div>
         <label for="i-lang">Invoice language</label>

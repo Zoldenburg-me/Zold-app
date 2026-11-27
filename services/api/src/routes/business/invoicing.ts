@@ -30,7 +30,7 @@ import { cachedVatCheck, checkVatId } from "../../adapters/vies.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
 import { correctable, correctionBody, issueOutgoing } from "./issue-outgoing.js";
-import { logoFrom } from "../../domain/invoice-logo.js";
+import { LOGO_MAX_KEPT, logoFrom } from "../../domain/invoice-logo.js";
 import { openLinkFor, payLinkForInvoice } from "./invoice-pay-link.js";
 import { baseUrlFor } from "../payment-requests.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
@@ -178,16 +178,12 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       next.logoId = checked.id;
     }
     if ("logoId" in next && next.logoId !== stored?.logoId && !requirePermission(ctx, res, "org.update")) return;
-    // On a logo change, keep only the logos an issued invoice prints, the new
-    // one and the one it replaces (an issue in flight may have just read it;
-    // `cur` too, the locked row, for a PATCH that raced this one):
-    // the map would otherwise grow by every image ever tried.
-    const keptLogos = "logoId" in next && next.logoId !== stored?.logoId
-      ? new Set([
-        ...(await store.invoicesOf(ctx.org.id)).flatMap((i) => (i.issued?.logoId ? [i.issued.logoId] : [])),
-        ...(stored?.logoId ? [stored.logoId] : []),
-      ])
-      : undefined;
+    // No logo is ever deleted: an issued invoice prints its logo from this
+    // map, and deciding "no invoice uses it" races an issue in flight. The
+    // count is bounded instead; one already kept can always be chosen again.
+    if (logo && !stored?.logos?.[logo.id] && Object.keys(stored?.logos ?? {}).length >= LOGO_MAX_KEPT) {
+      return res.status(409).json({ error: `Zold keeps every logo you upload, so issued invoices never lose theirs, and this organisation has ${LOGO_MAX_KEPT}. Upload one of those again, or contact support to raise the limit.`, field: "logo" });
+    }
     if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
       next.paymentTermsDays = Math.round(b.paymentTermsDays);
     }
@@ -258,12 +254,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     const org = await store.patchOrgSub(ctx.org.id, "invoicing", (cur) => ({
       ...(cur ?? {}),
       ...next,
-      ...(keptLogos ? {
-        logos: {
-          ...Object.fromEntries(Object.entries(cur?.logos ?? {}).filter(([id]) => keptLogos.has(id) || id === cur?.logoId)),
-          ...(logo ? { [logo.id]: logo.dataUrl } : {}),
-        },
-      } : {}),
+      ...(logo ? { logos: { ...(cur?.logos ?? {}), [logo.id]: logo.dataUrl } } : {}),
     }), {
       ...(clearsSignupTaxId(identity.patch) ? { taxId: undefined } : {}),
     });
