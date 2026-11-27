@@ -380,9 +380,9 @@ Say this plainly rather than letting the surface imply otherwise:
   foreign key is in the schema and no real duplicate is known. Mainnet's
   cluster exists on the Oracle host with a first full backup in both
   repositories (OCI Frankfurt and Cloudflare R2) and one daily dump, but it
-  holds no data: nothing has been imported, the API has not run there, and
-  no restore drill or alert test has run (`docs/oracle-host.md`). Testnet
-  has no cluster.
+  holds no data: nothing has been imported and the API has not run there.
+  Each alert has fired once and the one-repository-down test has run; no
+  restore drill has (`docs/oracle-host.md`). Testnet has no cluster.
 - Timeout values everywhere were chosen, not measured.
 
 **PARKED, and it gates one customer**: merchant-book privacy. One Safe per

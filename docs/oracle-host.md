@@ -10,10 +10,13 @@ mainnet` ran on the owner's instance (Ampere A1, Ubuntu 24.04, Frankfurt):
 the cluster on a loop-mounted image, `stanza-create` and `check` against
 `repo1` (OCI Frankfurt) and `repo2` (Cloudflare R2), the database step and
 `check.sql`, the units and timers, a first full backup to each repository,
-WAL archiving, and one daily dump to R2. The API has not run there: its
-environment is staged outside `/etc/zold` and the deploy timer is off until
-the cut-over. Not run yet: each alert firing once, the one-repository-down
-test, a restore drill, testnet, and anything of S8.
+WAL archiving, and one daily dump to R2. On mainnet, also run: every alert
+once, reaching `ALERT_URL`; the one-repository-down test (design §7); and
+a dump that the dump credential could neither overwrite nor delete (R2's
+bucket lock answered 409). The API has not run there: its environment is
+staged outside `/etc/zold` and the deploy timer is off until the cut-over.
+Not run yet: listing the dump with a read-only credential, a restore
+drill, testnet, and anything of S8.
 Everything marked S7b below needs the owner's host and account.
 
 ## Files
@@ -306,6 +309,10 @@ LIMIT 0` and ends `hub_app`/`hub_owner` sessions when `hub` passes
 
 ## What S7b still has to do on the host
 
+On mainnet, done: provisioning, `pgbackrest check` and a first full backup
+to each repository, the one-repository-down test, the alerts, and the
+dump-lock refusal. Testnet has done none of it.
+
 - Provision both clusters; the toolchain check on the host.
 - `pgbackrest check` against both repositories; a first full backup to each.
 - The one-repository-down test: block `repo2` (an iptables drop to its
@@ -317,7 +324,8 @@ LIMIT 0` and ends `hub_app`/`hub_owner` sessions when `hub` passes
   and listed with the read-only credential, and the dump credential is
   refused an overwrite and a delete (on R2, by the bucket lock). On R2 this
   is the only test of the dump's own upload: `pgbackrest check` uses another
-  client and bucket.
+  client and bucket. On mainnet, the listing has so far used only the dump
+  credential, not a read-only one.
 - The first restore drill and the first testnet rebuild, timed against the
   target.
 - The console check for an idle-reclamation notice on the instance.
