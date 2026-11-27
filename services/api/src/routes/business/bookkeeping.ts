@@ -402,12 +402,14 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     if (!ctx) return;
     if (!requireCapability(ctx, res, "export.ledger")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
-    // Each paid invoice's euro gross and VAT: the issued figures, or their
-    // euro restatement for a foreign-currency invoice.
+    // Each paid invoice's euro gross and VAT (the issued figures, or their
+    // euro restatement for a foreign-currency invoice), and what each payment
+    // put against it.
     const invoices = new Map(
       (await store.invoicesOf(ctx.org.id)).flatMap((i) => {
         const euro = i.issued?.conversion ?? i.issued;
-        return euro ? [[i.id, { grossCents: euro.grossCents, vatCents: euro.vatCents }] as const] : [];
+        const settledCents = Object.fromEntries((i.settlements ?? []).map((x) => [x.ref, Math.round(x.amountEur * 100)]));
+        return euro ? [[i.id, { grossCents: euro.grossCents, vatCents: euro.vatCents, settledCents }] as const] : [];
       }),
     );
     const rows = ledgerExportRows(await store.ledgerOf(ctx.org.id), invoices);

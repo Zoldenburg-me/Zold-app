@@ -802,9 +802,15 @@ export function checkCompliance(
   // § 33 UStDV's €250 is in euro: a foreign-currency invoice is judged on its
   // euro restatement (one without it is refused below anyway).
   const grossEur = draft.conversion?.grossCents ?? totals.grossCents;
+  // § 33 S. 3 UStDV: intra-community supplies (§ 6a) and § 13b reverse charge
+  // never get the simplified content, however small.
+  const excludedFromSimplified =
+    draft.treatment.kind === "exempt" &&
+    (draft.treatment.reason === "intra_community_supply" || draft.treatment.reason === "reverse_charge_domestic");
   const kleinbetrag =
     jur.simplifiedLimitCents !== undefined &&
     grossEur <= jur.simplifiedLimitCents &&
+    !excludedFromSimplified &&
     !smallBusiness &&
     !draft.selfBilled;
   const regime: ComplianceReport["regime"] = smallBusiness
@@ -1101,7 +1107,10 @@ function checkGermanContent(
   if (draft.treatment.kind === "standard") {
     // Every line's rate, not only the invoice's default: a line may carry its
     // own, and a 0% line on a taxed invoice is a zero-tax line with no reason.
-    const offRate = totals.buckets.map((b) => b.rate).filter((r) => !DE_RATES.includes(r as never));
+    // The invoice's own rate too: it is stored on the document even when every
+    // line overrides it.
+    const rates = new Set([draft.treatment.rate, ...totals.buckets.map((b) => b.rate)]);
+    const offRate = [...rates].filter((r) => !DE_RATES.includes(r as never));
     if (offRate.length) {
       add(
         "error",

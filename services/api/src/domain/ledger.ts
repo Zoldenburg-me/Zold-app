@@ -637,27 +637,52 @@ export const LEDGER_EXPORT_COLUMNS = [
   "chainId",
 ] as const;
 
-/** An issued invoice's euro figures, as `vatSplit` reads them. */
+/** An issued invoice's euro figures, and what each payment put against it
+ *  (settlement ref → euro cents), as `vatSplits` reads them. */
 export interface IssuedEuroTotals {
   grossCents: number;
   vatCents: number;
+  settledCents?: Record<string, number>;
 }
 
+/** Payments received: a crypto receipt, or a bank credit (SEPA lines are
+ *  `transfer_in` even when matched to an invoice). */
+const PAYMENT_TYPES = new Set(["invoice_payment", "transfer_in"]);
+
+/** The settlement a statement line is: the Monerium order first (a SEPA
+ *  line also names its EURe mint as a deposit), else the deposit. */
+const settlementRefOf = (s: NonNullable<LedgerEntry["statement"]>) =>
+  s.links.orderId ? `monerium:${s.links.orderId}` : s.links.depositId ? `deposit:${s.links.depositId}` : undefined;
+
 /**
- * The net and VAT inside an invoice payment, so revenue is not booked with the
- * VAT in it. Pro rata to the invoice's euro gross: a part payment carries its
- * share of the tax. Undefined for anything that is not a payment received
- * against an issued invoice.
+ * The net and VAT inside each payment of an issued invoice, so revenue is not
+ * booked with the VAT in it. The VAT follows what the payment put against the
+ * invoice (its settlement), pro rata to the invoice's euro gross, never more
+ * than the invoice's VAT: a crypto receipt valued above its quote carries the
+ * invoiced tax, and the valuation difference stays in net. A settlement booked
+ * in several lines (a receipt converted in parts) shares its amount by line.
+ * A line with no settlement record (a manual link) is taken at its amount.
  */
-export function vatSplit(
-  e: LedgerEntry,
+export function vatSplits(
+  entries: LedgerEntry[],
   invoices: ReadonlyMap<string, IssuedEuroTotals>,
-): { netCents: number; vatCents: number } | undefined {
-  const s = e.statement;
-  const inv = s?.links.invoiceId ? invoices.get(s.links.invoiceId) : undefined;
-  if (!s || !inv || e.txType !== "invoice_payment" || s.amountCents <= 0 || inv.grossCents <= 0) return undefined;
-  const vatCents = Math.round((inv.vatCents * s.amountCents) / inv.grossCents);
-  return { netCents: s.amountCents - vatCents, vatCents };
+): Map<LedgerEntry, { netCents: number; vatCents: number }> {
+  const payable = entries.flatMap((e) => {
+    const s = e.statement;
+    const inv = s?.links.invoiceId ? invoices.get(s.links.invoiceId) : undefined;
+    if (!s || !inv || !PAYMENT_TYPES.has(e.txType ?? "") || s.amountCents <= 0 || inv.grossCents <= 0) return [];
+    return [{ e, s, inv, ref: settlementRefOf(s) }];
+  });
+  const linesOfRef = new Map<string, number>();
+  for (const p of payable) if (p.ref) linesOfRef.set(p.ref, (linesOfRef.get(p.ref) ?? 0) + p.s.amountCents);
+  const out = new Map<LedgerEntry, { netCents: number; vatCents: number }>();
+  for (const { e, s, inv, ref } of payable) {
+    const settled = ref ? inv.settledCents?.[ref] : undefined;
+    const applied = settled === undefined ? s.amountCents : Math.round((settled * s.amountCents) / linesOfRef.get(ref!)!);
+    const vatCents = Math.round((inv.vatCents * Math.min(applied, inv.grossCents)) / inv.grossCents);
+    out.set(e, { netCents: s.amountCents - vatCents, vatCents });
+  }
+  return out;
 }
 
 const euro = (cents: number) => (cents / 100).toFixed(2);
@@ -666,8 +691,9 @@ export function ledgerExportRows(
   entries: LedgerEntry[],
   invoices: ReadonlyMap<string, IssuedEuroTotals> = new Map(),
 ): Record<string, unknown>[] {
+  const splits = vatSplits(entries, invoices);
   return entries.map((e) => {
-    const split = vatSplit(e, invoices);
+    const split = splits.get(e);
     return {
     date: e.at,
     direction: e.direction,

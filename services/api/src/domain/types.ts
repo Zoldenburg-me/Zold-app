@@ -731,6 +731,8 @@ export interface InvoiceLine {
   quantity: string;
   unitPrice: string;
   amount: string;
+  /** The VAT rate this line was taxed at, on an issued invoice that charges VAT. */
+  vatRate?: number;
   /** The wallet receipt this line invoices, on an invoice made from receipts. */
   receipt?: InvoiceLineReceipt;
 }

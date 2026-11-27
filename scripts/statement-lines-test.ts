@@ -20,7 +20,7 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-sta
 process.env.TRANSF_CHAIN_ID = "31337";
 
 const { lineId, linesInMonth, mergeStatementLines, projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
-const { LEDGER_EXPORT_COLUMNS, ledgerExportRows, vatSplit } = await import("../services/api/src/domain/ledger.js");
+const { LEDGER_EXPORT_COLUMNS, ledgerExportRows, vatSplits } = await import("../services/api/src/domain/ledger.js");
 type Inputs = import("../services/api/src/bookkeeping/statement.js").StatementInputs;
 
 let passed = 0;
@@ -438,15 +438,24 @@ await check("a human's account code survives a later fact change; the Monerium i
   assert.equal(sepa.amount, "20.00");
 });
 
-await check("an invoice payment's VAT is split out of the gross, pro rata on a part payment", () => {
-  const entry = (amountCents: number, txType = "invoice_payment") =>
-    ({ txType, statement: { amountCents, links: { invoiceId: "inv_1", txHashes: [] } } }) as never;
-  const invoices = new Map([["inv_1", { grossCents: 11900, vatCents: 1900 }]]);
-  assert.deepEqual(vatSplit(entry(11900), invoices), { netCents: 10000, vatCents: 1900 });
-  assert.deepEqual(vatSplit(entry(5950), invoices), { netCents: 5000, vatCents: 950 });
-  assert.equal(vatSplit(entry(11900, "realised_gain"), invoices), undefined, "a gain is not revenue with VAT in it");
-  assert.equal(vatSplit(entry(-11900), invoices), undefined);
-  const row = ledgerExportRows([{ ...(entry(11900) as object), at: "2026-11-27", direction: "in", asset: "EUR", amount: "119", tags: [] } as never], invoices)[0];
+await check("an invoice payment's VAT follows what it put against the invoice", () => {
+  const entry = (amountCents: number, links: Record<string, unknown>, txType = "invoice_payment") =>
+    ({ txType, at: "2026-11-27", direction: "in", asset: "EUR", amount: String(amountCents / 100), tags: [],
+       statement: { amountCents, links: { invoiceId: "inv_1", txHashes: [], ...links } } }) as never;
+  const invoices = new Map([["inv_1", { grossCents: 11900, vatCents: 1900, settledCents: { "deposit:d1": 11900, "monerium:o1": 5950, "deposit:d3": 11900 } }]]);
+  const exact = entry(11960, { depositId: "d1" });           // USDC valued €0.60 above its quote
+  const sepaHalf = entry(5950, { orderId: "o1", depositId: "mint" }, "transfer_in"); // a SEPA part payment
+  const partA = entry(6000, { depositId: "d3" }, "invoice_payment"); // one receipt booked in two lines
+  const partB = entry(6000, { depositId: "d3" }, "invoice_payment");
+  const manual = entry(11900, {});                           // linked by hand, no settlement
+  const gain = entry(60, { depositId: "d1" }, "realised_gain");
+  const split = vatSplits([exact, sepaHalf, partA, partB, manual, gain], invoices);
+  assert.deepEqual(split.get(exact), { netCents: 10060, vatCents: 1900 }, "the invoiced VAT, not more");
+  assert.deepEqual(split.get(sepaHalf), { netCents: 5000, vatCents: 950 }, "SEPA credits are split too");
+  assert.equal(split.get(partA)!.vatCents + split.get(partB)!.vatCents, 1900, "two lines of one receipt share its VAT");
+  assert.deepEqual(split.get(manual), { netCents: 10000, vatCents: 1900 });
+  assert.equal(split.get(gain), undefined, "a gain is not revenue with VAT in it");
+  const row = ledgerExportRows([manual], invoices)[0];
   assert.equal(row.netValue, "100.00");
   assert.equal(row.vatValue, "19.00");
   assert.ok(LEDGER_EXPORT_COLUMNS.includes("vatValue" as never));

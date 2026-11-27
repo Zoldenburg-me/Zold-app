@@ -146,6 +146,7 @@ export async function issueOutgoing(
         quantity: l.quantity,
         unitPrice: l.unitPriceNet,
         amount: fromCents(l.netCents),
+        ...(draft.treatment.kind === "standard" ? { vatRate: l.appliedRate } : {}),
         ...(fromDraft?.lines[i]?.receipt ? { receipt: fromDraft.lines[i].receipt } : {}),
       })),
       currency: draft.currency ?? SETTLEMENT_CURRENCY,

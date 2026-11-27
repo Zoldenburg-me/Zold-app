@@ -203,6 +203,14 @@ await check("an EU VAT ID must be the issuer's own country's", async () => {
   assert.equal(prof.status, 400, "the invoicing profile checks the same");
 });
 
+await check("a custom rule may not reuse a built-in reason's id", async () => {
+  const r = await call("PATCH", "/api/orgs/org_prefix/invoicing/profile", "u_owner", {
+    customReasons: [{ id: "reverse_charge_eu", label: "Mine", invoiceNote: "No VAT here" }],
+  });
+  assert.equal(r.status, 400, JSON.stringify(r.data));
+  assert.equal(r.data.field, "customReasons");
+});
+
 await addOrg("org_move", "DE", { invoicing: { vatId: "DE123456789" } });
 await check("moving country re-checks a stored VAT ID the save does not replace", async () => {
   const r = await call("PATCH", "/api/orgs/org_move", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" } });

@@ -835,6 +835,24 @@ check("a sole trader with only a trading name is asked for their own name; GENER
   assert.ok(!inIssuer.errors.some((e) => e.field === "issuer.legalName"));
 });
 
+check("§ 33 UStDV never simplifies an intra-community supply or § 13b reverse charge", () => {
+  const small = [{ description: "x", quantity: "1", unitPriceNet: "100" }];
+  for (const reason of ["intra_community_supply", "reverse_charge_domestic"] as const) {
+    const r = checkCompliance(draft({ lines: small, recipient: {}, treatment: { kind: "exempt", reason } }), jurisdictionFor("DE"));
+    assert.equal(r.regime, "standard", reason);
+    assert.ok(r.errors.some((e) => e.field === "recipient.address"), reason);
+  }
+  assert.equal(checkCompliance(draft({ lines: small, recipient: {} }), jurisdictionFor("DE")).regime, "kleinbetrag");
+});
+
+check("a German invoice's default rate is checked even when every line overrides it", () => {
+  const r = checkCompliance(
+    draft({ treatment: { kind: "standard", rate: 16 }, lines: [{ description: "x", quantity: "1", unitPriceNet: "300", vatRate: 19 }] }),
+    jurisdictionFor("DE"),
+  );
+  assert.ok(r.errors.some((e) => /16% is not a German rate/.test(e.message)));
+});
+
 console.log(`\n${passed} checks passed${process.exitCode ? " (with failures above)" : ""}\n`);
 console.log("NOT COVERED: XRechnung / ZUGFeRD (EN 16931) e-invoicing. German B2B must already");
 console.log("be able to RECEIVE e-invoices; the obligation to ISSUE them phases in from 2027.\n");

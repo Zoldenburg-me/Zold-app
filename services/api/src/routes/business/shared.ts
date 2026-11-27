@@ -194,8 +194,11 @@ export function issuerIdentityFrom(
   return { ok: true, patch };
 }
 
+/** The org's own rules. One that reuses a built-in id is dropped: the
+ *  built-in's note and its VAT ID checks win, so the two never disagree.
+ *  Saving such a rule is refused (invoicing.ts). */
 export const customReasonsOf = (org: Organisation): CustomExemptionReason[] =>
-  (org.invoicing?.customReasons ?? []) as CustomExemptionReason[];
+  ((org.invoicing?.customReasons ?? []) as CustomExemptionReason[]).filter((c) => !(c.id in EXEMPTION_REASONS));
 
 /** Due date from the org's payment terms, so the field is not retyped either. */
 export function draftDueDate(org: Organisation, issueDate: string): string | undefined {
