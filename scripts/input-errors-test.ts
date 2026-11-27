@@ -27,6 +27,8 @@ const { InvoiceComplianceError, checkCompliance } = await import("../services/ap
 const { draftFrom, jurisdictionOf } = await import("../services/api/src/routes/business/shared.js");
 const { PaymentRequestError, quoteCrypto } = await import("../services/api/src/payment-requests.js");
 const { checkOpAssertion } = await import("../services/api/src/http/passkey-assertion.js");
+const { refuseUnstorableText } = await import("../services/api/src/http/body-text.js");
+const { sliceChars } = await import("../services/api/src/store/text.js");
 
 await initStore();
 let failed = 0;
@@ -38,6 +40,7 @@ async function check(name: string, fn: () => void | Promise<void>) {
 console.log("the error map");
 const app = express();
 app.use(express.json({ limit: "1kb" }));
+app.use(refuseUnstorableText);
 app.post("/x", (_req, res) => res.json({ ok: true }));
 app.use(((err: unknown, _req: unknown, res: any, _next: unknown) => {
   const k = knownError(err);
@@ -53,6 +56,21 @@ await check("a body that is not JSON is a 400, not a 500", async () => {
 await check("a body over the limit is a 413", async () => {
   const r = await fetch(`${base}/x`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ a: "x".repeat(5000) }) });
   assert.equal(r.status, 413);
+});
+await check("a NUL or a lone surrogate anywhere in the body is a 400 BAD_TEXT; an emoji is fine", async () => {
+  const post = (body: string) => fetch(`${base}/x`, { method: "POST", headers: { "content-type": "application/json" }, body });
+  for (const bad of ['{"a":"x\\u0000y"}', '{"a":["\\ud83d"]}', '{"a":{"b":"\\ude00z"}}', '{"x\\u0000":1}']) {
+    const r = await post(bad);
+    assert.equal(r.status, 400, bad);
+    assert.equal((await r.json()).code, "BAD_TEXT", bad);
+  }
+  assert.equal((await post(JSON.stringify({ a: "pay \u{1F600} now" }))).status, 200);
+});
+await check("sliceChars never cuts an emoji in half", () => {
+  const s = "x".repeat(139) + "\u{1F600}";
+  assert.equal(s.slice(0, 140).length, 140, "a UTF-16 slice keeps half the emoji");
+  assert.equal(sliceChars(s, 140), s);
+  assert.equal(sliceChars(s + "y", 140), s);
 });
 server.close();
 await check("rates down is 503; a revoked Monerium login is 409 MONERIUM_NOT_CONNECTED", () => {

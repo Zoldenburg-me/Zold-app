@@ -33,6 +33,7 @@ import { MONERIUM, PAYMENT_REQUESTS } from "./config.js";
 import type { CryptoDeposit, Transfer, User } from "./store.js";
 import { shownDisplayName } from "./pay.js";
 import { reportedBic } from "./sepa.js";
+import { sliceChars } from "./store/text.js";
 
 export type PaymentMethod = "crypto" | "bank";
 export type PaymentRequestState = "OPEN" | "PAID" | "EXPIRED" | "CANCELLED";
@@ -244,7 +245,7 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
   let description: string | undefined;
   if (b.description !== undefined && b.description !== null && b.description !== "") {
     if (typeof b.description !== "string") throw new PaymentRequestError("description must be a string");
-    description = b.description.trim().replace(/\s+/g, " ").slice(0, 140) || undefined;
+    description = sliceChars(b.description.trim().replace(/\s+/g, " "), 140) || undefined;
   }
   const requested: unknown[] = Array.isArray(b.methods) ? b.methods : ["crypto", "bank"];
   const methods: PaymentMethod[] = [];

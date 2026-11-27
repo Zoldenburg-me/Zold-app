@@ -649,8 +649,11 @@ work, not storage. What #166 enforces in the database:
 (`0006`), run by the owner role at deploy after the migrations, again after
 each new one. It resets the role's grants in the schema: `USAGE` on it and no
 `CREATE` (for `PUBLIC` either), `SELECT` on `schema_migrations` and
-`ledger_history`, `SELECT, INSERT` on `audit`, `SELECT, INSERT, UPDATE` on the
-kept tables above, and `SELECT, INSERT, UPDATE, DELETE` on the rest. No
+`ledger_history`, `SELECT, INSERT` on `audit`, `SELECT, INSERT, UPDATE, DELETE` on the
+13 tables a store method deletes from (quotes, sessions, operator sessions and
+credentials, Shopify connections and deliveries, contacts, imported wallets,
+account rules, cap holds, pending executions, outbox, payment handles), and
+`SELECT, INSERT, UPDATE` on every other table, a new one included (`0009`). No
 `TRUNCATE`, and nothing owned, so no DDL. No temporary tables: it revokes
 `TEMPORARY` on the database from `PUBLIC` and the role, which only the
 database's owner can do, and raises if the role can still create one

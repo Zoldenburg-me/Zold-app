@@ -58,6 +58,7 @@ import type { Account } from "../../domain/types.js";
 import { orgEntity } from "../../domain/org-entity.js";
 import { publicSafeOp } from "./safe-ops.js";
 import { mapSeq } from "../../seq.js";
+import { sliceChars } from "../../store/text.js";
 
 /** A conditional draft write found the draft moved on since it was read. */
 const DRAFT_CHANGED = { error: "This draft changed while this request was being handled. Nothing was written; look at it again." };
@@ -761,7 +762,7 @@ export function createDraftRoutes(
           recipientIban: plan.iban,
           reference: invoice
             ? paymentReference(invoice, ctx.org.name)
-            : `${ctx.org.name} ${claimed.id.slice(0, 8)}`.slice(0, 140),
+            : sliceChars(`${ctx.org.name} ${claimed.id.slice(0, 8)}`, 140),
         });
       } catch (err) {
         // A quote or build that threw is a partner or rate failure (a refusal

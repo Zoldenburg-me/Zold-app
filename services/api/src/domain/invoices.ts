@@ -24,6 +24,7 @@ import type {
 import type { CryptoDeposit } from "../store.js";
 import { chainName } from "./contacts.js";
 import { lineNetCents } from "./invoicing.js";
+import { sliceChars } from "../store/text.js";
 
 export class InvoiceError extends Error {
   constructor(message: string, readonly code?: "OVER_LIMIT") { super(message); }
@@ -61,7 +62,7 @@ export function assertTransition(from: InvoiceState, to: InvoiceState) {
  */
 export function paymentReference(invoice: Pick<Invoice, "supplier">, payerName: string): string {
   const number = invoice.supplier?.invoiceNumber?.trim();
-  return (number ? `Invoice ${number} ${payerName}` : payerName).trim().slice(0, 140);
+  return sliceChars((number ? `Invoice ${number} ${payerName}` : payerName).trim(), 140);
 }
 
 /** The draft that pays an invoice may be created only from SUBMITTED, and
