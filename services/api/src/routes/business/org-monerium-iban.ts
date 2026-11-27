@@ -150,6 +150,126 @@ const prune = () => {
   for (const [k, v] of pendingLinks) if (v.expiresAt < Date.now()) pendingLinks.delete(k);
 };
 
+/**
+ * The keys as they are now, if they are still the ones `m` was read with:
+ * every write after a wait on Monerium goes through this, in one store.tx
+ * with the write, so keys an owner removed or replaced meanwhile are never
+ * written back.
+ */
+const stillKeys = async (orgId: string, m: NonNullable<Organisation["monerium"]>) => {
+  // Locked (inside the store.tx every caller runs it in): the keys stay
+  // the ones compared until the write commits.
+  const cur = (await store.lockOrganisation(orgId))?.monerium;
+  if (!sameKeys(cur, m)) throw new Refusal(409, "MONERIUM_KEYS_CHANGED", "The company’s Monerium keys were replaced or removed meanwhile. Open Settings → Monerium again.");
+  return cur!;
+};
+
+/**
+ * An issued IBAN, read again: Monerium can move it to another address or
+ * chain. Only a positive answer that it now pays elsewhere closes the
+ * account (gated, the IBAN no longer offered); an outage or an IBAN Monerium
+ * does not list changes nothing. A new destination is never adopted.
+ */
+async function recheckIssued(io: OrgMoneriumIbanIo, orgId: string, userId?: string): Promise<void> {
+  const org = (await store.findOrganisation(orgId))!;
+  const m = org.monerium!;
+  const account0 = companyEurAccount(await store.accountsOf(orgId))!;
+  let list;
+  try {
+    list = moneriumIbanList(await io.monerium(org).ibans());
+  } catch (err) {
+    throw moneriumFailure("reading the company’s IBANs", err);
+  }
+  await store.tx(async () => {
+    const cur = await stillKeys(orgId, m);
+    const account = (await store.findAccount(account0.id))!;
+    if (!account.identifier.iban) return; // gated by a recheck that landed first
+    const iban = normalizeIban(account.identifier.iban);
+    const entry = list.find((i) => normalizeIban(i.iban) === iban);
+    if (!entry || typeof entry.address !== "string" || paysIntoSafe(entry, account.address!)) return;
+    if (cur.safe) await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe, movedAwayAt: new Date().toISOString() } } });
+    await store.updateAccount(account.id, {
+      status: "gated",
+      identifier: { ...account.identifier, iban: undefined },
+      detail: "Monerium now lists the company's IBAN on another address or network, so it is no longer offered for this Safe.",
+      // On the account, not the key record: Remove keys deletes that record,
+      // and reconnecting the same profile must not offer a fresh issue while
+      // Monerium still pays the IBAN elsewhere.
+      moneriumIban: { safeAddress: account.address!, profileId: m.profile.id, movedAwayAt: new Date().toISOString() },
+    });
+    await store.audit(auditEntry("org_iban.moved_away", { orgId, accountId: account.id, safeAddress: account.address }, userId));
+  });
+}
+
+/**
+ * An IBAN Monerium moved, read again after the keys were removed and
+ * reconnected (the key record and its link are gone then). An approved
+ * IBAN on the current profile paying into the company Safe on our chain
+ * reopens the account and clears the move; anything else keeps it moved.
+ */
+async function recheckMoved(io: OrgMoneriumIbanIo, orgId: string, userId?: string): Promise<void> {
+  const org = (await store.findOrganisation(orgId))!;
+  const m = org.monerium!;
+  const account0 = companyEurAccount(await store.accountsOf(orgId))!;
+  const plan = orgSafePlan(org);
+  let list;
+  try {
+    list = moneriumIbanList(await io.monerium(org).ibans());
+  } catch (err) {
+    throw moneriumFailure("reading the company’s IBANs", err);
+  }
+  const ours = list.find((i) => i.profile === m.profile.id && i.state === "approved" && paysIntoSafe(i, plan.address));
+  // Written only against the account and keys as they are now.
+  await store.tx(async () => {
+    const cur = await stillKeys(orgId, m);
+    const account = (await store.findAccount(account0.id))!;
+    if (!ours) {
+      const movedAt = cur.safe?.movedAwayAt ?? account.moneriumIban?.movedAwayAt ?? new Date().toISOString();
+      await store.updateAccount(account.id, { moneriumIban: { safeAddress: plan.address as Hex, profileId: m.profile.id, movedAwayAt: movedAt } });
+      return;
+    }
+    const at = new Date().toISOString();
+    await store.updateAccount(account.id, {
+      status: "active",
+      provider: "monerium",
+      identifier: { ...account.identifier, iban: normalizeIban(ours.iban) },
+      gate: undefined,
+      detail: undefined,
+      moneriumProfile: { id: m.profile.id, kind: "corporate", ...(m.profile.name ? { name: m.profile.name } : {}), checkedAt: at },
+      moneriumIban: { safeAddress: plan.address as Hex, profileId: m.profile.id },
+    });
+    await store.audit(auditEntry("org_iban.issued", { orgId, accountId: account.id, safeAddress: plan.address, profileId: m.profile.id }, userId));
+  });
+}
+
+
+/** When each company's IBAN was last re-read by recheckCompanyIbans. */
+const ibanCheckedAt = new Map<string, number>();
+
+/**
+ * Every company's IBAN, re-read on its own keys, as verifyIbanBinding does for
+ * a person (adapters/monerium-sandbox.ts, from the same poller): an issued one
+ * Monerium now pays elsewhere comes off the account, a moved one attributed to
+ * the Safe again returns. At most once per MONERIUM.ibanCheckMs per company; a
+ * read that fails changes nothing.
+ */
+export async function recheckCompanyIbans(io: OrgMoneriumIbanIo = liveIbanIo): Promise<void> {
+  for (const org of await store.list("organisations")) {
+    if (orgEntity(org) !== "company" || !org.monerium) continue;
+    const state = companyIbanState(org, companyEurAccount(await store.accountsOf(org.id)));
+    if (state !== "issued" && !(state === "moved" && orgMoneriumStatus(org.monerium) === "connected")) continue;
+    const last = ibanCheckedAt.get(org.id);
+    if (last !== undefined && Date.now() - last < MONERIUM.ibanCheckMs) continue;
+    ibanCheckedAt.set(org.id, Date.now());
+    try {
+      await (state === "issued" ? recheckIssued : recheckMoved)(io, org.id);
+    } catch (err) {
+      // moneriumFailure has logged a Monerium answer; keys replaced meanwhile wait for the next pass.
+      if (!(err instanceof Refusal)) console.warn(`org-monerium-iban: re-reading the IBAN of ${org.id} failed: ${redactedMessage(err)}`);
+    }
+  }
+}
+
 export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request, res: express.Response) => Promise<OrgContext | undefined> }, io: OrgMoneriumIbanIo = liveIbanIo): express.Router {
   const r = express.Router();
 
@@ -215,20 +335,6 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
   const answer = (res: express.Response, err: unknown) => {
     if (err instanceof Refusal) return res.status(err.status).json({ code: err.code, error: err.message });
     throw err;
-  };
-
-  /**
-   * The keys as they are now, if they are still the ones `m` was read with:
-   * every write after a wait on Monerium goes through this, in one store.tx
-   * with the write, so keys an owner removed or replaced meanwhile are never
-   * written back.
-   */
-  const stillKeys = async (orgId: string, m: NonNullable<Organisation["monerium"]>) => {
-    // Locked (inside the store.tx every caller runs it in): the keys stay
-    // the ones compared until the write commits.
-    const cur = (await store.lockOrganisation(orgId))?.monerium;
-    if (!sameKeys(cur, m)) throw new Refusal(409, "MONERIUM_KEYS_CHANGED", "The company’s Monerium keys were replaced or removed meanwhile. Open Settings → Monerium again.");
-    return cur!;
   };
 
   /**
@@ -308,84 +414,6 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       const after = (await store.findOrganisation(orgId))!.monerium!;
       if (after.safe?.movedAwayAt) await store.updateOrganisation(orgId, { monerium: { ...after, safe: { ...after.safe, movedAwayAt: undefined } } });
       await store.audit(auditEntry("org_iban.issued", { orgId, accountId: account.id, safeAddress: link.address, profileId: m.profile.id }, userId));
-    });
-  }
-
-  /**
-   * An issued IBAN, read again: Monerium can move it to another address or
-   * chain. Only a positive answer that it now pays elsewhere closes the
-   * account (gated, the IBAN no longer offered); an outage or an IBAN Monerium
-   * does not list changes nothing. A new destination is never adopted.
-   */
-  async function recheckIssued(orgId: string, userId: string): Promise<void> {
-    const org = (await store.findOrganisation(orgId))!;
-    const m = org.monerium!;
-    const account0 = companyEurAccount(await store.accountsOf(orgId))!;
-    let list;
-    try {
-      list = moneriumIbanList(await io.monerium(org).ibans());
-    } catch (err) {
-      throw moneriumFailure("reading the company’s IBANs", err);
-    }
-    await store.tx(async () => {
-      const cur = await stillKeys(orgId, m);
-      const account = (await store.findAccount(account0.id))!;
-      if (!account.identifier.iban) return; // gated by a recheck that landed first
-      const iban = normalizeIban(account.identifier.iban);
-      const entry = list.find((i) => normalizeIban(i.iban) === iban);
-      if (!entry || typeof entry.address !== "string" || paysIntoSafe(entry, account.address!)) return;
-      if (cur.safe) await store.updateOrganisation(orgId, { monerium: { ...cur, safe: { ...cur.safe, movedAwayAt: new Date().toISOString() } } });
-      await store.updateAccount(account.id, {
-        status: "gated",
-        identifier: { ...account.identifier, iban: undefined },
-        detail: "Monerium now lists the company's IBAN on another address or network, so it is no longer offered for this Safe.",
-        // On the account, not the key record: Remove keys deletes that record,
-        // and reconnecting the same profile must not offer a fresh issue while
-        // Monerium still pays the IBAN elsewhere.
-        moneriumIban: { safeAddress: account.address!, profileId: m.profile.id, movedAwayAt: new Date().toISOString() },
-      });
-      await store.audit(auditEntry("org_iban.moved_away", { orgId, accountId: account.id, safeAddress: account.address }, userId));
-    });
-  }
-
-  /**
-   * An IBAN Monerium moved, read again after the keys were removed and
-   * reconnected (the key record and its link are gone then). An approved
-   * IBAN on the current profile paying into the company Safe on our chain
-   * reopens the account and clears the move; anything else keeps it moved.
-   */
-  async function recheckMoved(orgId: string, userId: string): Promise<void> {
-    const org = (await store.findOrganisation(orgId))!;
-    const m = org.monerium!;
-    const account0 = companyEurAccount(await store.accountsOf(orgId))!;
-    const plan = orgSafePlan(org);
-    let list;
-    try {
-      list = moneriumIbanList(await io.monerium(org).ibans());
-    } catch (err) {
-      throw moneriumFailure("reading the company’s IBANs", err);
-    }
-    const ours = list.find((i) => i.profile === m.profile.id && i.state === "approved" && paysIntoSafe(i, plan.address));
-    // Written only against the account and keys as they are now.
-    await store.tx(async () => {
-      const cur = await stillKeys(orgId, m);
-      const account = (await store.findAccount(account0.id))!;
-      if (!ours) {
-        const movedAt = cur.safe?.movedAwayAt ?? account.moneriumIban?.movedAwayAt ?? new Date().toISOString();
-        await store.updateAccount(account.id, { moneriumIban: { safeAddress: plan.address as Hex, profileId: m.profile.id, movedAwayAt: movedAt } });
-        return;
-      }
-      const at = new Date().toISOString();
-      await store.updateAccount(account.id, {
-        status: "active",
-        provider: "monerium",
-        identifier: { ...account.identifier, iban: normalizeIban(ours.iban) },
-        gate: undefined,
-        detail: undefined,
-        moneriumProfile: { id: m.profile.id, kind: "corporate", ...(m.profile.name ? { name: m.profile.name } : {}), checkedAt: at },
-        moneriumIban: { safeAddress: plan.address as Hex, profileId: m.profile.id },
-      });
-      await store.audit(auditEntry("org_iban.issued", { orgId, accountId: account.id, safeAddress: plan.address, profileId: m.profile.id }, userId));
     });
   }
 
@@ -485,7 +513,8 @@ export function createOrgMoneriumIbanRoutes(deps: { ctxOf: (req: express.Request
       return res.status(409).json({ code: "MONERIUM_NOT_CONNECTED", error: "The company’s Monerium keys need attention first: open Settings → Monerium." });
     }
     try {
-      await (state === "issued" ? recheckIssued : state === "moved" ? recheckMoved : advance)(ctx.org.id, ctx.userId);
+      if (state === "issued" || state === "moved") await (state === "issued" ? recheckIssued : recheckMoved)(io, ctx.org.id, ctx.userId);
+      else await advance(ctx.org.id, ctx.userId);
     } catch (err) {
       if (err instanceof Refusal) return res.status(err.status).json({ code: err.code, error: err.message, ...(await view(ctx.org.id)) });
       throw err;

@@ -30,6 +30,7 @@ import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js
 import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
 import { moneriumAmountEur, moneriumOrderProcessed, redeemMemoDiffers, redeemOrderDiffers } from "../domain/monerium-order.js";
 import { can } from "../domain/segments.js";
+import { recheckCompanyIbans } from "../routes/business/org-monerium-iban.js";
 
 /**
  * The bank facts of a processed issue order on our chain, for the statement
@@ -858,6 +859,7 @@ export function startDepositPoller() {
         if (u.funding?.status === "iban_pending") await refreshPendingIban(u);
         else if (u.funding?.status === "active" && u.iban) await verifyIbanBinding(u);
       }
+      await recheckCompanyIbans();
     } catch (err: any) {
       console.error(`monerium poll failed: ${moneriumFailureReason(err)}`);
     } finally {
