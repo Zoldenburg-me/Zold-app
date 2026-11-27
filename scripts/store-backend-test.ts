@@ -465,6 +465,10 @@ console.log("ok - store suite on the JSON backend");
     connectionString: "postgresql://zold_app@/zold?host=/run/postgresql-mainnet&port=5432",
   });
   assert.ok(pgPoolConfig("postgresql:///zold?host=/tmp", real));
+  for (const url of ["postgresql://u@/zold", "postgresql:///zold", "postgresql://u@/zold?port=5432"]) {
+    assert.throws(() => pgPoolConfig(url, real), /names no host/, `${url}: an empty host falls back to PGHOST`);
+    assert.ok(pgPoolConfig(url, { realMoney: false }), `${url} on a test chain`);
+  }
   assert.ok(pgPoolConfig("postgresql://u@localhost:5432/zold", real));
   assert.ok(pgPoolConfig("postgres://u@127.0.0.1/zold", real));
   assert.ok(pgPoolConfig("postgresql://u@[::1]/zold", real));

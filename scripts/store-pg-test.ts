@@ -604,7 +604,7 @@ try {
   const suites: [string, Record<string, string>?][] = [
     ["scripts/pg-concurrency-test.ts"],
     ["scripts/deposit-invoice-link-test.ts"],
-    // Postgres is refused on a real-money chain; this suite runs on the default one under check.
+    // On the local chain, as under check.
     ["scripts/email-verification-test.ts", { TRANSF_CHAIN_ID: "31337" }],
     ["scripts/zoldenburg-bank-check-test.ts"],
     ["scripts/candide-sweep-race-test.ts"],

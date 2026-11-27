@@ -222,6 +222,11 @@ export function databaseUrlIsLocal(url: string): boolean {
 export function pgPoolConfig(url: string, opts: { ca?: string; realMoney: boolean }): pg.PoolConfig {
   const { u, local } = parseDatabaseUrl(url);
   const sslmode = u.searchParams.get("sslmode");
+  // An empty host with no host= parameter is not ours to judge: node-postgres
+  // then takes PGHOST from the environment, which may name another machine.
+  if (opts.realMoney && u.hostname === EMPTY_HOST && !u.searchParams.get("host")) {
+    throw new Error("DATABASE_URL on a real-money chain names no host: give host=/path/to/socket (an empty host falls back to PGHOST)");
+  }
   if (!local && opts.realMoney) {
     if (sslmode !== "verify-full") {
       throw new Error("DATABASE_URL points at another host on a real-money chain: it must set sslmode=verify-full");

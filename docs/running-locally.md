@@ -207,7 +207,9 @@ the cut-over (`docs/oracle-host.md`, §8 row S8).
 - `STORE_BACKEND=postgres` with `DATABASE_URL` (and `DATABASE_CA` for a TLS
   host) puts the API on it, on any chain. On a real-money chain a host
   other than a unix socket or loopback needs `sslmode=verify-full` and
-  `DATABASE_CA`. The API takes the one-process start lock and checks that
+  `DATABASE_CA`, and an empty host must name its socket with `host=` (it
+  would otherwise fall back to `PGHOST`). `scripts/backup-db.sh` and
+  `scripts/reencrypt-fields.ts` work on the JSON store only. The API takes the one-process start lock and checks that
   every migration is applied; it never migrates. The deploy migrates:
   `DATABASE_URL=<as the owner role> APP_ROLE=<app role> npm run db:migrate -- apply`
   runs `migrate()` and then `SELECT zold_grant_app('<app role>')`; `status`

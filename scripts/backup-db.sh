@@ -7,6 +7,9 @@
 set -euo pipefail
 source "$(dirname "$0")/_age.sh"
 umask 077
+# JSON store only: a deployment on Postgres is backed up by pgBackRest and the
+# daily dump (docs/oracle-host.md), and its db.json is stale or absent.
+[[ "${STORE_BACKEND:-json}" == json ]] || { echo "STORE_BACKEND=$STORE_BACKEND: this backs up the JSON store only; Postgres is backed up by pgBackRest and the daily dump (docs/oracle-host.md)" >&2; exit 1; }
 require_age; require_recipients
 
 src="${TRANSF_DB_PATH:-$ROOT/data/db.json}"
