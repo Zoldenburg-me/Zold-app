@@ -402,15 +402,9 @@ export function taxNumberLooksValid(v: string): boolean {
   return /^\d{10,13}$/.test(v.replace(/[\s./-]/g, ""));
 }
 
-/** The longest identifier taken as written, for a country Zold has no format for. */
-export const FOREIGN_TAX_ID_MAX = 40;
+/** The longest issuer tax identifier, room for a note such as "Steuernummer beantragt. …". */
+export const ISSUER_TAX_ID_MAX = 200;
 
-/**
- * Why the issuer's own VAT ID or tax number cannot be saved under this rule
- * set, or undefined when it can. Only shapes Zold knows are checked: an EU VAT
- * ID under DE and EU, a Steuernummer under DE. Anywhere else (a Gabonese NIF,
- * an Indian GSTIN) Zold has no format, so the value is taken as written.
- */
 /**
  * The tax identifiers an invoice prints for its issuer. The business profile's
  * when it names one; until then the tax id typed at signup stands in, sorted by
@@ -429,35 +423,45 @@ export function issuerTaxIds(org: {
   const field = /^[A-Za-z]{2}\s*[0-9A-Za-z]/.test(signup) ? "vatId" : "taxNumber";
   const value = field === "vatId" ? signup.replace(/\s+/g, "").toUpperCase() : signup;
   const country = org.address?.country;
-  if (issuerTaxIdProblem(field, value, jurisdictionFor(country).ruleSet, country)) return {};
+  if (issuerTaxIdProblem(field, value, jurisdictionFor(country).ruleSet, country, true)) return {};
   return { [field]: value };
 }
 
+/**
+ * Why the issuer's own VAT ID or tax number cannot be saved, or undefined when
+ * it can. Both fields are optional free text (a note such as "Steuernummer
+ * beantragt" is allowed): only one line and a length cap are enforced, plus a
+ * well-formed EU VAT ID from another country than the issuer's. `strict` (the
+ * unchecked signup tax id) also requires a shape Zold knows: an EU VAT ID under
+ * DE and EU, a Steuernummer under DE.
+ */
 export function issuerTaxIdProblem(
   field: "vatId" | "taxNumber",
   value: string,
   ruleSet: RuleSetId,
   country?: string,
+  strict = false,
 ): string | undefined {
   const v = value.trim();
   if (!v) return undefined;
+  if (v.length > ISSUER_TAX_ID_MAX || /[\u0000-\u001f\u007f]/.test(v)) {
+    return `${field === "vatId" ? "A VAT ID" : "A tax number"} is at most ${ISSUER_TAX_ID_MAX} characters on one line.`;
+  }
   if (field === "vatId" && ruleSet !== "GENERIC") {
     const shape = vatIdShape(v);
-    if (!shape.ok) return shape.reason;
-    if (!shape.vies) return `${v} is not an EU VAT ID. An EU business invoices with its member state's number.`;
-    // A German VAT ID on a French entity is someone else's number. Greece's prefix is EL.
-    const c = country?.toUpperCase();
-    const expected = c === "GR" ? "EL" : c;
-    if (expected && shape.prefix !== expected) {
-      return `${v} is a VAT ID from another country. An entity in ${c} invoices with a VAT ID starting ${expected}.`;
+    if (shape.ok && shape.vies) {
+      // A German VAT ID on a French entity is someone else's number. Greece's prefix is EL.
+      const c = country?.toUpperCase();
+      const expected = c === "GR" ? "EL" : c;
+      if (expected && shape.prefix !== expected) {
+        return `${v} is a VAT ID from another country. An entity in ${c} invoices with a VAT ID starting ${expected}.`;
+      }
+      return undefined;
     }
-    return undefined;
+    if (strict) return shape.ok ? `${v} is not an EU VAT ID.` : shape.reason;
   }
-  if (field === "taxNumber" && ruleSet === "DE") {
-    return taxNumberLooksValid(v) ? undefined : `${v} does not look like a Steuernummer (10 to 13 digits).`;
-  }
-  if (v.length > FOREIGN_TAX_ID_MAX || /[\u0000-\u001f\u007f]/.test(v)) {
-    return `${field === "vatId" ? "A VAT ID" : "A tax number"} is at most ${FOREIGN_TAX_ID_MAX} characters on one line.`;
+  if (strict && field === "taxNumber" && ruleSet === "DE" && !taxNumberLooksValid(v)) {
+    return `${v} does not look like a Steuernummer (10 to 13 digits).`;
   }
   return undefined;
 }

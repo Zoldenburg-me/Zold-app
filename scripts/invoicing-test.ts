@@ -27,7 +27,7 @@ import {
   formatInvoiceNumber,
   fromCents,
   invoiceDueDate,
-  FOREIGN_TAX_ID_MAX,
+  ISSUER_TAX_ID_MAX,
   invoiceLanguage,
   isEuCountry,
   reasonForRuleSet,
@@ -406,21 +406,23 @@ check("a Steuernummer is 10 to 13 digits, punctuation ignored", () => {
   assert.equal(taxNumberLooksValid("12345"), false);
 });
 
-check("the issuer's own tax IDs are checked by the issuer's country", () => {
-  // Germany: an EU VAT ID and a Steuernummer.
-  assert.equal(issuerTaxIdProblem("vatId", "DE123456789", "DE"), undefined);
-  assert.match(issuerTaxIdProblem("vatId", "DE12345", "DE")!, /DE123456789/);
-  assert.match(issuerTaxIdProblem("vatId", "GB123456789", "DE")!, /not an EU VAT ID/);
-  assert.match(issuerTaxIdProblem("taxNumber", "12345", "DE")!, /Steuernummer/);
-  // Another member state: its own number, and no German Steuernummer rule.
-  assert.equal(issuerTaxIdProblem("vatId", "FR12345678901", "EU"), undefined);
-  assert.equal(issuerTaxIdProblem("taxNumber", "123456789", "EU"), undefined, "an Austrian Steuernummer is 9 digits");
-  // Gabon: no format Zold knows, so taken as written.
+check("the issuer's own tax IDs are free text; only a foreign EU VAT ID is refused", () => {
+  const note = "Steuernummer beantragt. Eine korrigierte Rechnung wird nach Erhalt der Steuernummer nachgereicht.";
+  assert.equal(issuerTaxIdProblem("taxNumber", note, "DE"), undefined, "a note in place of a Steuernummer");
+  assert.equal(issuerTaxIdProblem("vatId", note, "DE"), undefined, "a note in place of a USt-IdNr.");
+  assert.equal(issuerTaxIdProblem("taxNumber", "12345", "DE"), undefined);
+  assert.equal(issuerTaxIdProblem("vatId", "DE12345", "DE"), undefined);
+  assert.equal(issuerTaxIdProblem("vatId", "DE123456789", "DE", "DE"), undefined);
+  assert.match(issuerTaxIdProblem("vatId", "FR40303265045", "DE", "DE")!, /another country/);
   assert.equal(issuerTaxIdProblem("vatId", "202301234567 A", "GENERIC"), undefined);
-  assert.equal(issuerTaxIdProblem("taxNumber", "NIF 2023 0123 4567", "GENERIC"), undefined);
-  assert.match(issuerTaxIdProblem("vatId", "x".repeat(FOREIGN_TAX_ID_MAX + 1), "GENERIC")!, /at most/);
-  assert.match(issuerTaxIdProblem("vatId", "123\n456", "GENERIC")!, /one line/);
+  assert.match(issuerTaxIdProblem("vatId", "x".repeat(ISSUER_TAX_ID_MAX + 1), "GENERIC")!, /at most/);
+  assert.match(issuerTaxIdProblem("taxNumber", "123\n456", "DE")!, /one line/);
   assert.equal(issuerTaxIdProblem("vatId", "  ", "DE"), undefined, "empty clears the field");
+  // strict: the unchecked signup tax id prints only in a shape Zold knows.
+  assert.match(issuerTaxIdProblem("vatId", "DE12345", "DE", undefined, true)!, /DE123456789/);
+  assert.match(issuerTaxIdProblem("vatId", "GB123456789", "DE", undefined, true)!, /not an EU VAT ID/);
+  assert.match(issuerTaxIdProblem("taxNumber", "12345", "DE", undefined, true)!, /Steuernummer/);
+  assert.equal(issuerTaxIdProblem("taxNumber", "123456789", "EU", undefined, true), undefined, "an Austrian Steuernummer is 9 digits");
 });
 
 check("a Gabonese issuer's tax ID draws no 'not a VAT ID' warning", () => {
