@@ -40,8 +40,8 @@ jobs:
       - name: Toolchain check on production
         run: NODE_DIR="$(dirname "$(dirname "$(command -v node)")")" PATH="/usr/lib/postgresql/17/bin:$PATH" scripts/oracle-host/toolchain-check.sh
       - run: npm ci --no-audit --no-fund
-      - name: Compile the contracts (the Postgres reruns deploy them to a local chain)
-        run: npm run compile
+      - name: npm run check on linux-arm64 (it also writes the chain-31337 deployments.json the Postgres reruns read)
+        run: npm run check
       - name: check:pg on Postgres 17 (the store suite, then the provisioning SQL, pg_hba and the migration CLI)
         env:
           PG_BIN: /usr/lib/postgresql/17/bin
