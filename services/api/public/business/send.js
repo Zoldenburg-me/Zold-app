@@ -26,13 +26,21 @@ const last4 = (iban) => `•••• ${String(iban || "").replace(/\s+/g, "").s
 /** A contact list long enough to need a search box. */
 const FIND_FROM = 6;
 
-META.send = () => ({
-  title: "New payment",
-  sub: reviewOn()
-    ? "It goes to Approvals: someone other than you approves it, then it’s sent with the sender’s passkey."
-    : `Save it, then send it from Payments with your ${Z.passkeyName()}.`,
-  actions: reviewOn() ? linkBtn("Approvals", "payments", "inbox") : "",
-});
+META.send = () => {
+  // A company's bank payment has no review step, whatever the org's review
+  // setting (Q8): an owner sends it from Payments.
+  const ownerSends = org?.entity === "company" && sendState.mode !== "crypto";
+  const review = reviewOn() && !ownerSends;
+  return {
+    title: "New payment",
+    sub: ownerSends
+      ? "Save it. An owner sends it from Payments with their passkey; no second approval is needed."
+      : review
+        ? "It goes to Approvals: someone other than you approves it, then it’s sent with the sender’s passkey."
+        : `Save it, then send it from Payments with your ${Z.passkeyName()}.`,
+    actions: review ? linkBtn("Approvals", "payments", "inbox") : "",
+  };
+};
 
 /** Who signs a payment from this account: null when it is you. */
 const sender = (a) => (a.backingUserId === me?.id ? null : a.backingMemberName || "the member whose account it is");

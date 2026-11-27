@@ -77,7 +77,7 @@ export function ibanPanel(m, maySign, payoutsOn = false) {
   // Checking an issued IBAN reads Monerium on the company's keys: offered only while they are connected.
   if (st === "issued") return {
     text: payoutsOn
-      ? "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). An owner can pay a bank account from it below, or sign a payment run of several bank payees in Payments."
+      ? "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). An owner can pay a bank account from it below, or send a bank payment saved in New payment from Payments."
       : "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). Paying a bank account from it is switched off on this deployment.",
     iban: m.companyIban.iban,
     ...(m.status !== "not_connected" ? { action: "check" } : {}),

@@ -160,6 +160,14 @@ async function planLines(draft: DraftPayment): Promise<{ plans: PlannedLine[]; p
   return { plans, problems };
 }
 
+/** The refusal for lines that cannot be paid. The reasons are in `error` too:
+ *  the signing dialog shows only that, and they say what to correct. */
+const notPayable = (problems: { lineId: string; reason: string }[], of: number) => ({
+  code: "LINES_NOT_PAYABLE",
+  error: `${problems.length} of ${of} line(s) cannot be paid. Nothing was sent. ${[...new Set(problems.map((p) => p.reason))].join(" ")}`,
+  problems,
+});
+
 const sumEur = (xs: { amountEur: number }[]) => Math.round(xs.reduce((s, x) => s + x.amountEur * 100, 0)) / 100;
 
 export function createOrgMoneriumBankRunRoutes(
@@ -249,7 +257,7 @@ export function createOrgMoneriumBankRunRoutes(
     if (!ok) return;
     const { plans, problems } = await planLines(ok.draft);
     if (problems.length) {
-      return res.status(422).json({ code: "LINES_NOT_PAYABLE", error: `${problems.length} of ${ok.draft.lines.length} line(s) cannot be paid. Nothing was sent.`, problems });
+      return res.status(422).json(notPayable(problems, ok.draft.lines.length));
     }
     if (!plans.length) return res.status(422).json({ code: "LINES_NOT_PAYABLE", error: "This draft has no lines to pay." });
     // The total against what the Safe holds less every payout already
@@ -383,7 +391,7 @@ export function createOrgMoneriumBankRunRoutes(
       // re-read from the address book now.
       const { plans, problems } = await planLines(ok.draft);
       if (problems.length) {
-        return res.status(422).json({ code: "LINES_NOT_PAYABLE", error: `${problems.length} of ${ok.draft.lines.length} line(s) cannot be paid. Nothing was sent.`, problems });
+        return res.status(422).json(notPayable(problems, ok.draft.lines.length));
       }
       const ordered: { plan: PlannedLine; hold: PendingPayout & { plannedAt: string } }[] = [];
       for (const plan of plans) {

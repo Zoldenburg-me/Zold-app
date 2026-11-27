@@ -679,6 +679,8 @@ try {
     const r = await start(d.data.draft.id);
     assert.equal(r.status, 422, r.text);
     assert.match(r.data.problems[0].reason, /invoice is for €25\.00/);
+    // The signing dialog shows only `error`: it carries what to correct.
+    assert.match(r.data.error, /1 of 1 line\(s\) cannot be paid\. Nothing was sent\. This line pays €10\.00, but the invoice is for €25\.00/);
     // A run line recorded as sent for less than the invoice never marks it paid.
     const { syncInvoicePayment } = await import("../services/api/src/routes/business/state.js");
     await inv("inv_paying", "25.00");

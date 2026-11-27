@@ -142,9 +142,12 @@ function manageHtml(d) {
   if (!mayEdit(d) && !mayCancel(d)) return "";
   const again = ["PENDING_REVIEW", "REVIEWED"].includes(d.state) && reviewOn()
     ? " It goes back to Draft and has to be approved again; as its editor, you can’t approve it." : "";
+  // A company's bank line that pays an invoice pays all of it, or the run
+  // refuses the line (org-monerium-bank-runs.ts planLines): the amount is fixed.
+  const fixed = (l) => org.entity === "company" && l.invoiceId && l.destination.kind === "bank";
   const lineInputs = d.lines.map((l, i) => `<fieldset class="zb-fieldset"><legend>${esc(l.destination.displayName)}</legend>
-      <label for="dr-amt-${i}">Amount${/^EUR/i.test(l.asset) ? " in euros" : ` in ${esc(l.asset)}`}</label>
-      <input id="dr-amt-${i}" inputmode="decimal" autocomplete="off" value="${esc(l.amount)}" />
+      <label for="dr-amt-${i}">Amount${/^EUR/i.test(l.asset) ? " in euros" : ` in ${esc(l.asset)}`}${fixed(l) ? ' <span class="desc">(the invoice total; it is paid in full)</span>' : ""}</label>
+      <input id="dr-amt-${i}" inputmode="decimal" autocomplete="off" value="${esc(l.amount)}"${fixed(l) ? " readonly" : ""} />
       <label for="dr-note-${i}">Note <span class="desc">(optional)</span></label>
       <input id="dr-note-${i}" autocomplete="off" maxlength="500" value="${esc(l.note || "")}" /></fieldset>`).join("");
   return `<div id="dr-manage">
