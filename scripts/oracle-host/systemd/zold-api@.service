@@ -1,0 +1,53 @@
+# The Zold API of one deployment (%i = mainnet | testnet), installed by
+# scripts/oracle-host/provision.sh. One process per deployment: the start lock
+# refuses a second (design §2), and systemd runs one.
+[Unit]
+Description=Zold API (%i)
+After=network-online.target postgresql@17-%i.service
+Wants=network-online.target
+Requires=postgresql@17-%i.service
+ConditionPathExists=/etc/zold/%i.env
+ConditionPathExists=/srv/zold/%i/app/package.json
+
+[Service]
+Type=simple
+User=zold-%i
+Group=zold-%i
+SupplementaryGroups=zold-%i-db zold-deploy-%i
+WorkingDirectory=/srv/zold/%i/app
+# Read by systemd before the sandbox; the process itself cannot open it.
+EnvironmentFile=/etc/zold/%i.env
+Environment=NODE_ENV=production PATH=/opt/node-v22.23.4-linux-arm64/bin:/usr/bin:/bin
+ExecStart=/srv/zold/%i/app/node_modules/.bin/tsx services/api/src/server.ts
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+StateDirectory=zold-%i
+StateDirectoryMode=0700
+UMask=0077
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+# MemoryDenyWriteExecute is not set: V8's JIT needs writable executable pages.
+# The API reads its code and its own state directory, nothing else of ours.
+InaccessiblePaths=/etc/zold /etc/zold-host /etc/pgbackrest -/srv/zold-hub /var/lib/zold-host
+
+[Install]
+WantedBy=multi-user.target

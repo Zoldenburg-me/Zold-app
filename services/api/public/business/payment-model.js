@@ -75,12 +75,14 @@ export function nextStep(run, reviewRequired, ownerSends = false) {
  * the line pays an invoice that could not be read: no guess.
  */
 export function bankReference(line, run, orgName, invoices) {
+  // By character, as the server's sliceChars (store/text.ts) cuts it.
+  const cut = (s) => Array.from(s).slice(0, 140).join("");
   if (line.destination.kind !== "bank") return null;
-  if (!line.invoiceId) return `${orgName} ${run.id.slice(0, 8)}`.slice(0, 140);
+  if (!line.invoiceId) return cut(`${orgName} ${run.id.slice(0, 8)}`);
   const inv = (invoices || []).find((i) => i.id === line.invoiceId);
   if (!inv) return null;
   const number = inv.supplier?.invoiceNumber?.trim();
-  return (number ? `Invoice ${number} ${orgName}` : orgName).trim().slice(0, 140);
+  return cut((number ? `Invoice ${number} ${orgName}` : orgName).trim());
 }
 
 /** The run's id from the address bar, or the one a link picked. */

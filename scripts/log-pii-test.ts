@@ -16,6 +16,7 @@ import {
   redactedMessage,
 } from "../services/api/src/http/log-cause.js";
 import { urlForLog } from "../services/api/src/http/log-safe.js";
+import { hasUnstorableText, sliceChars } from "../services/api/src/store/text.js";
 
 const RAW = "IBAN DE89 3704 0044 0532 0130 00 rejected for ada@example.com, +49 151 12345678";
 const LEAKS = ["DE89 3704 0044 0532 0130 00", "DE89370400440532013000", "ada@example.com", "+49 151 12345678", "12345678"];
@@ -155,5 +156,16 @@ const tokenLists = readFileSync(new URL("../services/api/src/wallet-sync/token-l
 assert.match(tokenLists, /console\.warn\(`token list \$\{urlForLog\(url\)\}: \$\{why\}/);
 assert.match(tokenLists, /const why = e instanceof Error \? redactedMessage\(e\)/);
 console.log("   ok  the token-list warning logs urlForLog(url) and redactedMessage(e)");
+
+{
+  // A partner body with an emoji across the cut, a NUL and a lone surrogate:
+  // the stored error must be text Postgres accepts (else the MANUAL_REVIEW or refund write throws).
+  const body = "x".repeat(499) + "\u{1F600}" + " a\u0000b \uD800 c";
+  const msg = redactedMessage(new Error(body));
+  assert.equal(hasUnstorableText(msg), false);
+  assert.equal(hasUnstorableText(sliceChars(redactedMessage(new Error("y".repeat(199) + "\u{1F600}")), 200)), false);
+  assert.equal(redactedMessage(new Error("a\u0000b \uD800 c")), "ab \uFFFD c");
+  console.log("   ok  a stored error message never holds a NUL or half an emoji");
+}
 
 console.log("log-pii: ok");

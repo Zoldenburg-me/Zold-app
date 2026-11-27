@@ -33,5 +33,5 @@ organisations ─┬─ members (role, status, invite)
 - Gating is read-time (plans/capabilities), never a write-time delete.
 - Ledger accountCode: set by a rule (`accountCodeAuto`) or a person (PATCH).
 - Ledger `valuation`: set once when an unvalued wallet row is valued by a price retry, with its source.
-- Invoice link tokens are stored hashed (linkTokenHash); sessions by tokenHash.
+- Invoice link tokens are looked up by hash (linkTokenHash) and kept sealed (linkTokenEnc, stored-secrets.ts) so the maker can read the link again; sessions by tokenHash.
 - A send link is an Invoice with `sendLink {maxTotal, note}`; its payment is `payment.transferId` or `payment.cryptoSendId`, tied by /paying.

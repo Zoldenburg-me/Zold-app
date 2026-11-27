@@ -1,0 +1,12 @@
+# The deploy pull loop of one deployment (scripts/oracle-host/deploy.sh).
+[Unit]
+Description=Zold deploy from production (%i)
+After=network-online.target postgresql@17-%i.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/zold-host/deploy.sh %i
+TimeoutStartSec=20min
+# The API user reads the releases through the deploy group (provision.sh).
+UMask=0027

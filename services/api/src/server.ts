@@ -91,6 +91,7 @@ import { knownError } from "./http/known-errors.js";
 import { createOperatorGate } from "./operators/gate.js";
 import { createOperatorAuthRouter } from "./routes/operator-auth.js";
 import { store } from "./store.js";
+import { refuseUnstorableText } from "./http/body-text.js";
 const app = express();
 // Origin policy + per-IP rate limiting live in http/policy.ts — the
 // outermost thing every request passes through, readable in one place.
@@ -107,6 +108,7 @@ app.use(express.json({
     (req as any).rawBody = buf;
   },
 }));
+app.use(refuseUnstorableText);
 app.use(originPolicy);
 app.use(adminHostPolicy);
 

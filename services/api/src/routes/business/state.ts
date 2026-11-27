@@ -165,7 +165,9 @@ export const syncInvoicePayment = async (invoice: Invoice): Promise<Invoice> => 
       // Signed, being sent, pending at Monerium, or unclear: it may still pay.
       return invoice;
     }
-    if (!draft || draft.state === "FAILED" || draft.state === "REJECTED" || draft.state === "CANCELLED") {
+    // A sent-back run is still this invoice's payment: it is edited and sent
+    // again, or cancelled, and only cancelling it frees the invoice.
+    if (!draft || draft.state === "FAILED" || draft.state === "CANCELLED") {
       return await move({
         state: "SUBMITTED",
         payment: { ...invoice.payment, draftId: undefined },

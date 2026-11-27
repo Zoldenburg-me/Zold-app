@@ -78,6 +78,7 @@ const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const tsx = p.devDependencies?.tsx;
 if (!tsx) throw new Error("package.json has no tsx devDependency");
 if (!fs.existsSync("services/api/migrations/0001_init.sql")) throw new Error("services/api/migrations is missing: an API on Postgres checks its schema against these files");
+if (!fs.existsSync("services/api/src/store/pg/migrate-cli.ts")) throw new Error("services/api/src/store/pg/migrate-cli.ts is missing: a deploy could not migrate");
 if (!fs.existsSync("services/api/src/operators/enrol-cli.ts")) throw new Error("services/api/src/operators/enrol-cli.ts is missing: production could not enrol an operator");
 const out = {
   name: p.name,
@@ -86,8 +87,12 @@ const out = {
   private: true,
   description: p.description,
   type: p.type,
-  // The operator's enrolment runs on the host (operators/enrol-cli.ts).
-  scripts: { start: "tsx services/api/src/server.ts", "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts" },
+  // The operator's enrolment and the deploy's migrations run on the host.
+  scripts: {
+    start: "tsx services/api/src/server.ts",
+    "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts",
+    "db:migrate": "tsx services/api/src/store/pg/migrate-cli.ts",
+  },
   dependencies: { ...p.dependencies, tsx },
 };
 if (p.overrides) out.overrides = p.overrides;

@@ -13,7 +13,7 @@
  * were written under `monerium`.
  */
 import { openField, sealField, type EncryptionPurpose } from "./crypto-at-rest.js";
-import { dataKeyring, v1Secret } from "./config/data-keys.js";
+import { dataEncryptionProblem, dataKeyring, v1Secret } from "./config/data-keys.js";
 import { store, type User } from "./store.js";
 
 export interface SecretSite {
@@ -43,6 +43,7 @@ export const SECRETS = {
   moneriumRefreshToken: site("monerium", "users", "monerium.refreshToken"),
   moneriumApiSecret: site("monerium-api-secret", "users", "monerium.apiKeys.clientSecret", "monerium"),
   orgMoneriumApiSecret: site("monerium-org-api-secret", "organisations", "monerium.clientSecret"),
+  invoiceLinkToken: site("invoice-link", "invoices", "linkToken"),
 } as const;
 
 export interface StoredSecret {
@@ -112,6 +113,11 @@ export const STORED_SECRETS: StoredSecret[] = [
     },
   },
   {
+    site: SECRETS.invoiceLinkToken,
+    rows: async () => (await store.list("invoices")).flatMap((i) => (i.linkTokenEnc ? [{ rowId: i.id, stored: i.linkTokenEnc }] : [])),
+    write: async (id, stored) => { await store.updateInvoice(id, { linkTokenEnc: stored }); },
+  },
+  {
     site: SECRETS.orgMoneriumApiSecret,
     rows: async () => (await store.list("organisations")).flatMap((o) => (o.monerium?.clientSecretEnc ? [{ rowId: o.id, stored: o.monerium.clientSecretEnc }] : [])),
     write: async (id, stored) => {
@@ -123,3 +129,9 @@ export const STORED_SECRETS: StoredSecret[] = [
     },
   },
 ];
+
+/** The sealed copy of an invoice link's token, so its maker can read the link
+ *  again. Undefined where no data key is configured: the link is then shown
+ *  once and no copy exists, never a readable one. */
+export const sealInvoiceLink = (invoiceId: string, token: string): string | undefined =>
+  dataEncryptionProblem() ? undefined : SECRETS.invoiceLinkToken.seal(invoiceId, token);

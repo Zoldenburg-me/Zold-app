@@ -36,7 +36,7 @@ import { SECURITY } from "../../config.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import { orgEntity } from "../../domain/org-entity.js";
 import { activity, currentFingerprint } from "../../domain/drafts.js";
-import { paymentReference } from "../../domain/invoices.js";
+import { bankLineProblem, paymentReference } from "../../domain/invoices.js";
 import { roleCan } from "../../domain/roles.js";
 import { publicPayout } from "../../domain/org-monerium-payout.js";
 import {
@@ -145,6 +145,13 @@ async function planLines(draft: DraftPayment): Promise<{ plans: PlannedLine[]; p
       const total = invoice && invoice.orgId === draft.orgId && invoice.currency === "EUR" ? eurOf(invoice.total) : null;
       if (total === null || Math.abs(total - amountEur) > 1e-9) {
         problems.push({ lineId: line.id, reason: total === null ? "This line pays an invoice that is not a euro invoice of this company." : `This line pays €${amountEur.toFixed(2)}, but the invoice is for €${total.toFixed(2)}. Pay the invoice in full.` });
+        continue;
+      }
+      // As a backed account's run does (drafts.ts): an edited account must
+      // not close the invoice either.
+      const off = invoice!.state === "PAYING" && invoice!.payment?.draftId === draft.id ? bankLineProblem(invoice!, line, iban) : undefined;
+      if (off) {
+        problems.push({ lineId: line.id, reason: off });
         continue;
       }
     }

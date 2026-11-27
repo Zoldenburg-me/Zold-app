@@ -345,33 +345,40 @@ export async function refreshPendingIban(user: User): Promise<User> {
       return user;
     }
     if (iban) {
-      // A move (PATCH /ibans) that Monerium has now carried out: record it
-      // and take the IBAN off whichever account it used to pay.
-      await releaseIbanFromOtherUsers(iban, user.id);
       // An address-matched IBAN is what approves an account (activate does the
       // same when the IBAN is there at once). Without this, an IBAN issued
       // after activation was stored but the account stayed pending, and the
       // app hides the IBAN of a pending account.
       // Allowlist, not denylist: only a pending account is approved by its
       // IBAN. manual_review (and anything added later) stays where it is.
-      const approve = mayApproveOnIban(user);
-      return await store.updateUser(user.id, {
-        iban,
-        funding: { ...user.funding, status: "active", detail: undefined },
-        moneriumIbanElsewhere: undefined,
-        ...(user.moneriumIbanMoves ? { moneriumIbanMoves: confirmedMoves(user, iban) } : {}),
-        ...(approve
-          ? {
-              kycStatus: "approved" as const,
-              kyc: {
-                provider: "monerium" as const,
-                onboardingPath: "existing_monerium" as const,
-                checkedAt: new Date().toISOString(),
-                applicantId: user.funding.moneriumProfileId,
-                reason: `approved when Monerium issued the IBAN for ${user.address}`,
-              },
-            }
-          : {}),
+      return await store.tx(async () => {
+        // The row as stored, held: the caller's copy was read before Monerium
+        // answered, and KYC may have moved (manual_review, rejected) since.
+        const fresh = (await store.lockUser(user.id)) ?? user;
+        if (fresh.funding?.status !== "iban_pending") return fresh;
+        // A move (PATCH /ibans) that Monerium has now carried out: record it
+        // and take the IBAN off whichever account it used to pay. Inside the
+        // hold, so a row that stopped waiting releases nobody's IBAN.
+        await releaseIbanFromOtherUsers(iban, user.id);
+        const approve = mayApproveOnIban(fresh);
+        return await store.updateUser(fresh.id, {
+          iban,
+          funding: { ...fresh.funding, status: "active", detail: undefined },
+          moneriumIbanElsewhere: undefined,
+          ...(fresh.moneriumIbanMoves ? { moneriumIbanMoves: confirmedMoves(fresh, iban) } : {}),
+          ...(approve
+            ? {
+                kycStatus: "approved" as const,
+                kyc: {
+                  provider: "monerium" as const,
+                  onboardingPath: "existing_monerium" as const,
+                  checkedAt: new Date().toISOString(),
+                  applicantId: fresh.funding.moneriumProfileId,
+                  reason: `approved when Monerium issued the IBAN for ${fresh.address}`,
+                },
+              }
+            : {}),
+        });
       });
     }
   } catch {

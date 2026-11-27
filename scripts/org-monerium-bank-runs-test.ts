@@ -681,6 +681,13 @@ try {
     assert.match(r.data.problems[0].reason, /invoice is for €25\.00/);
     // The signing dialog shows only `error`: it carries what to correct.
     assert.match(r.data.error, /1 of 1 line\(s\) cannot be paid\. Nothing was sent\. This line pays €10\.00, but the invoice is for €25\.00/);
+    // The full amount to an account the supplier did not give is refused too.
+    await inv("inv_iban", "25.00");
+    const e = await call("POST", "/org_co/drafts", "u_pia", { source: { kind: "account", accountId: "acc_co" }, lines: [{ ...lines[0], invoiceId: "inv_iban", amount: "25" }] });
+    await store.updateInvoice("inv_iban", { state: "PAYING", payment: { draftId: e.data.draft.id }, payTo: { kind: "bank", bank: { iban: PAYEES[1].iban } } } as any);
+    assert.match((await start(e.data.draft.id)).data.error, /to the account the supplier gave/);
+    await store.updateInvoice("inv_iban", { payTo: { kind: "bank", bank: { iban: PAYEES[0].iban } } } as any);
+    assert.equal((await start(e.data.draft.id)).status, 201);
     // A run line recorded as sent for less than the invoice never marks it paid.
     const { syncInvoicePayment } = await import("../services/api/src/routes/business/state.js");
     await inv("inv_paying", "25.00");

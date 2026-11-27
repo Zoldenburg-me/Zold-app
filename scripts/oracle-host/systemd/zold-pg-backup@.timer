@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily pgBackRest backup, full on Sundays (%i)
+
+[Timer]
+OnCalendar=*-*-* 01:00:00 UTC
+Persistent=true
+Unit=zold-pgops@%i-backup.service
+
+[Install]
+WantedBy=timers.target

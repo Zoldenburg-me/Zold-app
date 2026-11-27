@@ -32,6 +32,7 @@ import type { PaymentRequest } from "../payment-requests.js";
 import { textCarriesCode } from "../payment-requests.js";
 import { paymentMemo } from "../sepa.js";
 import { dayOf } from "../domain/income-invoices.js";
+import { sliceChars } from "../store/text.js";
 
 export interface StatementInputs {
   orgId: string;
@@ -129,7 +130,7 @@ const invoiceNumber = (i?: Invoice) => i?.issued?.number ?? i?.supplier?.invoice
  *  the invoice: the external number, the invoice number, the memo. */
 function referenceFor(parts: (string | undefined)[], fallback: string): string {
   const found = parts.map((p) => (p ?? "").trim()).filter(Boolean);
-  return (found[0] ?? fallback).slice(0, 140);
+  return sliceChars(found[0] ?? fallback, 140);
 }
 
 function requestFor(inp: StatementInputs, id?: string, memo?: string): PaymentRequest | undefined {

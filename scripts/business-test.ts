@@ -37,6 +37,7 @@ import {
   hashToken,
   newLinkToken,
   supplierView,
+  ownerInvoiceView,
   tokenMatches,
   validateLines,
   InvoiceError,
@@ -408,6 +409,25 @@ check("bad rows are reported, never silently dropped", () => {
   assert.deepEqual(out.rejected.map((r) => r.row), [3, 4], "1-based row numbers past the header");
 });
 
+check("a CSV row with a NUL or half an emoji is rejected and reported; the others import", () => {
+  const csv = [
+    "Recipient Address,Token,Amount,Recipient Name,Notes",
+    "0x1111111111111111111111111111111111111111,USDC,1.00,Ann,ok \u{1F600}",
+    "0x1111111111111111111111111111111111111111,USDC,1.00,Bo\u0000b,",
+    "0x1111111111111111111111111111111111111111,USDC,1.00,Cy,half \ud83d",
+  ].join("\n");
+  const out = importCsv(csv, { recipientAddress: "Recipient Address", token: "Token", amount: "Amount", recipientName: "Recipient Name", notes: "Notes" });
+  assert.equal(out.lines.length, 1);
+  assert.deepEqual(out.rejected.map((r) => r.row), [3, 4]);
+  assert.match(out.rejected[0].reason, /NUL character or half of an emoji/);
+});
+
+check("a rejection after a blank row names the row as it is in the file", () => {
+  const csv = "Recipient Address,Token,Amount\n\n0x1111111111111111111111111111111111111111,USDC,1.00\n0xbad,USDC,1.00";
+  const out = importCsv(csv, { recipientAddress: "Recipient Address", token: "Token", amount: "Amount" });
+  assert.deepEqual(out.rejected.map((r) => r.row), [4]);
+});
+
 check("quoted fields with commas survive", () => {
   const csv =
     'Recipient Address,Token,Amount,Recipient Name\n0x1111111111111111111111111111111111111111,USDC,100.00,"Acme, Inc."';
@@ -469,6 +489,15 @@ check("the supplier view never leaks the org id or the link hash", () => {
   assert.equal((view.payor as { name: string }).name, "Test GmbH");
 });
 
+check("a submitted invoice's destination leaves masked, and the owner view never carries the sealed link", () => {
+  const payTo = { kind: "bank" as const, bank: { currency: "EUR" as const, country: "DE", holderName: "S", iban: "DE89370400440532013000" } };
+  assert.equal(supplierView(invoice({ payTo }), "X").payTo?.bank?.iban, "DE89••••3000");
+  const own = ownerInvoiceView(invoice({ linkTokenEnc: "v2.sealed" })) as Record<string, unknown>;
+  assert.equal(own.linkTokenEnc, undefined);
+  assert.equal(own.linkKept, true);
+  assert.equal((ownerInvoiceView(invoice()) as Record<string, unknown>).linkKept, false);
+});
+
 check("a submitted invoice is locked", () => {
   const view = supplierView(invoice(), "Test GmbH");
   assert.equal(view.editable, false);
@@ -480,16 +509,19 @@ check("the payment reference leads with the supplier's invoice number", () => {
   assert.equal(paymentReference({ supplier: undefined }, "Acme GmbH"), "Acme GmbH");
 });
 
-check("only a SUBMITTED EUR invoice with an IBAN is payable, and each refusal names the gap", () => {
+check("a SUBMITTED invoice is payable by SEPA in euro, or to a wallet in EURe or USDC, and each refusal names the gap", () => {
   const base = { id: "i", orgId: "o", linkTokenHash: "h", lines: [], currency: "EUR", total: "1.00", createdByMemberId: "m", createdAt: "t", updatedAt: "t" };
   const bank = { kind: "bank" as const, bank: { currency: "EUR" as const, country: "DE", holderName: "S", iban: "DE89370400440532013000" } };
-  assert.equal(assertPayable({ ...base, state: "SUBMITTED", payTo: bank } as any).iban, "DE89370400440532013000");
+  const wallet = { kind: "wallet" as const, address: "0x2222222222222222222222222222222222222222", chainId: 8453 };
+  assert.deepEqual(assertPayable({ ...base, state: "SUBMITTED", payTo: bank } as any), { kind: "bank", iban: "DE89370400440532013000", holderName: "S", bic: undefined });
+  assert.deepEqual(assertPayable({ ...base, state: "SUBMITTED", payTo: wallet } as any), { ...wallet, asset: "EURE" });
+  assert.deepEqual(assertPayable({ ...base, state: "SUBMITTED", currency: "USD", payTo: wallet } as any), { ...wallet, asset: "USDC" });
+  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED", currency: "GBP", payTo: bank } as any), /EUR or USD/);
   assert.throws(() => assertPayable({ ...base, state: "PAYING", payTo: bank } as any), /already under way/);
   assert.throws(() => assertPayable({ ...base, state: "PAID", payTo: bank } as any), /already paid/);
   assert.throws(() => assertPayable({ ...base, state: "LINK_CREATED", payTo: bank } as any), /not submitted/);
-  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED", currency: "USD", payTo: bank } as any), /Only EUR/);
-  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED", payTo: { kind: "wallet", address: "0x1", chainId: 1 } } as any), /ask them for an IBAN/i);
-  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED" } as any), /no bank account/);
+  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED", currency: "USD", payTo: bank } as any), /USDC to a wallet/);
+  assert.throws(() => assertPayable({ ...base, state: "SUBMITTED" } as any), /IBAN or a wallet/);
   assert.throws(() => assertPayable({ ...base, state: "SUBMITTED", direction: "outgoing", payTo: bank } as any), /issued by you/);
 });
 
@@ -519,6 +551,7 @@ check("line totals are computed, not taken from the payload", () => {
   ]);
   assert.equal(lines[0].amount, "30.00");
   assert.equal(total, "30.00");
+  assert.throws(() => validateLines([{ description: "A", quantity: "1", unitPrice: "0" }]), /above zero/);
 });
 
 console.log("\nChart of accounts");

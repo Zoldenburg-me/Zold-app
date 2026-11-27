@@ -290,12 +290,17 @@ Say this plainly rather than letting the surface imply otherwise:
   in `send-link:test` and against a local preview: the payee's form, the
   hidden limit and the receipt. Tying a real SEPA transfer or crypto send to
   one (`POST /api/orgs/:org/invoices/:id/paying`) and its move to PAID have
-  run only on stubbed transfers. The link has no expiry, the payer sees its URL
-  only in the session that made it, and a payment for any other amount than
+  run only on stubbed transfers. The link has no expiry, the payer reads its URL
+  again from a sealed copy on the invoice row, and a payment for any other amount than
   the one asked is refused before the debit. Whoever opens the link first
   fills it in; after that its page shows the destination masked. Five amounts
   over the limit lock its submit for a day. The payee's name and IBAN or
   wallet are stored on the invoice row.
+- **No requested invoice has been paid to a wallet.** A supplier's wallet
+  address on a requested invoice (EURe for euro, USDC for dollars) becomes a
+  one-line wallet run at `POST /api/orgs/:org/invoices/:id/pay`; that has run
+  only in `business:crypto-send:test`, on a stubbed chain. No such send has
+  been signed for real. A wallet is taken only where `CRYPTO_SEND_ENABLED=1`.
 - **Imported-wallet sync has run only against local hardhat** (2026-10-03:
   mints in and a send out were booked, unpriced). It has never read mainnet,
   and the DefiLlama price feed has never been called live. A wallet syncs only
@@ -350,9 +355,9 @@ Say this plainly rather than letting the surface imply otherwise:
   and on a local Postgres 17 (`npm run check:pg`). The pre-import report has
   not been run on a copy of the testnet or the mainnet db.json, so no
   foreign key is in the schema and no real duplicate is known. There is no
-  Oracle host, no cluster, no pgBackRest backup and no restore drill; the
-  linux-arm64 `age` build an export with ledger history needs there is not
-  pinned.
+  Oracle host, no cluster, no pgBackRest backup and no restore drill: the
+  provisioning script, units and runbook (`scripts/oracle-host/`,
+  `docs/oracle-host.md`) have run only against a local Postgres 17.
 - Timeout values everywhere were chosen, not measured.
 
 **PARKED, and it gates one customer**: merchant-book privacy. One Safe per

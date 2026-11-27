@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily encrypted dump to the retention bucket (%i)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+Unit=zold-pgops@%i-dump.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Poll production every two minutes (%i)
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=2min
+
+[Install]
+WantedBy=timers.target
