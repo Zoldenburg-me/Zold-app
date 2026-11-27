@@ -225,6 +225,10 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   await s.recordOperatorCredentialUse("op_2", "oc-2", 5);
   assert.equal((await s.findOperatorCredential("oc-2"))?.credential.signCount, 5);
   await assert.rejects(async () => await s.recordOperatorCredentialUse("op_2", "nope", 1), /unknown operator credential/);
+  // Re-enrolment on a new admin host: the old passkey (no rpId) stays, the new one keeps its rpId.
+  await s.addOperatorCredential("op_1", { credentialId: "oc-3", publicKey: "pk", signCount: 0, rpId: "admin.zold.test" } as any);
+  assert.deepEqual((await s.findOperator("op_1"))?.credentials.map((c) => [c.credentialId, c.rpId]), [["oc-1", undefined], ["oc-3", "admin.zold.test"]]);
+  assert.equal((await s.findOperatorCredential("oc-3"))?.credential.rpId, "admin.zold.test");
   await s.addOperatorSession({ id: "os_1", operatorId: "op_2", tokenHash: "oth-1", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY) });
   assert.equal((await s.findOperatorSessionByTokenHash("oth-1"))?.id, "os_1");
   assert.equal((await s.touchOperatorSession("os_1")).lastUsedAt, now);

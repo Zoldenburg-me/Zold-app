@@ -50,11 +50,14 @@ function label(raw: unknown, fallback: string): string {
   return v || fallback;
 }
 
+/** The passkeys that can sign in on this admin host. */
+const usable = (o: Operator) => o.credentials.filter((c) => c.rpId === OPERATOR.rpId);
+
 const publicOperator = (o: Operator) => ({
   id: o.id,
   name: o.name,
   email: o.email,
-  passkeys: o.credentials.map((c) => ({ label: c.label, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt })),
+  passkeys: usable(o).map((c) => ({ label: c.label, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt })),
 });
 
 export function createOperatorAuthRouter() {
@@ -88,7 +91,7 @@ export function createOperatorAuthRouter() {
       await store.lockKey(`operator:${e.email.trim().toLowerCase()}`);
       const existing = await store.findOperatorByEmail(e.email);
       if (existing?.disabledAt) return res.status(403).json({ error: "this operator is disabled", code: "OPERATOR_DISABLED" });
-      if (existing && existing.credentials.length >= OPERATOR.maxPasskeys) {
+      if (existing && usable(existing).length >= OPERATOR.maxPasskeys) {
         return res.status(409).json({ error: `an operator holds at most ${OPERATOR.maxPasskeys} passkeys`, code: "PASSKEY_LIMIT" });
       }
       if ((await store.findOperatorCredential(reg.credentialId))) {
@@ -99,7 +102,7 @@ export function createOperatorAuthRouter() {
         id: `op_${randomBytes(8).toString("hex")}`, name: e.name, email: e.email, createdAt: now, credentials: [],
       }));
       const credential: OperatorCredential = {
-        credentialId: reg.credentialId, key: reg.key, signCount: reg.signCount, label: label(req.body?.label, "Passkey"), createdAt: now,
+        credentialId: reg.credentialId, key: reg.key, signCount: reg.signCount, label: label(req.body?.label, "Passkey"), rpId: OPERATOR.rpId, createdAt: now,
       };
       await store.addOperatorCredential(operator.id, credential);
       // The link is used: nothing awaits between the check above and this.
@@ -116,7 +119,7 @@ export function createOperatorAuthRouter() {
     res.json({
       challenge: issueChallenge("operator_login"),
       rpId: OPERATOR.rpId,
-      allowCredentials: operators.flatMap((o) => o.credentials.map((c) => ({ type: "public-key", id: c.credentialId }))),
+      allowCredentials: operators.flatMap((o) => usable(o).map((c) => ({ type: "public-key", id: c.credentialId }))),
       userVerification: "required",
       timeout: 120_000,
     });
@@ -163,7 +166,7 @@ export function createOperatorAuthRouter() {
     res.json({
       challenge: issueChallenge("operator_step_up", operatorStepUpBinding(operator.id, method, path, req.body?.body)),
       rpId: OPERATOR.rpId,
-      allowCredentials: operator.credentials.map((c) => ({ type: "public-key", id: c.credentialId })),
+      allowCredentials: usable(operator).map((c) => ({ type: "public-key", id: c.credentialId })),
       userVerification: "required",
       timeout: 120_000,
     });
@@ -187,7 +190,7 @@ export function createOperatorAuthRouter() {
       // Held per operator, and read again: the passkey cap holds until the write.
       await store.lockKey(`operator:${found.email.trim().toLowerCase()}`);
       const operator = (await store.findOperator(found.id))!;
-      if (operator.credentials.length >= OPERATOR.maxPasskeys) {
+      if (usable(operator).length >= OPERATOR.maxPasskeys) {
         return res.status(409).json({ error: `an operator holds at most ${OPERATOR.maxPasskeys} passkeys`, code: "PASSKEY_LIMIT" });
       }
       let reg: ReturnType<typeof verifyRegistration>;
@@ -201,7 +204,7 @@ export function createOperatorAuthRouter() {
       }
       const credential: OperatorCredential = {
         credentialId: reg.credentialId, key: reg.key, signCount: reg.signCount,
-        label: label(req.body?.label, `Passkey ${operator.credentials.length + 1}`), createdAt: new Date().toISOString(),
+        label: label(req.body?.label, `Passkey ${usable(operator).length + 1}`), rpId: OPERATOR.rpId, createdAt: new Date().toISOString(),
       };
       await store.addOperatorCredential(operator.id, credential);
       await store.audit(auditEntry("operator.passkey_added", { operator: `operator:${operator.id}`, operatorName: operator.name, passkey: credential.label }));

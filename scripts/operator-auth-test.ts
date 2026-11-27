@@ -60,6 +60,7 @@ async function accessJwt(claims: Record<string, unknown> = {}, opts: { kid?: str
 }
 const goodJwt = await accessJwt();
 const secondJwt = await accessJwt({ email: "second@example.com" });
+const thirdJwt = await accessJwt({ email: "third@example.com" });
 
 const express = (await import("express")).default;
 const { initStore, store } = await import("../services/api/src/store.js");
@@ -491,6 +492,16 @@ await check("a new enrolment for an operator's email adds a passkey to that oper
   const r = await req("POST", "/api/admin/auth/enrol", { token, ...(await SoftPasskey.create()).attest(o.body.challenge, ADMIN, "admin.test") }, access);
   assert.equal(r.status, 403);
   assert.equal(r.body.code, "OPERATOR_DISABLED");
+});
+await check("passkeys made for another RP ID do not count toward the cap and are not offered", async () => {
+  const id = "op_third";
+  const stale = (n: number) => ({ credentialId: `old-${n}`, key: { jwk: {}, alg: "ES256" }, signCount: 0, label: `Old ${n}`, createdAt: new Date().toISOString() });
+  await store.addOperator({ id, name: "Third", email: "third@example.com", createdAt: new Date().toISOString(), credentials: [1, 2, 3, 4, 5].map(stale) } as any);
+  const third = await operatorKit({ base: BASE, origin: ADMIN, rpId: "admin.test", dataDir, name: "Third", email: "third@example.com", accessJwt: () => thirdJwt });
+  assert.equal(third.operator.id, id, "re-enrols onto the same operator");
+  assert.deepEqual((third.operator as any).passkeys.map((p: any) => p.label), ["Soft key"], "only the usable passkey is listed");
+  const c = await req("POST", "/api/admin/auth/login/challenge", {}, { "cf-access-jwt-assertion": thirdJwt });
+  assert.deepEqual(c.body.allowCredentials.map((x: any) => x.id), [(await store.findOperator(id))!.credentials[5].credentialId]);
 });
 // Last: it locks this address out of sign-in for the rest of the run.
 await check("ten failed sign-ins lock the address, a right passkey included", async () => {

@@ -1238,6 +1238,9 @@ export interface OperatorCredential {
   signCount: number;
   /** The owner's name for it ("YubiKey, desk"); not a secret. */
   label: string;
+  /** The RP ID it was made for. One for another (an older admin host, or
+   *  none recorded) cannot sign in here and does not count toward the cap. */
+  rpId?: string;
   createdAt: string;
   lastUsedAt?: string;
 }
