@@ -280,7 +280,7 @@ export function validateCreate(body: any, user: User, now = new Date()): CreateI
   let externalInvoiceNumber: string | undefined;
   if (b.externalInvoiceNumber !== undefined && b.externalInvoiceNumber !== null && b.externalInvoiceNumber !== "") {
     if (typeof b.externalInvoiceNumber !== "string") throw new PaymentRequestError("externalInvoiceNumber must be a string");
-    externalInvoiceNumber = b.externalInvoiceNumber.trim().replace(/\s+/g, " ").slice(0, 60) || undefined;
+    externalInvoiceNumber = sliceChars(b.externalInvoiceNumber.trim().replace(/\s+/g, " "), 60) || undefined;
     if (externalInvoiceNumber && invoiceId) {
       throw new PaymentRequestError("a link collects either a Zold invoice or an external invoice number, not both");
     }

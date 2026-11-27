@@ -5,11 +5,23 @@
  */
 const UNSTORABLE = /\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-/** True if any string in `v` (keys included) is text Postgres refuses. */
+/** True if any string in `v` (keys included) is text Postgres refuses.
+ *  A loop, not recursion: a deeply nested body must not exhaust the stack. */
 export function hasUnstorableText(v: unknown): boolean {
-  if (typeof v === "string") return UNSTORABLE.test(v);
-  if (Array.isArray(v)) return v.some(hasUnstorableText);
-  if (v !== null && typeof v === "object") return Object.entries(v).some(([k, x]) => UNSTORABLE.test(k) || hasUnstorableText(x));
+  const todo: unknown[] = [v];
+  while (todo.length) {
+    const x = todo.pop();
+    if (typeof x === "string") {
+      if (UNSTORABLE.test(x)) return true;
+    } else if (Array.isArray(x)) {
+      todo.push(...x);
+    } else if (x !== null && typeof x === "object") {
+      for (const [k, y] of Object.entries(x)) {
+        if (UNSTORABLE.test(k)) return true;
+        todo.push(y);
+      }
+    }
+  }
   return false;
 }
 

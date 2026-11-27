@@ -28,7 +28,7 @@ const { draftFrom, jurisdictionOf } = await import("../services/api/src/routes/b
 const { PaymentRequestError, quoteCrypto } = await import("../services/api/src/payment-requests.js");
 const { checkOpAssertion } = await import("../services/api/src/http/passkey-assertion.js");
 const { refuseUnstorableText } = await import("../services/api/src/http/body-text.js");
-const { sliceChars } = await import("../services/api/src/store/text.js");
+const { hasUnstorableText, sliceChars } = await import("../services/api/src/store/text.js");
 
 await initStore();
 let failed = 0;
@@ -65,6 +65,10 @@ await check("a NUL or a lone surrogate anywhere in the body is a 400 BAD_TEXT; a
     assert.equal((await r.json()).code, "BAD_TEXT", bad);
   }
   assert.equal((await post(JSON.stringify({ a: "pay \u{1F600} now" }))).status, 200);
+  // Nested far past the call stack, within the body limit: a 200, not a 500.
+  const deep = "[".repeat(200_000) + "]".repeat(200_000);
+  assert.equal(hasUnstorableText(JSON.parse(deep)), false);
+  assert.equal(hasUnstorableText(JSON.parse("[".repeat(200_000) + '"\\u0000"' + "]".repeat(200_000))), true);
 });
 await check("sliceChars never cuts an emoji in half", () => {
   const s = "x".repeat(139) + "\u{1F600}";

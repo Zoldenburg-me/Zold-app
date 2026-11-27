@@ -18,6 +18,7 @@ import type {
 } from "./types.js";
 import { redactedMessage } from "../http/log-cause.js";
 import { fromCents, toCents } from "./invoicing.js";
+import { sliceChars } from "../store/text.js";
 
 export class DraftError extends Error {}
 
@@ -115,8 +116,8 @@ export function validateLine(raw: unknown, contact?: Contact): Omit<DraftLine, "
     asset,
     amount,
     accountCode: typeof input.accountCode === "string" ? input.accountCode : undefined,
-    note: (typeof input.note === "string" ? input.note.trim().slice(0, 500) : "") || undefined,
-    tags: Array.isArray(input.tags) ? input.tags.slice(0, 20).map((t) => String(t).slice(0, 60)) : [],
+    note: (typeof input.note === "string" ? sliceChars(input.note.trim(), 500) : "") || undefined,
+    tags: Array.isArray(input.tags) ? input.tags.slice(0, 20).map((t) => sliceChars(String(t), 60)) : [],
   };
 }
 
