@@ -366,7 +366,8 @@ export const correctable = (i: Invoice) =>
  *  and the amount is checked to be the original's. The issuer's details come
  *  from today's profile. The recipient is replaced whole, VAT ID and country
  *  included, on a paid invoice too: an owner decision, so the issuer can fix
- *  who was billed without a cancellation. */
+ *  who was billed without a cancellation. Its warnings (an issuer VAT ID still
+ *  a note, say) are accepted like a new invoice's, also by owner decision. */
 const CORRECTABLE = ["recipient", "lines", "supplyKind", "supplyDate", "supplyPeriod", "language", "purchaseOrder", "paymentTerms", "notes"] as const;
 
 /** The request a correction is issued from: the original's own document,
