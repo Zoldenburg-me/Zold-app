@@ -45,8 +45,7 @@ process.env.ALLOW_FIXED_RATES = "1";
 const { initStore, store } = await import("../services/api/src/store.js");
 const { resolveOrg } = await import("../services/api/src/routes/org-context.js");
 const { createOrgCryptoDepositRoutes, companyConversionSignRefusal, CONVERT_KIND } = await import("../services/api/src/routes/business/org-crypto-deposits.js");
-const { followCompanyConversions, settleOnArrival, settleUnconfirmedConversions, companyDepositBlocker } = await import("../services/api/src/adapters/crypto-deposits.js");
-const { conversionOutputs, depositOwner } = await import("../services/api/src/transfers/conversion-outputs.js");
+const { followCompanyConversions, settleOnArrival, settleUnconfirmedConversions, companyDepositBlocker, companyConversionInFlight, valueUnratedReceipts } = await import("../services/api/src/adapters/crypto-deposits.js");
 const { writeAccountStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
 const { safeOperationDigest } = await import("../services/api/src/wallet/candide.js");
 const { settlementRef } = await import("../services/api/src/domain/invoices.js");
@@ -121,13 +120,14 @@ const prepareOrg = async (plan: any, _txs: any, s: any[]) => {
   return { challenge: safeOperationDigest(plan.address, userOperation), userOperation, nonce: nonce++ } as any;
 };
 const swaps: { safe: string; units: bigint }[] = [];
+let makerExpiry = new Date(Date.now() + 5 * 60_000).toISOString();
 const swapPlan = async (safe: `0x${string}`, units: bigint) => {
   swaps.push({ safe, units });
   return {
     plan: {
       approval: { spender: "0x" + "5e".repeat(20), amount: units },
       call: { to: "0x" + "5e".repeat(20), data: "0x1234", value: 0n },
-      quote: { provider: "dex", rate: 1137900n, expectedOut: 87_80n * 10n ** 16n, minOut: 87_00n * 10n ** 16n },
+      quote: { provider: "dex", rate: 1137900n, expectedOut: 87_80n * 10n ** 16n, minOut: 87_00n * 10n ** 16n, expiresAt: makerExpiry },
     },
     serialized: {},
   } as any;
@@ -181,6 +181,7 @@ try {
     assert.equal(r.data.deposits.length, 2);
     assert.ok(r.data.deposits.every((d: any) => d.accountId === "acc_1" && !d.userId));
     assert.ok(r.data.deposits.every((d: any) => "convertBlocker" in d));
+    assert.ok(r.data.deposits.every((d: any) => !("conversionIntent" in d)), "the signed quote stays on the server");
   });
 
   console.log("\nConverted by an op the owners sign");
@@ -222,6 +223,8 @@ try {
     const late = await companyConversionSignRefusal(op, Date.now() + 11 * 60_000);
     assert.equal(late?.code, "QUOTE_EXPIRED");
     assert.ok(late?.invalidate);
+    const maker = await companyConversionSignRefusal(op, Date.now() + 6 * 60_000);
+    assert.equal(maker?.code, "QUOTE_EXPIRED", "the maker's own expiry wins when it is sooner");
     const stray = await companyConversionSignRefusal({ ...op, id: "sop_unknown" });
     assert.equal(stray?.code, "DEPOSIT_MISSING");
     assert.ok(stray?.invalidate);
@@ -231,20 +234,35 @@ try {
   await check("executed: parked on the op's userOpHash, and its transaction's EURe is conversion output, not money in", async () => {
     const userOpHash = `0x${"ab".repeat(32)}`;
     const txHash = `0x${"cd".repeat(32)}`;
+    assert.equal(await companyConversionInFlight("acc_1", txHash), false, "queued, nothing sent: no EURe waits");
     assert.ok(await store.claimSafeOpRelay(queued.opId));
+    assert.equal(await companyConversionInFlight("acc_1", `0x${"99".repeat(32)}`), true, "relaying, its transaction unknown: any EURe to the Safe waits");
+    assert.equal(await companyConversionInFlight("acc_2", txHash), false, "another company's Safe does not wait");
     await store.finishSafeOp(queued.opId, { state: "EXECUTED", userOpHash, txHash });
     assert.equal(await followCompanyConversions(), 1);
     const d = await row(queued.depositId);
     assert.equal(d.holding, "unconfirmed");
     assert.ok(d.txs.some((t) => t.step === "safe.swap(usdc->eure).unconfirmed" && t.hash === userOpHash));
     assert.equal(d.conversionIntent?.txHash, txHash, "the intent stays for the settle, with its transaction");
-    const isOutput = conversionOutputs(await store.list("cryptoDeposits"));
-    assert.ok(isOutput(txHash, 3, depositOwner({ accountId: "acc_1" })), "EURe to the company Safe in that transaction is the swap's");
-    assert.ok(!isOutput(txHash, 3, depositOwner({ userId: "u_owner" })), "a person's EURe in the same bundle is still money in");
+    assert.equal(await companyConversionInFlight("acc_1", txHash), true, "followed, not settled: its transaction's EURe waits for the settle to name the output");
+    assert.equal(await companyConversionInFlight("acc_1", `0x${"99".repeat(32)}`), false, "EURe in any other transaction is money in");
     assert.equal(await followCompanyConversions(), 0, "followed once");
     // The settle is the person's code: no receipt yet leaves the row as it is.
     await settleUnconfirmedConversions(async () => null as any);
     assert.equal((await row(queued.depositId)).holding, "unconfirmed");
+    // Included but reverted: held for review, and it delivered nothing to wait for.
+    await settleUnconfirmedConversions(async () => ({ success: false, txHash }) as any);
+    assert.equal(await companyConversionInFlight("acc_1", txHash), false);
+  });
+
+  await check("a relay cut off by a restart stops holding the scan after a bound", async () => {
+    const d = await deposit();
+    const q = await call("POST", `/orgs/org_1/crypto-deposits/${d.id}/convert`, "u_payer");
+    assert.ok(await store.claimSafeOpRelay(q.data.opId));
+    assert.equal(await companyConversionInFlight("acc_1", `0x${"98".repeat(32)}`), true);
+    assert.equal(await companyConversionInFlight("acc_1", `0x${"98".repeat(32)}`, Date.now() + 16 * 60_000), false);
+    await store.finishSafeOp(q.data.opId, { state: "FAILED", reason: "test" });
+    await followCompanyConversions();
   });
 
   await check("withdrawn: held and convertible again; failed after inclusion: refused and convertible again", async () => {
@@ -267,6 +285,26 @@ try {
   });
 
   console.log("\nThe company's books");
+
+  await check("EURe tied to an invoice is booked as that invoice's payment", async () => {
+    await invoice("inv_e", "org_2");
+    const e = await deposit({ accountId: "acc_2", token: "EURE", amountUnits: (50n * 10n ** 18n).toString(), amountUsdc: undefined, amountEur: 50, receipt: undefined, invoiceId: "inv_e" });
+    await writeAccountStatementLines((await store.findAccount("acc_2"))!);
+    const line = (await store.ledgerOf("org_2")).find((x) => x.statement?.links.depositId === e.id);
+    assert.equal(line?.statement?.links.invoiceId, "inv_e");
+    assert.equal((line as any)?.txType, "invoice_payment");
+  });
+
+  await check("a deposit valued late rewrites the invoice payment it settled at no value", async () => {
+    await invoice("inv_v");
+    const d = await deposit({ receipt: undefined, amountEur: undefined, invoiceId: "inv_v" });
+    const before = ((await store.findInvoice("inv_v"))!.settlements ?? []).find((x: any) => settlementRef(x) === `deposit:${d.id}`) as any;
+    assert.ok(before, "settled on arrival");
+    assert.ok((await valueUnratedReceipts()) >= 1, "valued at the day's fixing");
+    const after = ((await store.findInvoice("inv_v"))!.settlements ?? []).filter((x: any) => settlementRef(x) === `deposit:${d.id}`) as any[];
+    assert.equal(after.length, 1, "rewritten under the same ref, never a second payment");
+    assert.notDeepEqual(after[0], before, "the payment now carries the receipt value");
+  });
 
   await check("the statement takes the company's deposits from the books date on", async () => {
     await store.updateAccount("acc_2", { backedSince: "2026-06-01T00:00:00.000Z" });

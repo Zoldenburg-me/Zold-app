@@ -364,6 +364,34 @@ async function settleCompanyArrival(deposit: CryptoDeposit): Promise<CryptoDepos
 }
 
 /**
+ * Is a company conversion on this account's Safe in flight, so that this EURe
+ * log may be its output or money in and nothing yet says which? While the op
+ * is relaying its transaction is unknown, so any EURe to the Safe waits;
+ * once followed, only EURe in its transaction waits, until settling names
+ * the swap's own logs (a reverted swap delivered none, and holds nothing). The scanner then reads the window again rather than
+ * book a swap's output as money in, or drop another payment in the bundle.
+ */
+export async function companyConversionInFlight(accountId: string, txHash: string, now = Date.now()): Promise<boolean> {
+  const tx = txHash.toLowerCase();
+  for (const d of await store.list("cryptoDeposits")) {
+    const intent = d.conversionIntent;
+    if (d.userId || d.accountId !== accountId || !intent?.safeOpId) continue;
+    if (intent.txHash) {
+      if (d.holding === "unconfirmed" && !conversionReverted(d) && intent.txHash.toLowerCase() === tx) return true;
+    } else {
+      const op = await store.findSafeOp(intent.safeOpId);
+      // Bounded: nothing sweeps a relay cut off by a restart, and a hold that
+      // never ends would stop every deposit. Past it, a swap output booked as
+      // money in makes the settle refuse for review (fail closed).
+      if (op?.state === "RELAYING" && now - Date.parse(op.updatedAt) < RELAY_HOLD_MS) return true;
+    }
+  }
+  return false;
+}
+/** Longer than a relay's own receipt wait. */
+const RELAY_HOLD_MS = 15 * 60_000;
+
+/**
  * Move a company conversion on from its org Safe op (wallet/org-debit.ts
  * orgOpOutcome). Relayed, or in review with a hash: the row is parked
  * `unconfirmed` on the op's userOpHash, and settleUnconfirmedConversions
@@ -989,6 +1017,19 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       }
     }
   }
+  // A company conversion whose output is not named yet: the window waits,
+  // cursor unmoved, for followCompanyConversions and the settle before the
+  // next scan.
+  for (const [i, token] of tokens.entries()) {
+    if (token.token !== "EURE") continue;
+    for (const log of logsByToken[i]) {
+      const c = classify(log, token.token);
+      if (c.kind === "deposit" && c.match.account && (await companyConversionInFlight(c.match.account.id, c.txHash))) {
+        console.log(`crypto-in: blocks ${fromBlock}..${toBlock} wait for a company conversion in ${c.txHash} to settle`);
+        return { found: 0, more: false };
+      }
+    }
+  }
   const fresh: CryptoDeposit[] = [];
   for (const [i, token] of tokens.entries()) {
     const logs = logsByToken[i];
@@ -1108,7 +1149,11 @@ export async function valueUnratedReceipts(): Promise<number> {
     const receipt = await valueAtReceipt(d.amountUsdc ?? usd.fromUnits(BigInt(d.amountUnits)), d.arrivedAt);
     if (!receipt) continue;
     const valued = await store.patchCryptoDeposit(d.id, (row) => (row.receipt || unvaluable(row) ? null : { receipt, amountEur: receipt.amountEur }));
-    if (valued) n++;
+    if (!valued) continue;
+    // An invoice it was tied to was settled at €0 without a value: rewritten
+    // under the same ref at the value it now has.
+    if (valued.invoiceId) await recordInvoiceSettlement(valued);
+    n++;
   }
   return n;
 }

@@ -321,6 +321,8 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
     if (!ownDeposit(inp, d) || d.token !== "EURE" || !((d.amountEur ?? 0) > 0)) continue;
     if ((d.from ?? ZERO) === ZERO || booked.has(d.txHash.toLowerCase()) || isConversionOutput(d.txHash, d.logIndex, depositOwner(d))) continue;
     const at = d.arrivedAt ?? d.detectedAt;
+    // EURe tied to an invoice it pays is that invoice's payment, as USDC is.
+    const inv = d.invoiceId ? inp.invoices.find((i) => i.id === d.invoiceId) : undefined;
     out.push({
       event: "eure_in",
       key: `deposit:${d.id}:eure`,
@@ -328,9 +330,9 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
       valueAt: at,
       amountCents: cents(d.amountEur!),
       counterparty: { address: d.from },
-      reference: `Deposit ${d.txHash.slice(0, 10)}`,
-      links: { depositId: d.id, txHashes: [d.txHash] },
-      txType: "transfer_in",
+      reference: referenceFor([invoiceNumber(inv)], `Deposit ${d.txHash.slice(0, 10)}`),
+      links: { depositId: d.id, ...(inv ? { invoiceId: inv.id } : {}), ...(invoiceNumber(inv) ? { invoiceNumber: invoiceNumber(inv) } : {}), txHashes: [d.txHash] },
+      txType: inv ? "invoice_payment" : "transfer_in",
       tags: ["eure"],
     });
   }

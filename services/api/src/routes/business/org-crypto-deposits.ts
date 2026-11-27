@@ -55,6 +55,13 @@ async function orgDeposit(orgId: string, depositId: string): Promise<CryptoDepos
   return (await store.findAccount(d.accountId))?.orgId === orgId ? d : undefined;
 }
 
+/** A deposit as members see it: the signed quote, nonce and paymaster stay
+ *  on the server; the queued op is named so the queue can be opened. */
+function memberDeposit(d: CryptoDeposit) {
+  const { conversionIntent, ...rest } = d;
+  return { ...rest, ...(conversionIntent?.safeOpId ? { conversionOpId: conversionIntent.safeOpId } : {}) };
+}
+
 type SignRefusal = { status: number; code: string; error: string; invalidate?: string };
 
 /**
@@ -79,7 +86,9 @@ export async function companyConversionSignRefusal(op: PendingSafeOp, now = Date
     return { status: 409, code: err.code, error: err.message, invalidate: "the company may no longer convert on this account" };
   }
   const intent = d.conversionIntent!;
-  if (Date.parse(intent.at) + FX.QUOTE_TTL_MS < now) {
+  // The venue's own expiry when sooner (an RFQ maker's is about a minute).
+  const expires = Math.min(Date.parse(intent.at) + FX.QUOTE_TTL_MS, intent.quote.expiresAt ? Date.parse(intent.quote.expiresAt) : Infinity);
+  if (!(expires >= now)) {
     return { status: 409, code: "QUOTE_EXPIRED", error: "This price has expired. Nothing was converted; start the conversion again for a fresh price.", invalidate: "its price expired before it was signed" };
   }
   try {
@@ -118,7 +127,7 @@ export function createOrgCryptoDepositRoutes(deps: OrgRoutes, conv: OrgConversio
         deposits: (await store.list("cryptoDeposits"))
           .filter((d) => !d.userId && !!d.accountId && accounts.has(d.accountId))
           .sort((a, b) => b.detectedAt.localeCompare(a.detectedAt))
-          .map((d) => ({ ...d, convertBlocker: companyDepositBlocker(d), ...(conversionReverted(d) ? { conversionReverted: true } : {}) })),
+          .map((d) => ({ ...memberDeposit(d), convertBlocker: companyDepositBlocker(d), ...(conversionReverted(d) ? { conversionReverted: true } : {}) })),
       });
     }),
   );
@@ -136,7 +145,8 @@ export function createOrgCryptoDepositRoutes(deps: OrgRoutes, conv: OrgConversio
         if (!invoice || invoice.orgId !== ctx.org.id) return res.status(404).json({ error: "invoice not found" });
       }
       const out = await linkDepositInvoice(deposit.id, invoiceId === null ? null : String(invoiceId), () => store.lockOrganisation(ctx.org.id));
-      res.status(out.status).json(out.body);
+      const linked = out.body.deposit as CryptoDeposit | undefined;
+      res.status(out.status).json(linked ? { ...out.body, deposit: memberDeposit(linked) } : out.body);
     }),
   );
 
@@ -200,7 +210,7 @@ export function createOrgCryptoDepositRoutes(deps: OrgRoutes, conv: OrgConversio
               safeAddress: plan.address,
               nonce: prepared.nonce.toString(),
               ...(paymaster ? { paymaster } : {}),
-              quote: { provider: quote.provider, rate: quote.rate.toString(), minOut: quote.minOut.toString() },
+              quote: { provider: quote.provider, rate: quote.rate.toString(), minOut: quote.minOut.toString(), ...(quote.expiresAt ? { expiresAt: quote.expiresAt } : {}) },
               safeOpId: op.id,
             },
             reason: "waiting for the company's owners to sign the conversion",
