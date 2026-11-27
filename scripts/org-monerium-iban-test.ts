@@ -423,6 +423,85 @@ try {
     await gatedStill();
   });
 
+  await check("the poller re-reads a company IBAN unasked: moved, it comes off and the payment page stops; back on the Safe, it returns", async () => {
+    const { recheckCompanyIbans } = await import("../services/api/src/routes/business/org-monerium-iban.js");
+    const org = async () => (await store.findOrganisation("org_co"))!;
+    const savedMs = MONERIUM.ibanCheckMs;
+    (MONERIUM as any).ibanCheckMs = 0;
+    try {
+      await reset();
+      await issue();
+      mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
+      await recheckCompanyIbans(io as any);
+      await gatedStill();
+      assert.ok((await account()).moneriumIban?.movedAwayAt, "the move is recorded; the row stays");
+      assert.equal("code" in (await orgPageAccount(await org())), true, "the payment page no longer publishes it");
+      mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" }];
+      await recheckCompanyIbans(io as any);
+      assert.equal((await account()).status, "active");
+      assert.equal((await account()).identifier.iban, IBAN);
+      assert.equal(((await orgPageAccount(await org())) as any).account.identifier.iban, IBAN, "published again");
+      // Once per MONERIUM.ibanCheckMs per company: a second pass at once reads nothing.
+      (MONERIUM as any).ibanCheckMs = 60_000;
+      mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
+      await recheckCompanyIbans(io as any);
+      assert.equal((await account()).status, "active");
+      // An outage changes nothing and throws nothing out of the poller.
+      (MONERIUM as any).ibanCheckMs = 0;
+      mon.ibansFail = true;
+      const warn = console.warn;
+      console.warn = () => {};
+      try { await recheckCompanyIbans(io as any); } finally { console.warn = warn; mon.ibansFail = false; }
+      assert.equal((await account()).status, "active");
+    } finally {
+      (MONERIUM as any).ibanCheckMs = savedMs;
+    }
+  });
+
+  await check("two Monerium records for one IBAN decide nothing; a stale \"away\" read never undoes a reopen", async () => {
+    const { recheckCompanyIbans } = await import("../services/api/src/routes/business/org-monerium-iban.js");
+    const savedMs = MONERIUM.ibanCheckMs;
+    (MONERIUM as any).ibanCheckMs = 0;
+    try {
+      await reset();
+      await issue();
+      // Conflicting records: their order must not decide whether it is hidden.
+      mon.ibans = [
+        { iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" },
+        { iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" },
+      ];
+      await recheckCompanyIbans(io as any);
+      assert.equal((await account()).status, "active", "kept while Monerium is ambiguous");
+      // Moved away.
+      mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
+      await recheckCompanyIbans(io as any);
+      await gatedStill();
+      // A poll reads "away"; before it writes, an owner's Check again reopens it.
+      const stale = { ...io, monerium: () => ({ ...client, async ibans() {
+        const answer = { ibans: mon.ibans.map((i) => ({ ...i })) };
+        mon.ibans = [{ iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" }];
+        const back = await call("POST", "/org_co/monerium/iban/check", "u_adam");
+        assert.equal(back.data.monerium.companyIban.state, "issued", back.text);
+        return answer;
+      } }) };
+      await recheckCompanyIbans(stale as any);
+      assert.equal((await account()).status, "active");
+      assert.equal((await account()).moneriumIban?.movedAwayAt, undefined, "the stale read does not put the move back");
+      // Moved again; then conflicting records (one on the Safe, one elsewhere) do not reopen it.
+      mon.ibans = [{ iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" }];
+      await recheckCompanyIbans(io as any);
+      await gatedStill();
+      mon.ibans = [
+        { iban: IBAN, profile: PROFILE, address: SAFE, chain: MONERIUM.chain, state: "approved" },
+        { iban: IBAN, profile: PROFILE, address: OWN_SAFE, chain: MONERIUM.chain, state: "approved" },
+      ];
+      await recheckCompanyIbans(io as any);
+      await gatedStill();
+    } finally {
+      (MONERIUM as any).ibanCheckMs = savedMs;
+    }
+  });
+
   await check("a moved IBAN stays moved after the keys are removed and reconnected", async () => {
     await reset();
     await issue();

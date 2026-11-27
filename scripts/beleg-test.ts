@@ -401,6 +401,34 @@ await check("a company payout from its own Safe gets a Beleg naming the company 
   }
 });
 
+await check("a company payout that paid an invoice links it: the line updates in place, its Beleg code kept; Lexware and the Beleg name it", async () => {
+  const { lexwareRow } = await import("../services/api/src/bookkeeping/lexware.js");
+  const { belegContextFor } = await import("../services/api/src/bookkeeping/issue.js");
+  const { writeCompanyPayoutLines } = await import("../services/api/src/bookkeeping/writer.js");
+  const before = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "org-payout:po-1")!;
+  assert.ok(before.statement!.documentCode, "the earlier check issued its Beleg");
+  assert.equal(before.statement!.links.invoiceId, undefined);
+  await store.addInvoice({ id: "inv_co", orgId: "org_co", direction: "incoming", linkTokenHash: "h_inv_co", state: "PAID", supplier: { name: "Bob GmbH", invoiceNumber: "RE-77" }, lines: [], currency: "EUR", total: "42.50", createdByMemberId: "m_co", createdAt: now, updatedAt: now } as any);
+  const acc = (await store.findAccount("acc_co"))!;
+  await store.updateAccount("acc_co", { moneriumPayouts: acc.moneriumPayouts!.map((p) => ({ ...p, draftId: "dft_co", lineId: "dl_co", invoiceId: "inv_co" })) } as any);
+  await writeStatementLines();
+  const after = (await store.ledgerOf("org_co")).filter((e) => e.statement?.key === "org-payout:po-1");
+  assert.equal(after.length, 1, "updated, not added again");
+  const line = after[0];
+  assert.equal(line.id, before.id);
+  assert.equal(line.statement!.documentCode, before.statement!.documentCode, "the Beleg code stays on the line");
+  assert.equal(line.statement!.links.invoiceId, "inv_co");
+  assert.equal(line.statement!.links.invoiceNumber, "RE-77");
+  assert.match(lexwareRow(line, "Acme GmbH", undefined).extra, /Rechnung RE-77/);
+  const snap = buildBeleg(line, await belegContextFor(line));
+  assert.equal(snap.invoice?.number, "RE-77");
+  assert.equal(snap.invoice?.invoiceId, "inv_co");
+  // The pre-cap write books the same payout again: it keeps the link.
+  await writeCompanyPayoutLines((await store.findAccount("acc_co"))!, (await store.findAccount("acc_co"))!.moneriumPayouts!);
+  const kept = (await store.ledgerOf("org_co")).find((e) => e.id === before.id)!;
+  assert.equal(kept.statement!.links.invoiceNumber, "RE-77");
+});
+
 console.log("\nPublic PDF");
 
 await check("the public PDF is served while live and refused once revoked; the verify page still answers", async () => {

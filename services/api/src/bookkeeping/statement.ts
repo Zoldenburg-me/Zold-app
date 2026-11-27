@@ -285,6 +285,7 @@ function companyPayoutLines(inp: StatementInputs): LineDraft[] {
   const out: LineDraft[] = [];
   for (const p of inp.companyPayouts ?? []) {
     if (!p.orderId || p.state !== "sent" || !(p.amountEur > 0)) continue;
+    const paidInvoice = p.invoiceId ? inp.invoices.find((i) => i.id === p.invoiceId) : undefined;
     out.push({
       event: "sepa_out",
       key: `org-payout:${p.id}`,
@@ -293,7 +294,11 @@ function companyPayoutLines(inp: StatementInputs): LineDraft[] {
       amountCents: -cents(p.amountEur),
       counterparty: { name: p.recipientName, iban: p.recipientIban },
       reference: referenceFor([p.reference, p.memo], p.orderId),
-      links: { orderId: p.orderId, txHashes: [] },
+      links: {
+        orderId: p.orderId,
+        ...(paidInvoice ? { invoiceId: paidInvoice.id, invoiceNumber: invoiceNumber(paidInvoice) } : {}),
+        txHashes: [],
+      },
       txType: "payout",
       tags: ["sepa", ...(p.draftId ? ["business_run"] : [])],
     });

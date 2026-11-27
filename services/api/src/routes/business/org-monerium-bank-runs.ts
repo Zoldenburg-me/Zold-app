@@ -491,7 +491,7 @@ export function createOrgMoneriumBankRunRoutes(
       // ── One order at a time; the first not accepted stops the run ──────
       let stop: { status: number; code: string; error: string } | undefined;
       for (let i = 0; i < ordered.length; i++) {
-        const { hold } = ordered[i];
+        const { plan, hold } = ordered[i];
         if (redeemMessageStale(hold.issuedAt)) {
           stop = { status: 409, code: "PAYOUT_EXPIRED", error: "The approval expired before every line was sent." };
           break;
@@ -511,6 +511,7 @@ export function createOrgMoneriumBankRunRoutes(
           signedByMemberId: ctx.member.id,
           draftId,
           lineId: hold.lineId,
+          ...(plan.invoiceId ? { invoiceId: plan.invoiceId } : {}),
           // Written before Monerium is asked, as a single payout is.
           state: "unknown",
           error: "Zold has not confirmed this payout with Monerium yet. If it stays this way, check Monerium before sending it again.",
