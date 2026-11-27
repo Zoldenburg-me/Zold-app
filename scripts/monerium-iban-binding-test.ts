@@ -38,7 +38,7 @@ process.env.MONERIUM_IBAN_CHECK_MS = "300000";
 
 /** The IBANs each bearer token sees at GET /ibans. */
 const ibansOf = new Map<string, any[]>();
-const fake = { down: false, html: false, reads: 0, calls: 0 };
+const fake = { down: false, html: false, reads: 0, calls: 0, onContext: undefined as undefined | (() => Promise<void>) };
 /** Text Monerium puts in a failed answer's body: no log line may carry it. */
 const DOWN_BODY = "upstream-detail-7f3a";
 /** The user's own API keys (client credentials) and the token they mint. */
@@ -72,7 +72,7 @@ const monerium = createServer((req, res) => {
   const list = ibansOf.get(token);
   if (!list) return send(401, { code: 401, status: "Unauthorized" });
   if (url.pathname === "/ibans") { fake.reads++; return send(200, { ibans: list }); }
-  if (url.pathname === "/auth/context") return send(200, { email: "own@example.com" });
+  if (url.pathname === "/auth/context") { void (fake.onContext?.() ?? Promise.resolve()).then(() => send(200, { email: "own@example.com" })); return; }
   if (url.pathname === "/profiles") return send(200, { profiles: [{ id: PROFILE, kind: "personal", state: "approved" }] });
   if (url.pathname === "/addresses") return send(200, { addresses: [] });
   send(404, { code: 404, status: "Not Found" });
@@ -568,6 +568,31 @@ await check("pending: the OAuth callback still sets the account up for IBAN acti
   assert.ok(after.monerium?.accessTokenEnc);
   assert.equal(after.funding?.status, "provisioning");
   assert.match(after.kyc?.reason ?? "", /activate IBAN with passkey/);
+});
+
+await check("the poller does not approve from a copy read before KYC moved to manual_review", async () => {
+  const u = await addUser(13);
+  await store.updateUser(u.id, { iban: "", kycStatus: "pending", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
+  const stale = (await store.findUser(u.id))!;
+  await store.updateUser(u.id, { kycStatus: "manual_review" });
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  const after = await refreshPendingIban(stale);
+  assert.equal(after.kycStatus, "manual_review");
+  assert.equal((await store.findUser(u.id))!.kycStatus, "manual_review");
+  assert.equal(after.iban, u.iban, "the IBAN still attaches");
+});
+
+await check("connecting API keys does not approve an account KYC moved to manual_review during the Monerium calls", async () => {
+  const u = await addRefused(37, "manual_review");
+  await store.updateUser(u.id, { kycStatus: "pending" });
+  fake.onContext = async () => { await store.updateUser(u.id, { kycStatus: "manual_review" }); };
+  try {
+    const r = await post(`/api/users/${u.id}/monerium/api-keys`, {
+      clientId: KEYS.clientId, clientSecret: KEYS.clientSecret, stepUp: await u.stepUp("monerium.connect"),
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+  } finally { fake.onContext = undefined; }
+  assert.equal((await store.findUser(u.id))!.kycStatus, "manual_review");
 });
 
 console.log("\nOrganisation accounts");
