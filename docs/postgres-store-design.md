@@ -969,7 +969,8 @@ stopped and read-only, until the owner closes it (§6 step 8).
   same on the live host, a drill instance and a fresh `initdb`. The drill
   compares the restored database against the same query. The host's
   credential for it has create and read only (no overwrite, no
-  delete); a lifecycle rule deletes objects after 30 days. A compromised
+  delete; on R2, whose tokens cannot be create-only, the bucket lock
+  enforces that); a lifecycle rule deletes objects after 30 days. A compromised
   host can then wipe the PITR repositories but not the last 14 days of
   dumps: the worst case is a restore from the last daily dump. The rule
   starts unlocked; whether to lock it (irreversible, "not even a tenancy

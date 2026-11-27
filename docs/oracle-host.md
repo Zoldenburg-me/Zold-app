@@ -64,13 +64,17 @@ the host:
   `<account id>.r2.cloudflarestorage.com`, their region `auto`, and
   `<DEP>_REPO2_S3_KEY`/`_S3_SECRET` an R2 token scoped to that bucket. An R2
   token cannot be create-only, so the dump bucket's bucket lock rule (14
-  days) is what keeps the host from deleting or overwriting a dump; the
-  pgBackRest bucket has no lock, because `expire` deletes.
+  days) is what keeps the host from deleting or overwriting a dump, and a
+  lifecycle rule deletes dumps after 30 days. The pgBackRest bucket has no
+  lock, because `expire` deletes. One R2 PUT is capped at 5 GiB, so the dump
+  tar must stay under that; the first step on R2 is `pgbackrest stanza-create`
+  and `check` against the real bucket.
 - Per deployment: the two pgBackRest buckets and an OCI user with a policy
   for those two only (its customer secret key); the repository passphrase;
   the dump bucket in the second region with a 14-day time-bound retention
   rule (unlocked) and a 30-day lifecycle delete, and a key that may create
-  and read objects there, not overwrite or delete.
+  and read objects there, not overwrite or delete (on OCI; on R2 the bucket
+  lock enforces that, above).
 - `OCI_NAMESPACE`, `OWNER_AGE_RECIPIENT` (public key), `ALERT_URL`
   (`https://` only; provision refuses another scheme).
 - `/etc/zold/<dep>.env`: the lease's environment, plus `DATABASE_URL`,

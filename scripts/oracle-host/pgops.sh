@@ -108,8 +108,8 @@ watchdog() {
 }
 
 # PUT one file into the dump bucket over the S3-compatible API. The
-# credential may create and read only (§7); it goes to curl on stdin, never
-# on the command line.
+# credential may create and read only (§7; on R2 the bucket lock enforces
+# that); it goes to curl on stdin, never on the command line.
 put_object() { # file name
   local region bucket sha host
   region="$(v DUMP_REGION)"; bucket="$(v DUMP_BUCKET)"
