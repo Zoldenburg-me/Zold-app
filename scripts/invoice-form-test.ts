@@ -147,5 +147,11 @@ check("a stroke starts and ends on its own points and curves through the midpoin
 check("the page imports the pad's geometry from invoice-sign.js", () => {
   assert.match(readFileSync(path.join(PUB, "invoice.js"), "utf8"), /import \{ strokePath \} from "\/invoice-sign\.js";/);
 });
+check("signing does not depend on a Pay link: a bank-only invoice can be signed", () => {
+  const js = readFileSync(path.join(PUB, "invoice.js"), "utf8");
+  assert.match(js, /const sign = !settled && !own;/);
+  assert.match(js, /\$\{sign \? `<div class="signed no-print" id="signed"/);
+  assert.match(js, /\$\{sign \? `<div class="pay-actions">/);
+});
 
 console.log(`\n${passed} passed`);

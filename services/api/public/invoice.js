@@ -39,8 +39,9 @@ async function api(path, opts = {}) {
 const LOCALES = { de: "de-DE", en: "en-GB", fr: "fr-FR", es: "es-ES" };
 const money = (cents, currency = "EUR", locale = "en-GB") =>
   new Intl.NumberFormat(locale, { style: "currency", currency }).format((cents ?? 0) / 100);
+// A Date is an instant and is written as the reader's own calendar day.
 const date = (iso, locale = "en-GB") =>
-  (iso ? new Date(`${String(iso).slice(0, 10)}T12:00:00`).toLocaleDateString(locale, { day: "numeric", month: locale === "de-DE" ? "2-digit" : "short", year: "numeric" }) : "");
+  (iso ? (iso instanceof Date ? iso : new Date(`${String(iso).slice(0, 10)}T12:00:00`)).toLocaleDateString(locale, { day: "numeric", month: locale === "de-DE" ? "2-digit" : "short", year: "numeric" }) : "");
 
 // Labels live in one place so a bilingual invoice stays consistent.
 const L = {
@@ -99,6 +100,8 @@ function renderIssued(inv) {
   const settled = inv.state === "PAID" || inv.state === "RECONCILED";
   // The issuer reading their own invoice is not the one to pay it.
   const pay = !settled && !own && inv.payPath ? inv.payPath : "";
+  // Signing is the recipient's own mark on their copy: it needs no Pay link.
+  const sign = !settled && !own;
   const show = d.display ?? {};
   const bilingual = show.bilingual;
   const lab = (k) => (bilingual && L.de[k] !== L.en[k] ? `${L.de[k]} / ${L.en[k]}` : t[k]);
@@ -202,10 +205,10 @@ function renderIssued(inv) {
       ${show.notes !== false && d.notes ? `<div><h3>&nbsp;</h3>${esc(d.notes)}</div>` : ""}
     </div>
 
-    ${pay ? `<div class="signed no-print" id="signed">
+    ${sign ? `<div class="signed no-print" id="signed" data-loc="${esc(loc)}">
       <h3>${esc(lab("to"))}</h3>
       <button type="button" class="slot" id="signed-mark"><span class="hint">Sign here</span></button>
-      <div class="sub">${esc([d.recipient.name, day(new Date().toISOString())].filter(Boolean).join(" · "))}</div>
+      <div class="sub">${d.recipient.name ? `${esc(d.recipient.name)} · ` : ""}<span id="signed-date"></span></div>
     </div>` : ""}
 
     ${show.footer !== false && inv.footerNote
@@ -216,9 +219,9 @@ function renderIssued(inv) {
     <div class="await${settled ? " ok" : ""}">${esc(settled ? "Paid" : "Awaiting payment")}</div>
     <div class="pay-total">${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</div>
     <p class="lead">${esc([d.issuer?.name, !settled && inv.dueDate ? `due ${day(inv.dueDate)}` : ""].filter(Boolean).join(" · "))}</p>
-    ${pay ? `<div class="pay-actions">
+    ${sign ? `<div class="pay-actions">
         <button class="soft" id="sign-open" type="button">Sign invoice</button>
-        <a class="pay-btn" href="${esc(pay)}">Pay ${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</a>
+        ${pay ? `<a class="pay-btn" href="${esc(pay)}">Pay ${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</a>` : ""}
       </div>
       <dialog id="sign-dlg" aria-labelledby="sign-title">
         <div class="grab" aria-hidden="true"></div>
@@ -253,8 +256,8 @@ function renderIssued(inv) {
             <button type="button" class="pill" id="sign-go" disabled>Sign</button>
           </div>
         </div>
-      </dialog>
-      <div class="note">You choose how to pay on the next page. This invoice is marked paid when the money arrives.</div>` : ""}
+      </dialog>` : ""}
+    ${pay ? `<div class="note">You choose how to pay on the next page. This invoice is marked paid when the money arrives.</div>` : ""}
     ${!settled && !own && !pay && inv.payLinkLapsed ? `<div class="note">The Pay link for this invoice has expired. ${inv.bank ? "You can still pay by bank transfer to the details on the invoice, or ask" : "Ask"} ${esc(d.issuer?.name || "the issuer")} for a new link.</div>` : ""}
     <div class="note">${esc(complianceNote(d.jurisdiction))} Zold is not a tax
       adviser — whether a supply is exempt, and which exemption applies, is the issuer's determination.${d.jurisdiction?.ruleSet === "DE" ? `
@@ -401,7 +404,9 @@ function wireSigning() {
   };
   const at = (e) => {
     const r = pad.getBoundingClientRect();
-    return [(e.clientX - r.left) * PAD_W / r.width, (e.clientY - r.top) * PAD_H / r.height].map((n) => Math.round(n * 10) / 10);
+    // Held to the pad: a captured pointer keeps reporting after it leaves, and the copy shows only ink the pad showed.
+    return [[(e.clientX - r.left) * PAD_W / r.width, PAD_W], [(e.clientY - r.top) * PAD_H / r.height, PAD_H]]
+      .map(([n, max]) => Math.round(Math.min(max, Math.max(0, n)) * 10) / 10);
   };
   pad.addEventListener("pointerdown", (e) => {
     pad.setPointerCapture(e.pointerId);
@@ -466,6 +471,7 @@ function wireSigning() {
     }
     $("#signed").classList.remove("no-print");
     $("#signed").classList.add("is-signed");
+    $("#signed-date").textContent = date(new Date(), $("#signed").dataset.loc);
     $("#sign-open").textContent = "Sign again";
     dlg.close();
     go.textContent = "Sign";
