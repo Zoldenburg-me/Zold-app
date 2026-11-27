@@ -476,6 +476,21 @@ await check("reverse charge with a note in place of the USt-IdNr.: shown before 
   assert.equal(issued.data.invoice.issued.display.issuerVatId, true, "a reason that needs the issuer's VAT ID prints it");
 });
 
+await check("the identifiers an invoice must print are switched on in its frozen display, so a reprint matches", async () => {
+  await addOrg("org_ids", "DE", { invoicing: { vatId: "DE123456789", display: { issuerVatId: false, issuerTaxNumber: false, recipientVatId: false } } });
+  const taxed = await call("POST", "/api/orgs/org_ids/invoicing/issue", "u_owner", { ...invoiceFor("DE"), vat: { kind: "standard", rate: 19 } });
+  assert.equal(taxed.status, 201, JSON.stringify(taxed.data));
+  assert.equal(taxed.data.invoice.issued.display.issuerVatId, true, "the issuer's only identifier prints though switched off");
+  const rc = await call("POST", "/api/orgs/org_ids/invoicing/issue", "u_owner", {
+    ...invoiceFor("SE"),
+    recipient: { name: "Kund AB", addressLine: "Gatan 1", postalCode: "11122", city: "Stockholm", country: "SE", isBusiness: true, vatId: "SE556677889901" },
+    vat: { kind: "exempt", reason: "reverse_charge_eu" },
+    acceptWarnings: true,
+  });
+  assert.equal(rc.status, 201, JSON.stringify(rc.data));
+  assert.equal(rc.data.invoice.issued.display.recipientVatId, true, "reverse charge prints the customer's VAT ID");
+});
+
 console.log("\nNumbering: one number, once, picked at write time");
 
 const issueIn = (orgId: string, over: Record<string, unknown> = {}) =>

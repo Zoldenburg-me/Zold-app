@@ -113,17 +113,13 @@ function renderIssued(inv) {
   const bilingual = show.bilingual;
   const lab = (k) => (bilingual && L.de[k] !== L.en[k] ? `${L.de[k]} / ${L.en[k]}` : t[k]);
 
-  // Display settings hide optional blocks only: reverse charge and an
-  // intra-community supply print both VAT IDs, and the issuer always shows
-  // one tax identifier, whatever is switched off.
-  const needsIds = ["reverse_charge_eu", "intra_community_supply"].includes(d.vatTreatment?.reason);
-  const showTaxNumber = show.issuerTaxNumber !== false && !!d.issuer.taxNumber;
-  const showIssuerVatId = needsIds || show.issuerVatId !== false || !showTaxNumber;
+  // `display` is frozen at issue (issue-outgoing.ts), with the identifiers
+  // the treatment requires already switched on.
   const issuerLines = [
     d.issuer.name,
     ...addressOf(d.issuer, home),
-    showIssuerVatId && d.issuer.vatId ? `${t.vatId} ${d.issuer.vatId}` : "",
-    (showTaxNumber || (!d.issuer.vatId && d.issuer.taxNumber)) ? `${t.taxNumber} ${d.issuer.taxNumber}` : "",
+    show.issuerVatId !== false && d.issuer.vatId ? `${t.vatId} ${d.issuer.vatId}` : "",
+    show.issuerTaxNumber !== false && d.issuer.taxNumber ? `${t.taxNumber} ${d.issuer.taxNumber}` : "",
   ].filter(Boolean);
 
   const metaRows = [
@@ -134,7 +130,7 @@ function renderIssued(inv) {
       : d.supplyDate ? [lab("supplyDate"), day(d.supplyDate)] : null,
     inv.dueDate ? [lab("due"), day(inv.dueDate)] : null,
     show.purchaseOrder && d.purchaseOrder ? [lab("po"), d.purchaseOrder] : null,
-    (needsIds || show.recipientVatId !== false) && d.recipient.vatId ? [lab("vatId"), d.recipient.vatId] : null,
+    show.recipientVatId !== false && d.recipient.vatId ? [lab("vatId"), d.recipient.vatId] : null,
     ...(d.customFields ?? []).map((f) => [f.label, f.value]),
   ].filter(Boolean);
 

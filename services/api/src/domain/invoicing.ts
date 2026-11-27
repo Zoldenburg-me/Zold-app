@@ -1018,7 +1018,8 @@ function checkDirectiveContent(
       // intra-community supply of goods, whose exemption rests on the VAT IDs,
       // still refuse.
       const looksLikeANumber = /^[A-Za-z]{2}\s*\d/.test(issuerVatId);
-      if (issuerVatId && !looksLikeANumber && t.reason === "reverse_charge_eu") {
+      // German only: the correction rule is § 31 Abs. 5 UStDV's.
+      if (de && issuerVatId && !looksLikeANumber && t.reason === "reverse_charge_eu") {
         add(
           "warning",
           "issuer.vatId",
@@ -1070,6 +1071,12 @@ function checkDirectiveContent(
     }
   }
 
+  // Art. 226(3): a taxed invoice carries the issuer's VAT ID. Germany also
+  // accepts the Steuernummer (§ 14 Abs. 4 Nr. 2), checked in checkGermanContent.
+  if (!de && draft.treatment.kind === "standard" && !has(draft.issuer.vatId)) {
+    add("error", "issuer.vatId", "Your VAT ID is required on an invoice that charges VAT.", "Art. 226(3) VAT Directive");
+    issuerVatIdFlagged = true;
+  }
   if (!issuerVatIdFlagged && has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
     add("warning", "issuer.vatId", `${draft.issuer.vatId} does not look like a VAT ID.`);
   }

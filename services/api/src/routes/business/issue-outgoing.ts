@@ -151,8 +151,15 @@ export async function issueOutgoing(
     // A reason that requires the issuer's VAT ID prints it (or the note in its
     // place) whatever the display setting: §14a UStG, Art. 226 Nr. 3.
     const t = draft.treatment;
-    if (t.kind === "exempt" && EXEMPTION_REASONS[t.reason as ExemptionReasonId]?.requiresIssuerVatId) {
-      display.issuerVatId = true;
+    const reason = t.kind === "exempt" ? EXEMPTION_REASONS[t.reason as ExemptionReasonId] : undefined;
+    if (reason?.requiresIssuerVatId) display.issuerVatId = true;
+    if (reason?.requiresRecipientVatId) display.recipientVatId = true;
+    // The issuer always shows one tax identifier: a hidden one prints when it
+    // is the only one there. Frozen with the document, so a reprint matches.
+    const { vatId, taxNumber } = draft.issuer;
+    if (!(display.issuerVatId && vatId) && !(display.issuerTaxNumber && taxNumber)) {
+      if (vatId) display.issuerVatId = true;
+      else if (taxNumber) display.issuerTaxNumber = true;
     }
 
     const document: Pick<Invoice, "lines" | "currency" | "total" | "dueDate" | "supplier" | "issued" | "submittedAt"> = {

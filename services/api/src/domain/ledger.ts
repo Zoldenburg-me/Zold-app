@@ -656,12 +656,15 @@ const settlementRefOf = (s: NonNullable<LedgerEntry["statement"]>) =>
 
 /**
  * The net and VAT inside each payment of an issued invoice, so revenue is not
- * booked with the VAT in it. The VAT follows what the payment put against the
- * invoice (its settlement), pro rata to the invoice's euro gross, never more
- * than the invoice's VAT: a crypto receipt valued above its quote carries the
- * invoiced tax, and the valuation difference stays in net. A settlement booked
- * in several lines (a receipt converted in parts) shares its amount by line.
- * A line with no settlement record (a manual link) is taken at its amount.
+ * booked with the VAT in it. VAT follows what the payments put against the
+ * invoice (their settlements), allocated on the running total per invoice in
+ * date order and capped at the invoice's gross: each row gets the change in
+ * the rounded cumulative VAT, so the rows add up to the invoiced VAT exactly
+ * and an overpayment carries none. A crypto receipt valued above its quote
+ * keeps the difference in net. A settlement booked in several lines (a
+ * receipt converted in parts) is shared by line amount, the last line taking
+ * the remainder. A line with no settlement record (a manual link) counts at
+ * its amount.
  */
 export function vatSplits(
   entries: LedgerEntry[],
@@ -671,15 +674,33 @@ export function vatSplits(
     const s = e.statement;
     const inv = s?.links.invoiceId ? invoices.get(s.links.invoiceId) : undefined;
     if (!s || !inv || !PAYMENT_TYPES.has(e.txType ?? "") || s.amountCents <= 0 || inv.grossCents <= 0) return [];
-    return [{ e, s, inv, ref: settlementRefOf(s) }];
-  });
-  const linesOfRef = new Map<string, number>();
-  for (const p of payable) if (p.ref) linesOfRef.set(p.ref, (linesOfRef.get(p.ref) ?? 0) + p.s.amountCents);
+    return [{ e, s, inv, invoiceId: s.links.invoiceId!, ref: settlementRefOf(s) }];
+  }).sort((x, y) => (x.s.valueDate ?? "").localeCompare(y.s.valueDate ?? "") || (x.s.key ?? "").localeCompare(y.s.key ?? ""));
+
+  const refLines = new Map<string, { total: number; left: number; assigned: number }>();
+  for (const p of payable) {
+    if (!p.ref) continue;
+    const r = refLines.get(p.ref) ?? { total: 0, left: 0, assigned: 0 };
+    r.total += p.s.amountCents;
+    r.left++;
+    refLines.set(p.ref, r);
+  }
+  const cumulative = new Map<string, { applied: number; vat: number }>();
   const out = new Map<LedgerEntry, { netCents: number; vatCents: number }>();
-  for (const { e, s, inv, ref } of payable) {
+  for (const { e, s, inv, invoiceId, ref } of payable) {
     const settled = ref ? inv.settledCents?.[ref] : undefined;
-    const applied = settled === undefined ? s.amountCents : Math.round((settled * s.amountCents) / linesOfRef.get(ref!)!);
-    const vatCents = Math.round((inv.vatCents * Math.min(applied, inv.grossCents)) / inv.grossCents);
+    let applied = s.amountCents;
+    if (settled !== undefined) {
+      const r = refLines.get(ref!)!;
+      applied = --r.left === 0 ? settled - r.assigned : Math.round((settled * s.amountCents) / r.total);
+      r.assigned += applied;
+    }
+    const c = cumulative.get(invoiceId) ?? { applied: 0, vat: 0 };
+    c.applied += applied;
+    const vatSoFar = Math.round((inv.vatCents * Math.min(Math.max(c.applied, 0), inv.grossCents)) / inv.grossCents);
+    const vatCents = vatSoFar - c.vat;
+    c.vat = vatSoFar;
+    cumulative.set(invoiceId, c);
     out.set(e, { netCents: s.amountCents - vatCents, vatCents });
   }
   return out;

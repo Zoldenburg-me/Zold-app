@@ -834,10 +834,17 @@ check("an EU issuer gets the Directive's content checks, citing the Directive", 
 
 check("German-only rules stay German: an EU issuer may charge 23% and needs no Steuernummer", () => {
   const pl = checkCompliance(
-    draft({ issuer: { ...frIssuer, country: "PL", vatId: undefined }, treatment: { kind: "standard", rate: 23 } }),
+    draft({ issuer: { ...frIssuer, country: "PL", vatId: "PL5260250995", taxNumber: undefined }, treatment: { kind: "standard", rate: 23 } }),
     jurisdictionFor("PL"),
   );
   assert.ok(pl.ok, pl.errors.map((e) => e.message).join("; "));
+});
+
+check("an EU issuer charging VAT must show its VAT ID (Art. 226(3)); a note never stands in outside Germany", () => {
+  const taxed = checkCompliance(draft({ issuer: { ...frIssuer, vatId: undefined } }), jurisdictionFor("FR"));
+  assert.ok(taxed.errors.some((e) => e.field === "issuer.vatId" && /226\(3\)/.test(e.legalBasis ?? "")));
+  const noted = checkCompliance(frDraft({ issuer: { ...frIssuer, vatId: "applied for" } }), jurisdictionFor("FR"));
+  assert.ok(noted.errors.some((e) => e.field === "issuer.vatId"), "the § 31 Abs. 5 UStDV warning is German only");
 });
 
 check("§ 33 UStDV's €250 is judged in euro on a foreign-currency invoice", () => {
