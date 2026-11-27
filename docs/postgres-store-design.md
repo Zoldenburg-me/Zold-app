@@ -757,9 +757,11 @@ With history rows and no such file, the export refuses.
 API and the data move together, from the Akash lease to the Oracle host
 (§7), testnet (zoldhq.com) first, then app.zoldhq.com:
 
-1. On the Oracle host: the Postgres 17 suite (`check:pg`) passes against the
-   target cluster, `npm run preflight` passes, and a restore drill (§7) has
-   been done once.
+1. The Postgres 17 suite (`check:pg`) passes on the release's commit
+   against a scratch Postgres 17, such as the `oracle-host` workflow's; the
+   target cluster's `pg_hba` rejects the suite's temporary roles and
+   databases. On the Oracle host `npm run preflight` passes, and a restore
+   drill (§7) has been done once.
 2. Drain: no transfer, crypto send or safe op in a non-final state, and the
    #167 condition (no no-reference SEPA transfer waiting).
 3. Stop writes: stop the API on the lease (it is the only writer).

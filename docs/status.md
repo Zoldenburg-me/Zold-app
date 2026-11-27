@@ -351,12 +351,14 @@ Say this plainly rather than letting the surface imply otherwise:
 - **The Postgres store has never held a deployment's data.** Both leases
   run the JSON store. The Postgres backend, its migrations and the
   `pg-import` / `pg-export` round trip have run only on fixtures, on PGlite
-  and on a local Postgres 17 (`npm run check:pg`). The pre-import report has
+  on a local Postgres 17 and on GitHub's linux-arm64 runner (`npm run
+  check:pg`, the manual `oracle-host` workflow). The pre-import report has
   not been run on a copy of the testnet or the mainnet db.json, so no
   foreign key is in the schema and no real duplicate is known. There is no
   Oracle host, no cluster, no pgBackRest backup and no restore drill: the
   provisioning script, units and runbook (`scripts/oracle-host/`,
-  `docs/oracle-host.md`) have run only against a local Postgres 17.
+  `docs/oracle-host.md`) have run only against a local Postgres 17 and on
+  that runner.
 - Timeout values everywhere were chosen, not measured.
 
 **PARKED, and it gates one customer**: merchant-book privacy. One Safe per
