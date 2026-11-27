@@ -366,15 +366,19 @@ export function payoutKit(io: OrgPayoutIo) {
   };
   /** A new row. A run line's placeholder row (`unknown` until Monerium
    *  answers) is not mirrored: its line reads `sending` until then. */
-  const writePayout = async (accountId: string, payout: CompanyBankPayout) => {
-    await writePayouts(accountId, (rows) => [payout, ...rows]);
-    if (!payout.draftId) await mirror(accountId, payout.id);
-  };
-  const patchPayout = async (accountId: string, id: string, patch: Partial<CompanyBankPayout>) => {
-    const at = new Date().toISOString();
-    await writePayouts(accountId, (rows) => rows.map((p) => (p.id === id ? { ...p, ...patch, updatedAt: at } : p)));
-    await mirror(accountId, id);
-  };
+  const writePayout = (accountId: string, payout: CompanyBankPayout) =>
+    store.tx(async () => {
+      await writePayouts(accountId, (rows) => [payout, ...rows]);
+      if (!payout.draftId) await mirror(accountId, payout.id);
+    });
+  /** The row and its run line are one write: a line never stays behind its
+   *  row (the list re-reads only rows Monerium still holds). */
+  const patchPayout = (accountId: string, id: string, patch: Partial<CompanyBankPayout>) =>
+    store.tx(async () => {
+      const at = new Date().toISOString();
+      await writePayouts(accountId, (rows) => rows.map((p) => (p.id === id ? { ...p, ...patch, updatedAt: at } : p)));
+      await mirror(accountId, id);
+    });
   /** The account's payouts as stored now, read after the balance: a row
    *  another submission wrote while this one awaited is counted. */
   const availableNow = async (accountId: string, orgId: string, planAddress: string, except?: string) => {
@@ -389,11 +393,11 @@ export function payoutKit(io: OrgPayoutIo) {
    * `unknown` on anything that may have placed one. Nothing is retried.
    * Monerium's response body is never returned or logged.
    */
-  async function placePayout(orgNow: Organisation, userId: string, accountId: string, payout: CompanyBankPayout, signature: Hex): Promise<{ status: number; body: { code?: string; error?: string } }> {
+  async function placePayout(orgNow: Organisation, userId: string, accountId: string, payout: CompanyBankPayout, signature: Hex, client: CompanyMonerium = io.monerium(orgNow)): Promise<{ status: number; body: { code?: string; error?: string } }> {
     const audit = async (kind: "org_payout.placed" | "org_payout.sent" | "org_payout.refused" | "org_payout.unknown", extra: Record<string, unknown>) =>
       await store.audit(auditEntry(kind, { orgId: orgNow.id, accountId: accountId, payoutId: payout.id, amountEur: payout.amountEur, safeAddress: payout.safeAddress, ...extra }, userId));
     try {
-      const order = await io.monerium(orgNow).placeOrder({
+      const order = await client.placeOrder({
         address: payout.safeAddress,
         chain: MONERIUM.chain,
         kind: "redeem",

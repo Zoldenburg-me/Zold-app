@@ -52,7 +52,7 @@ import { redactedMessage } from "../../http/log-cause.js";
 import { wrap } from "../util.js";
 import { requireCapability as requireUserCapability } from "../../http/guards.js";
 import { createCompanyCryptoSendPreparer, createCryptoSendPreparer, type CryptoSendInput } from "../crypto-sends.js";
-import { CHAIN_ID, cryptoSendEnabled } from "../../config.js";
+import { CHAIN_ID, cryptoSendEnabled, orgPayoutsEnabled } from "../../config.js";
 import type { User } from "../../store.js";
 import type { Account } from "../../domain/types.js";
 import { orgEntity } from "../../domain/org-entity.js";
@@ -551,6 +551,10 @@ export function createDraftRoutes(
     // (org-monerium-bank-runs.ts). Nothing is created here; the answer says
     // where the owner starts it.
     if (orgEntity(ctx.org) === "company") {
+      // Said before any dialog opens: with payouts off there is nothing to sign.
+      if (!orgPayoutsEnabled()) {
+        return res.status(409).json({ code: "ORG_PAYOUTS_OFF", error: "Bank payments from a company’s IBAN are switched off on this deployment. Nothing was sent." });
+      }
       return res.status(409).json({
         code: "COMPANY_BANK_RUN_SIGN",
         error: "A company’s bank payments are signed by an owner with their passkey, one signature per line. Nothing was sent.",

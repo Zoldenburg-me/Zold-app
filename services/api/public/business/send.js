@@ -14,7 +14,7 @@
 import { Z, api, cap, chainId, esc, eur, gateHtml, maskIban, me, org, reviewOn, roleCan, usdSymbol } from "./core.js";
 import { loadMembers } from "./screens.js";
 import { META, RENDER, linkBtn } from "./views.js";
-import { fundableAccounts, payableContacts } from "./home-model.js";
+import { companyBankAccounts, fundableAccounts, payableContacts } from "./home-model.js";
 
 /** Picked before the form opens: a contact's Pay button, or what was typed before Add a contact. */
 export const sendState = { contactId: null, amount: "", note: "", mode: "bank" };
@@ -59,6 +59,15 @@ function contactRow(c, checked, net) {
 
 /** The steps a run goes through here, with the people it waits for. */
 function nextSteps(account, approvers, crypto) {
+  // A company's bank payment: an owner's passkey is the approval (Q8).
+  if (org.entity === "company" && !crypto) {
+    const steps = [
+      ["edit_note", "You save it. It waits in Payments."],
+      ["fingerprint", `An owner sends it with their ${Z.passkeyName()}. No second approval is needed.`],
+      ["account_balance", "It leaves the company’s IBAN as a bank transfer through Monerium. It shows as sent once Monerium processes it."],
+    ];
+    return `<ol class="zb-next">${steps.map(([icon, text]) => `<li>${Z.icon(icon)}<span>${esc(text)}</span></li>`).join("")}</ol>`;
+  }
   const who = sender(account);
   const signer = who ? `by ${who}, from their own account` : "by you";
   const sentWith = `It’s sent with ${who ? "their passkey" : `your ${Z.passkeyName()}`} ${signer}.`;
@@ -116,19 +125,23 @@ RENDER.send = async () => {
   const cryptoOn = health?.capabilities?.cryptoSend === true;
   const crypto = cryptoOn && sendState.mode === "crypto";
   // A company's bank account is its own Safe, which only its owners sign: a
-  // run over several payees is not built. One payout at a time is in
-  // Settings → Monerium (routes/business/org-monerium-payouts.ts).
-  if (org.entity === "company" && !crypto) {
-    return `<div class="gate"><h3>Pay a bank account from Settings</h3><p>A company pays a bank account one payment at a time from Settings → Monerium, where an owner signs each with their ${Z.passkeyName()}. A payment run over several payees is not built, so nothing can be saved here.</p><div class="zb-actions"><a class="z-btn z-btn--primary" href="?view=settings&sec=monerium" data-view-link="settings">${Z.icon("account_balance")}<span>Settings → Monerium</span></a>${cryptoOn ? `<button type="button" class="z-btn z-btn--secondary" data-act="send-mode" data-mode="crypto">${Z.icon("account_balance_wallet")}<span>Pay a crypto wallet</span></button>` : ""}</div></div>`;
+  // payment saved here is a run an owner sends with their passkey
+  // (routes/business/org-monerium-bank-runs.ts). Only while the deployment
+  // allows bank payouts from a company's IBAN.
+  const companyBank = org.entity === "company" && !crypto;
+  if (companyBank && health?.capabilities?.orgBankPayouts !== true) {
+    return `<div class="gate"><h3>Bank payments are switched off</h3><p>Paying a bank account from ${esc(org.name)}’s IBAN is switched off on this deployment, so nothing can be saved here.</p><div class="zb-actions">${cryptoOn ? `<button type="button" class="z-btn z-btn--secondary" data-act="send-mode" data-mode="crypto">${Z.icon("account_balance_wallet")}<span>Pay a crypto wallet</span></button>` : ""}</div></div>`;
   }
   const net = health?.chainId ?? chainId;
   const payable = crypto ? contacts.filter((c) => walletOf(c, net)) : payableContacts(contacts);
-  const fundable = fundableAccounts(accounts);
+  const fundable = companyBank ? companyBankAccounts(accounts) : fundableAccounts(accounts);
   if (!fundable.length) {
     // Nothing here can use a carried amount: a later New payment starts empty.
     sendState.amount = "";
     sendState.note = "";
-    return `<div class="gate"><h3>No account can pay yet</h3><p>${org.type === "business"
+    return `<div class="gate"><h3>No account can pay yet</h3><p>${companyBank
+      ? `${esc(org.name)}’s IBAN isn’t on its Safe yet. Issue it in Settings → Monerium first.`
+      : org.type === "business"
       ? `Connect ${esc(org.name)}’s Monerium profile to an account first.`
       : "Open an account and fund it from your own account first."}</p><div class="zb-actions">${linkBtn("Accounts", "accounts")}</div></div>`;
   }
@@ -138,7 +151,7 @@ RENDER.send = async () => {
   const approvers = (members || []).filter((m) => m.status === "active" && m.id !== org.memberId && roleCan(m.role, "approve"));
   const first = fundable.find((a) => a.backingUserId === me?.id) || fundable[0];
   const chosen = payable.find((c) => c.id === sendState.contactId)?.id;
-  const action = reviewOn() ? "Submit for approval" : "Save payment";
+  const action = reviewOn() && !companyBank ? "Submit for approval" : "Save payment";
   // What was typed before Add a contact fills the form once; a later New payment starts empty.
   const amount = sendState.amount;
   const note = sendState.note;

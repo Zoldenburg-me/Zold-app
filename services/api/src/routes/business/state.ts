@@ -156,6 +156,10 @@ export const syncInvoicePayment = async (invoice: Invoice): Promise<Invoice> => 
     const paid = runLine && draft!.bankRun!.lines.find((l) => l.lineId === runLine.id);
     if (paid) {
       const state = bankRunLineState(draft!.bankRun!, paid);
+      // Paid only if the line paid the invoice in full (the run refuses any
+      // other line); otherwise it stays as it is, never marked paid.
+      const total = invoice.currency === "EUR" ? Number(invoice.total) : NaN;
+      if (state === "sent" && !(Number.isFinite(total) && Math.abs(total - paid.amountEur) < 0.005)) return invoice;
       if (state === "sent") return await move({ state: "PAID", payment: { ...invoice.payment, paidAt: paid.processedAt ?? new Date().toISOString() } });
       if (state === "failed" || state === "not_sent") return await move({ state: "SUBMITTED", payment: { ...invoice.payment, draftId: undefined } });
       // Signed, being sent, pending at Monerium, or unclear: it may still pay.

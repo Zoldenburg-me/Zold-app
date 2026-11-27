@@ -1230,6 +1230,12 @@ export const ACTIONS = {
     });
     sendState.contactId = null;
     sendState.mode = "bank";
+    // A company's bank payment has no review step: an owner sends it (Q8).
+    if (org.entity === "company" && !crypto) {
+      ap.tab = "drafts";
+      toast(roleCan(org.role, "sign") ? `Saved. Send it from the list with your ${Z.passkeyName()}.` : "Saved. An owner sends it with their passkey.");
+      return setView("payments");
+    }
     if (reviewOn()) {
       try {
         await api(`/api/orgs/${org.id}/drafts/${r.draft.id}/submit`, { method: "POST" });

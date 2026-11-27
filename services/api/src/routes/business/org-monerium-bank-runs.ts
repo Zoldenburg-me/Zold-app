@@ -138,6 +138,23 @@ async function planLines(draft: DraftPayment): Promise<{ plans: PlannedLine[]; p
       problems.push({ lineId: line.id, reason: `€${line.amount} is not an amount in euros and cents.` });
       continue;
     }
+    // A line that pays an invoice pays all of it: the invoice is marked paid
+    // when the line is sent, so a smaller amount would close it unpaid.
+    if (line.invoiceId) {
+      const invoice = await store.findInvoice(line.invoiceId);
+      const total = invoice && invoice.orgId === draft.orgId && invoice.currency === "EUR" ? eurOf(invoice.total) : null;
+      if (total === null || Math.abs(total - amountEur) > 1e-9) {
+        problems.push({ lineId: line.id, reason: total === null ? "This line pays an invoice that is not a euro invoice of this company." : `This line pays €${amountEur.toFixed(2)}, but the invoice is for €${total.toFixed(2)}. Pay the invoice in full.` });
+        continue;
+      }
+    }
+    // Two lines with the same amount and IBAN would carry the same Monerium
+    // message, so the same signature: one passkey assertion could stand for
+    // both, and Monerium may refuse the second as a repeat.
+    if (plans.some((p) => p.recipientIban === iban && Math.abs(p.amountEur - amountEur) < 1e-9)) {
+      problems.push({ lineId: line.id, reason: "Another line pays the same amount to the same IBAN. Combine them into one line, or pay one in a separate run." });
+      continue;
+    }
     plans.push({ lineId: line.id, recipientName: name, recipientIban: iban, amountEur, ...(line.invoiceId ? { invoiceId: line.invoiceId } : {}) });
   }
   return { plans, problems };
@@ -427,11 +444,6 @@ export function createOrgMoneriumBankRunRoutes(
         });
       });
 
-      // ── Claim: refused if anyone wrote the draft since it was signed ───
-      const claimed = await store.claimDraftExecution(draftId, ok.claimable, plannedAt);
-      if (!claimed) {
-        return res.status(409).json({ code: "DRAFT_CHANGED", error: "This draft changed while it was being sent. Nothing was sent; check it and send again." });
-      }
       const run: CompanyBankRun = {
         accountId: s.account.id,
         safeAddress: s.plan.address as Hex,
@@ -446,7 +458,20 @@ export function createOrgMoneriumBankRunRoutes(
           state: "signed",
         })),
       };
-      await store.appendDraftActivity(claimed.id, activity(ctx.member.id, "executing", `${run.lines.length} bank payment(s) signed; sent one at a time from the company’s IBAN.`), { bankRun: run });
+      // ── Claim: refused if anyone wrote the draft since it was signed ───
+      // The claim and the run are one write: a draft is never EXECUTING
+      // without the run that says what it sends.
+      const claimed = await store.tx(async () => {
+        await store.lockKey(`draft:${draftId}`);
+        const c = await store.claimDraftExecution(draftId, ok.claimable, plannedAt);
+        if (!c) return null;
+        return await store.appendDraftActivity(c.id, activity(ctx.member.id, "executing", `${run.lines.length} bank payment(s) signed; sent one at a time from the company’s IBAN.`), { bankRun: run });
+      });
+      if (!claimed) {
+        return res.status(409).json({ code: "DRAFT_CHANGED", error: "This draft changed while it was being sent. Nothing was sent; check it and send again." });
+      }
+      // One client, so one token grant, for the whole run.
+      const client = io.monerium(orgNow);
 
       // ── One order at a time; the first not accepted stops the run ──────
       let stop: { status: number; code: string; error: string } | undefined;
@@ -477,16 +502,18 @@ export function createOrgMoneriumBankRunRoutes(
           createdAt: at,
           updatedAt: at,
         };
-        // The line reads `sending` first: a process that stops from here on
-        // leaves it unclear, never not sent.
+        // The payout row (which holds the money) and the line's `sending`
+        // are one write: a process that stops from here on leaves an unclear
+        // line with its row, never one without. The account is locked
+        // before the draft, as every payout write does.
         await store.tx(async () => {
+          await writePayout(s.account.id, payout);
           await store.lockKey(`draft:${draftId}`);
           const d = (await store.findDraft(draftId))!;
           await store.updateDraft(draftId, { bankRun: markSending(d.bankRun!, payout.id) });
         });
-        await writePayout(s.account.id, payout);
         pendingPayouts.delete(hold.requestId);
-        const sent = await placePayout(orgNow, ctx.userId, s.account.id, payout, signatures[i]);
+        const sent = await placePayout(orgNow, ctx.userId, s.account.id, payout, signatures[i], client);
         const row = (await store.findAccount(s.account.id))?.moneriumPayouts?.find((p) => p.id === payout.id);
         if (!row || row.state === "failed" || row.state === "unknown") {
           stop = {
