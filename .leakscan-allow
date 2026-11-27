@@ -4,3 +4,7 @@
 ^EE382200221020145685$
 # The German fixture IBAN in scripts/beleg-test.ts. Not an account anyone holds.
 ^DE02100100109307118603$
+# German fixture IBANs in scripts/org-monerium-bank-runs-test.ts. Not accounts anyone holds.
+^DE02120300000000202051$
+^DE02500105170137075030$
+^DE12500105170648489890$

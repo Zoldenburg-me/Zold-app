@@ -31,6 +31,7 @@ import { createOrgRecoveryRoutes } from "./business/org-recovery.js";
 import { createOrgMoneriumRoutes } from "./business/org-monerium.js";
 import { createOrgMoneriumIbanRoutes } from "./business/org-monerium-iban.js";
 import { createOrgMoneriumPayoutRoutes } from "./business/org-monerium-payouts.js";
+import { createOrgMoneriumBankRunRoutes } from "./business/org-monerium-bank-runs.js";
 import type { TransferFactory } from "./business/shared.js";
 
 export type { TransferFactory } from "./business/shared.js";
@@ -60,6 +61,7 @@ export function createBusinessRouter(
   r.use(createOrgMoneriumRoutes(deps));
   r.use(createOrgMoneriumIbanRoutes(deps));
   r.use(createOrgMoneriumPayoutRoutes(deps));
+  r.use(createOrgMoneriumBankRunRoutes(deps));
 
   return r;
 }

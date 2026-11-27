@@ -20,9 +20,10 @@
  *     signed at /crypto-sends/:id/authorize;
  *   - an executed send is booked on the company account's statement, never on
  *     the queuing member's own books;
- *   - a bank run from a company account with its IBAN issued is refused by
- *     name (COMPANY_BANK_RUN_NOT_BUILT) before any transfer is built, and
- *     the message points to Settings → Monerium.
+ *   - a bank run from a company account with its IBAN issued is never built
+ *     here as transfers: with payouts off execute answers ORG_PAYOUTS_OFF;
+ *     on, COMPANY_BANK_RUN_SIGN and where an owner signs it
+ *     (org-monerium-bank-runs:test covers the run).
  *
  * The sole-trader and personal paths are covered unchanged by
  * business-crypto-send:test and crypto-send:test.
@@ -380,7 +381,7 @@ try {
     assert.equal((await store.safeOpsOf("org_2")).length, ops);
   });
 
-  await check("a company bank run is refused by name, even with the company's IBAN issued: nothing is built", async () => {
+  await check("a company bank run is never built as transfers: execute points to the owner's bank-run signature", async () => {
     await store.addContact({ id: "c_b", orgId: "org_1", name: "Bob GmbH", wallets: [], bankAccounts: [{ id: "cb_1", currency: "EUR", country: "DE", holderName: "Bob GmbH", iban: "DE89370400440532013000" }], createdAt: now, updatedAt: now } as any);
     await store.updateAccount("acc_1", { identifier: { iban: "DE02100100109307118603" } });
     try {
@@ -392,9 +393,16 @@ try {
       const ops = (await store.safeOpsOf("org_1")).length;
       const transfers = (await store.list("transfers")).length;
       // noSepa throws if a transfer were built: the refusal comes first.
-      const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
+      // Payouts off (the default): said before any sign dialog.
+      const off = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
+      assert.equal(off.status, 409, JSON.stringify(off.data));
+      assert.equal(off.data.code, "ORG_PAYOUTS_OFF");
+      process.env.MONERIUM_ORG_PAYOUTS = "on";
+      let x;
+      try { x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer"); } finally { delete process.env.MONERIUM_ORG_PAYOUTS; }
       assert.equal(x.status, 409, JSON.stringify(x.data));
-      assert.equal(x.data.code, "COMPANY_BANK_RUN_NOT_BUILT");
+      assert.equal(x.data.code, "COMPANY_BANK_RUN_SIGN");
+      assert.equal(x.data.startTo, `/api/orgs/org_1/drafts/${id}/bank-run/start`);
       assert.equal((await store.safeOpsOf("org_1")).length, ops, "nothing queued");
       assert.equal((await store.list("transfers")).length, transfers, "no transfer");
     } finally {

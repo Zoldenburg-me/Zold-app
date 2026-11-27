@@ -534,7 +534,7 @@ try {
     assert.equal(model.ibanPanel({ companyIban: { state: "ready" } }, false).action, undefined, "only an owner who signs gets the button");
     assert.equal(model.ibanPanel({ companyIban: { state: "iban_requested" } }, false).action, "check");
     assert.equal(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, false).iban, IBAN);
-    assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /not built yet/, "says payouts are not built");
+    assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /switched off on this deployment/, "says payouts are switched off");
     assert.equal(model.ibanPanel(null, true).action, undefined);
     assert.equal(model.ibanNotice({ companyIban: { state: "issued" } }), "The company’s IBAN is issued onto its Safe.");
     assert.equal(model.ibanPanel({ status: "connected", companyIban: { state: "issued", iban: IBAN } }, false).action, "check", "an issued IBAN can be checked again");
