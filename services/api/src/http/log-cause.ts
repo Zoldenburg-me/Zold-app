@@ -10,6 +10,7 @@
  * or a path, ending in a letters-only label; a sentence's full stop or an
  * amount like 12.50 is not one.
  */
+import { sliceChars, storableText } from "../store/text.js";
 const URL_PATTERN = /\b(?:https?|wss?):\/\/\S+/gi;
 const NET_TARGET_PATTERN = /\b(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH)\s+\S+/g;
 const HOST_PATTERN =
@@ -201,7 +202,8 @@ export function redactedMessage(err: unknown, opts: { keepHosts?: boolean } = {}
     : typeof e.shortMessage === "string" ? e.shortMessage
     : typeof e.message === "string" ? e.message
     : String(err);
-  const line = (text.split("\n").find((l) => l.trim()) ?? "").slice(0, MAX_LOGGED);
+  // By character, and scrubbed: this text goes into rows, and Postgres refuses NUL and half an emoji.
+  const line = sliceChars(storableText(text.split("\n").find((l) => l.trim()) ?? ""), MAX_LOGGED);
   const out = opts.keepHosts
     ? line.replace(URL_PATTERN, originOrPlaceholder)
     : line.replace(URL_PATTERN, "<url>").replace(NET_TARGET_PATTERN, "$1 <host>").replace(IP_PATTERN, "<host>");

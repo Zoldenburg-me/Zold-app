@@ -87,6 +87,8 @@ assert.equal(m.approvals({ ...base, state: "PENDING_REVIEW" }, true).sentBy, nul
   const invLine = { ...bankLine, invoiceId: "i1" };
   assert.equal(m.bankReference(invLine, run, "Lindner GmbH", [{ id: "i1", supplier: { invoiceNumber: " RE-114 " } }]), "Invoice RE-114 Lindner GmbH");
   assert.equal(m.bankReference(invLine, run, "Lindner GmbH", [{ id: "i1", supplier: {} }]), "Lindner GmbH", "an invoice without a number: the payer alone");
+  const emojiOrg = "x".repeat(139) + "\u{1F600}";
+  assert.equal(m.bankReference(invLine, run, emojiOrg, [{ id: "i1", supplier: {} }]), emojiOrg, "cut by character, as execution's sliceChars: the emoji is whole");
   assert.equal(m.bankReference(invLine, run, "Lindner GmbH", null), null, "invoice unread: no guess");
   assert.equal(m.bankReference({ destination: { kind: "wallet" } }, run, "Lindner GmbH", null), null);
   assert.equal(m.bankReference(bankLine, run, "x".repeat(150), null).length, 140);
