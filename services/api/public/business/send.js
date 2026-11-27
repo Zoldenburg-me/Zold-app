@@ -1,20 +1,23 @@
 /**
  * Send: a new payment run (design canvas "Desk-Send"). Pick the account, pick
- * a saved contact, enter the amount; the summary beside it says what the
- * contact receives and what happens next.
+ * one or more saved contacts, enter each one's amount and note; the summary
+ * beside it says who receives what and what happens next. The payees are
+ * saved as the lines of one draft (send-model.js builds them).
  *
  * An account backed by another member's own account is offered too: the run
  * is drafted here and that member signs it when it is sent, so the card says
  * who sends it.
  *
  * Crypto wallet mode, where the deployment sends to wallets
- * (capabilities().cryptoSend): EURe or the dollar token to a saved contact's
- * wallet address on this network, from the Safe behind the account.
+ * (capabilities().cryptoSend): EURe or the dollar token to one saved contact's
+ * wallet address on this network, from the Safe behind the account. A wallet
+ * run has exactly one line (walletRunProblem, routes/business/drafts.ts).
  */
 import { Z, api, cap, chainId, esc, eur, gateHtml, maskIban, me, org, reviewOn, roleCan, usdSymbol } from "./core.js";
 import { loadMembers } from "./screens.js";
 import { META, RENDER, linkBtn } from "./views.js";
 import { companyBankAccounts, fundableAccounts, payableContacts } from "./home-model.js";
+import { bankOf, maxPayees, payeesTotal, sendAmount } from "./send-model.js";
 
 /** Picked before the form opens: a contact's Pay button, or what was typed before Add a contact. */
 export const sendState = { contactId: null, amount: "", note: "", mode: "bank" };
@@ -56,23 +59,28 @@ function accountCard(a, checked) {
 
 const shortAddr = (a) => `${a.slice(0, 6)}…${a.slice(-4)}`;
 
+/** A contact to pick: one of many for a bank payment, the one for a wallet. */
 function contactRow(c, checked, net) {
-  const sub = net ? shortAddr(walletOf(c, net).address) : last4(c.bankAccounts.find((b) => b.iban).iban);
+  const sub = net ? shortAddr(walletOf(c, net).address) : last4(bankOf(c).iban);
   return `<label class="zb-pick-row" data-name="${esc(c.name.toLowerCase())}">
-    <input type="radio" name="contact" value="${esc(c.id)}"${checked ? " checked" : ""} />
+    <input type="${net ? "radio" : "checkbox"}" name="contact" value="${esc(c.id)}"${checked ? " checked" : ""} />
     ${Z.avatar({ name: c.name, tone: "n" })}
     <span class="z-row__main"><span class="z-row__title">${esc(c.name)}</span><span class="z-row__sub z-mono">${esc(sub)}</span></span>
     ${Z.icon("check_circle", "zb-pick-row__check")}</label>`;
 }
 
 /** The steps a run goes through here, with the people it waits for. */
-function nextSteps(account, approvers, crypto) {
+function nextSteps(account, approvers, crypto, payees = 1) {
   // A company's bank payment: an owner's passkey is the approval (Q8).
   if (org.entity === "company" && !crypto) {
     const steps = [
       ["edit_note", "You save it. It waits in Payments."],
-      ["fingerprint", `An owner sends it with their ${Z.passkeyName()}. No second approval is needed.`],
-      ["account_balance", "It leaves the company’s IBAN as a bank transfer through Monerium. It shows as sent once Monerium processes it."],
+      ["fingerprint", payees > 1
+        ? `An owner sends it with their ${Z.passkeyName()}, one prompt per payee: ${payees} prompts. No second approval is needed.`
+        : `An owner sends it with their ${Z.passkeyName()}. No second approval is needed.`],
+      ["account_balance", payees > 1
+        ? "Each payment leaves the company’s IBAN as its own bank transfer through Monerium, one after another. If Monerium does not accept one, the later ones are not sent."
+        : "It leaves the company’s IBAN as a bank transfer through Monerium. It shows as sent once Monerium processes it."],
     ];
     return `<ol class="zb-next">${steps.map(([icon, text]) => `<li>${Z.icon(icon)}<span>${esc(text)}</span></li>`).join("")}</ol>`;
   }
@@ -88,26 +96,42 @@ function nextSteps(account, approvers, crypto) {
     : [["edit_note", "You save it. It waits in Payments."], ["fingerprint", sentWith]];
   steps.push(crypto
     ? ["account_balance_wallet", "It leaves as an on-chain payment to their saved wallet address. Its status turns to Paid when the network confirms it."]
-    : ["account_balance", "It leaves as a bank transfer. Its status turns to Paid when the bank confirms."]);
+    : ["account_balance", payees > 1 ? "Each payee gets their own bank transfer. Each turns to Paid when the bank confirms it." : "It leaves as a bank transfer. Its status turns to Paid when the bank confirms."]);
   return `<ol class="zb-next">${steps.map(([icon, text]) => `<li>${Z.icon(icon)}<span>${esc(text)}</span></li>`).join("")}</ol>`;
 }
 
-/** What an amount field holds as a payable number, or null. Euros take cents;
- *  a token takes six places, as the crypto-send route does. */
-export function sendAmount(raw, crypto) {
-  const v = String(raw || "").trim().replace(",", ".");
-  return (crypto ? /^\d{1,12}(\.\d{1,6})?$/ : /^\d+(\.\d{1,2})?$/).test(v) && Number(v) > 0 ? v : null;
-}
 const tokenName = (t) => (t === "USDC" ? usdSymbol : "EURe");
 
-function summary(form, accounts, contacts, approvers, net) {
+/** The summary's lines for the payees of a bank payment, when there are several. */
+const SUMMARY_NAMES = 10;
+function payeesSummary(rows, contacts, kv) {
+  const named = rows.slice(0, SUMMARY_NAMES).map((r) => {
+    const a = sendAmount(r.amount, false);
+    return kv(contacts.find((c) => c.id === r.contactId)?.name || "", a ? esc(eur(Number(a))) : '<span class="z-dim">No amount yet</span>');
+  }).join("");
+  const more = rows.length > SUMMARY_NAMES ? kv(`and ${rows.length - SUMMARY_NAMES} more`, "") : "";
+  return `${kv("To", `${rows.length} payees`)}${named}${more}`;
+}
+
+function summary(form, accounts, contacts, approvers, net, rows) {
   const crypto = !!net;
   const picked = (name) => form.querySelector(`input[name="${name}"]:checked`)?.value;
   const account = accounts.find((a) => a.id === picked("account")) || accounts[0];
-  const contact = contacts.find((c) => c.id === picked("contact"));
-  const amount = sendAmount(form.elements.amount.value, crypto);
-  const shown = amount && (crypto ? `${Number(amount).toLocaleString("en-GB", { maximumFractionDigits: 6 })} ${tokenName(picked("token"))}` : eur(Number(amount)));
   const kv = (k, v, cls = "") => `<div class="zb-kv${cls}"><span>${esc(k)}</span><b>${v}</b></div>`;
+  if (!crypto && rows.length !== 1) {
+    const total = payeesTotal(rows);
+    const allPriced = rows.length && rows.every((r) => sendAmount(r.amount, false));
+    return `<h2 class="zb-h3">Summary</h2>
+      ${rows.length ? payeesSummary(rows, contacts, kv) : kv("To", '<span class="z-dim">Pick one or more contacts</span>')}
+      ${kv("From", esc(account.label || account.currency))}
+      ${kv("Zold fee", esc(eur(0)))}
+      ${kv("Total", allPriced ? esc(eur(total)) : '<span class="z-dim">Enter every amount</span>', " zb-kv--total")}
+      <h2 class="zb-h3" style="margin-top:20px">What happens next</h2>${nextSteps(account, approvers, crypto, rows.length)}`;
+  }
+  const one = crypto ? null : rows[0];
+  const contact = contacts.find((c) => c.id === (crypto ? picked("contact") : one.contactId));
+  const amount = sendAmount(crypto ? form.elements.amount.value : one.amount, crypto);
+  const shown = amount && (crypto ? `${Number(amount).toLocaleString("en-GB", { maximumFractionDigits: 6 })} ${tokenName(picked("token"))}` : eur(Number(amount)));
   return `<h2 class="zb-h3">Summary</h2>
     ${kv("To", contact ? esc(contact.name) : '<span class="z-dim">Pick a contact</span>')}
     ${crypto && contact ? kv("Wallet", `<span class="z-mono" style="word-break:break-all">${esc(walletOf(contact, net).address)}</span>`) : ""}
@@ -115,6 +139,15 @@ function summary(form, accounts, contacts, approvers, net) {
     ${kv("Zold fee", esc(eur(0)))}
     ${kv("They receive", shown ? esc(shown) : '<span class="z-dim">Enter an amount</span>', " zb-kv--total")}
     <h2 class="zb-h3" style="margin-top:20px">What happens next</h2>${nextSteps(account, approvers, crypto)}`;
+}
+
+/** One picked payee of a bank payment: their amount and note. */
+function payeeLine(c, r, i) {
+  return `<div class="zb-payee" data-line="${esc(c.id)}">
+    <div class="zb-payee__name"><span class="z-row__title">${esc(c.name)}</span><span class="z-row__sub z-mono">${esc(last4(bankOf(c).iban))}</span></div>
+    <div><label for="pl-${i}-a">Amount in euros<span class="z-sr"> for ${esc(c.name)}</span></label><input id="pl-${i}-a" data-lf="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" value="${esc(r.amount)}" /></div>
+    <div><label for="pl-${i}-n">Note <span class="desc">(for you; not sent to the bank)</span></label><input id="pl-${i}-n" data-lf="note" autocomplete="off" maxlength="140" placeholder="October timber…" value="${esc(r.note)}" /></div>
+    <button type="button" class="z-iconbtn zb-payee__drop" data-drop="${esc(c.id)}" aria-label="Remove ${esc(c.name)}">${Z.icon("close")}</button></div>`;
 }
 
 /** The aside row that switches between a bank transfer and a wallet payment. */
@@ -167,6 +200,7 @@ RENDER.send = async () => {
   const addRow = crypto
     ? `<button type="button" class="zb-pick-row zb-pick-row--add" data-act="new-wallet-contact">${Z.iconTile({ icon: "person_add" })}<span class="z-row__main"><span class="z-row__title">Add a wallet contact</span><span class="z-row__sub">An ENS name or 0x address, saved with the contact, so a later change to it is caught before sending.</span></span></button>`
     : `<button type="button" class="zb-pick-row zb-pick-row--add" data-act="new-contact">${Z.iconTile({ icon: "person_add" })}<span class="z-row__main"><span class="z-row__title">Add a contact</span><span class="z-row__sub">A payment goes to a saved contact, so a later change to their bank details is caught before sending.</span></span></button>`;
+  const max = maxPayees(companyBank);
   const tokenPick = (t, label) => `<label class="zb-pick"><input type="radio" name="token" value="${t}"${t === "EURE" ? " checked" : ""} /><span class="zb-pick__title">${esc(label)}</span></label>`;
   const html = `<div class="zb-send">
     <form class="z-card zb-pad zb-stack" id="send-form" style="gap:20px" novalidate>
@@ -177,8 +211,12 @@ RENDER.send = async () => {
           ${addRow}
         </div></fieldset>
       ${crypto ? `<fieldset class="zb-fieldset"><legend>Send</legend><div class="zb-picks">${tokenPick("EURE", "EURe")}${tokenPick("USDC", usdSymbol)}</div></fieldset>` : ""}
-      <div><label for="d-amt">${crypto ? "Amount" : "Amount in euros"}</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" value="${esc(amount)}" /></div>
-      <div><label for="d-note">Note <span class="desc">(for you; not sent ${crypto ? "with the payment" : "to the bank"})</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="October timber…" value="${esc(note)}" /></div>
+      ${crypto
+        ? `<div><label for="d-amt">Amount</label><input id="d-amt" name="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" value="${esc(amount)}" /></div>
+      <div><label for="d-note">Note <span class="desc">(for you; not sent with the payment)</span></label><input id="d-note" name="reference" autocomplete="off" maxlength="140" placeholder="October timber…" value="${esc(note)}" /></div>`
+        : `<fieldset class="zb-fieldset"><legend>Amounts</legend>
+        <p class="zb-hint" id="send-max">${companyBank ? `Up to ${max} payees in one payment. When an owner sends it, each payee is its own ${esc(Z.passkeyName())} prompt.` : "Each payee gets their own amount and note."}</p>
+        <div class="zb-payees" id="send-lines"></div></fieldset>`}
       <p class="zb-err" id="send-err" role="alert"></p>
       <div class="zb-actions"><button type="button" class="z-btn z-btn--primary" data-act="send-create"><span>${action}</span></button>${linkBtn("Cancel", "payments")}</div>
     </form>
@@ -196,9 +234,53 @@ RENDER.send = async () => {
       sendState.amount = "";
       sendState.note = "";
       const form = box.querySelector("#send-form");
-      const draw = () => { box.querySelector("#send-summary").innerHTML = summary(form, fundable, payable, approvers, crypto && net); };
+      // A bank payment's payees, in the order they were picked; what was
+      // typed before Add a contact goes to the contact it was typed for.
+      const rows = !crypto && chosen ? [{ contactId: chosen, amount, note }] : [];
+      const draw = () => { box.querySelector("#send-summary").innerHTML = summary(form, fundable, payable, approvers, crypto && net, rows); };
+      const drawLines = () => {
+        const list = box.querySelector("#send-lines");
+        if (!list) return;
+        list.innerHTML = rows.length
+          ? rows.map((r, i) => payeeLine(payable.find((c) => c.id === r.contactId), r, i)).join("")
+          : '<p class="z-dim">Pick one or more contacts above.</p>';
+        // Full: no more contacts can be picked until one is removed.
+        const full = rows.length >= max;
+        box.querySelectorAll('#send-contacts input[name="contact"]').forEach((el) => { el.disabled = full && !el.checked; });
+        box.querySelector("#send-max").textContent = full
+          ? `That is ${max} payees, the most one payment can have. Remove one to pick another, or save this and start a second payment.`
+          : companyBank ? `Up to ${max} payees in one payment. When an owner sends it, each payee is its own ${Z.passkeyName()} prompt.` : "Each payee gets their own amount and note.";
+      };
+      drawLines();
       draw();
+      form.addEventListener("change", (ev) => {
+        if (crypto || ev.target.name !== "contact") return;
+        const id = ev.target.value;
+        const at = rows.findIndex((r) => r.contactId === id);
+        if (ev.target.checked && at < 0 && rows.length < max) rows.push({ contactId: id, amount: "", note: "" });
+        if (!ev.target.checked && at >= 0) rows.splice(at, 1);
+        ev.target.checked = rows.some((r) => r.contactId === id);
+        drawLines();
+        draw();
+        if (ev.target.checked) [...box.querySelectorAll("#send-lines [data-line]")].find((el) => el.dataset.line === id)?.querySelector('[data-lf="amount"]').focus();
+      });
+      form.addEventListener("click", (ev) => {
+        const drop = ev.target.closest?.("[data-drop]");
+        if (!drop) return;
+        const at = rows.findIndex((r) => r.contactId === drop.dataset.drop);
+        if (at >= 0) rows.splice(at, 1);
+        const pick = [...box.querySelectorAll('#send-contacts input[name="contact"]')].find((el) => el.value === drop.dataset.drop);
+        if (pick) pick.checked = false;
+        drawLines();
+        draw();
+      });
       form.addEventListener("input", (ev) => {
+        const line = ev.target.closest?.("[data-line]");
+        if (line) {
+          const r = rows.find((x) => x.contactId === line.dataset.line);
+          if (r) r[ev.target.dataset.lf] = ev.target.value;
+          return draw();
+        }
         if (ev.target.id !== "send-find") return draw();
         const q = ev.target.value.trim().toLowerCase();
         box.querySelectorAll("#send-contacts [data-name]").forEach((row) => { row.hidden = !!q && !row.dataset.name.includes(q); });

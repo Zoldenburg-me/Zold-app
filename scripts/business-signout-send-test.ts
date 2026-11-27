@@ -7,7 +7,8 @@
  * - A page restored from the back-forward cache reloads unless the stored
  *   session is the one it loaded with.
  * - New payment: the draft is created, the submit is refused: the screen goes
- *   to Drafts and says so, and the draft was posted once.
+ *   to Drafts and says so, and the draft was posted once. Two payees, each
+ *   with its own amount and note, are posted as the two lines of one draft.
  *
  * Runs the real modules on this global with a stub DOM and a stubbed fetch.
  * What this cannot show: a real browser's back-forward cache, or keepalive
@@ -51,11 +52,15 @@ const errEl = { textContent: "" };
 const FORM: Record<string, unknown> = {
   "#toast": toastEl,
   "#send-err": errEl,
-  "#d-amt": { value: "250", focus() {} },
-  "#d-note": { value: "" },
   '#send-form input[name="contact"]:checked': { value: "c1" },
   '#send-form input[name="account"]:checked': { value: "a1" },
 };
+/** New payment's picked payees, as send.js draws them: one row each. */
+const payeeRow = (contactId: string, amount: string, note = "") => ({
+  dataset: { line: contactId },
+  querySelector: (s: string) => (s === '[data-lf="amount"]' ? { value: amount, focus() {} } : s === '[data-lf="note"]' ? { value: note } : null),
+});
+let payees = [payeeRow("c1", "250")];
 const handlers: Record<string, (e: any) => void> = {};
 const calls: { url: string; init: any }[] = [];
 let answer: (url: string, init: any) => any = () => json(200, {});
@@ -72,7 +77,7 @@ Object.assign(g, {
   document: {
     hidden: false, title: "",
     querySelector: (s: string) => FORM[s] ?? null,
-    getElementById: () => null, querySelectorAll: () => [], createElement: () => stub, body: stub, documentElement: stub,
+    getElementById: () => null, querySelectorAll: (s: string) => (s === "#send-lines [data-line]" ? payees : []), createElement: () => stub, body: stub, documentElement: stub,
     addEventListener() {},
   },
   fetch: async (url: string, init: any) => { calls.push({ url, init }); return answer(url, init); },
@@ -110,6 +115,52 @@ await check("New payment: a refused submit lands on Drafts and says the draft wa
   assert.equal(toastEl.className, "bad");
   assert.match(toastEl.textContent, /Saved as a draft, but not submitted: No one else can approve it\./);
   assert.equal(errEl.textContent, "");
+});
+
+await check("New payment with two payees: one draft, one line each, built from the address book", async () => {
+  core.setOrg({ id: "o1", role: "owner", paymentReview: { required: false } });
+  core.setView("send", { push: false });
+  payees = [payeeRow("c2", "1200,50", "October"), payeeRow("c1", "80")];
+  calls.length = 0;
+  answer = (url, init) => {
+    if (url === "/api/orgs/o1/contacts") return json(200, { contacts: [
+      { id: "c1", name: "Kessler", bankAccounts: [{ id: "b1", iban: "DE89370400440532013000", holderName: "Kessler GmbH" }] },
+      { id: "c2", name: "Weber", bankAccounts: [{ id: "b2", iban: "FR1420041010050500013M02606" }] },
+    ] });
+    if (url === "/api/orgs/o1/drafts" && init.method === "POST") return json(200, { draft: { id: "d2" } });
+    throw new Error(`unexpected call: ${init?.method || "GET"} ${url}`);
+  };
+  await ACTIONS["send-create"]();
+  const posts = calls.filter((c) => c.url === "/api/orgs/o1/drafts" && c.init.method === "POST");
+  assert.equal(posts.length, 1);
+  assert.deepEqual(JSON.parse(posts[0].init.body), {
+    source: { kind: "account", accountId: "a1" },
+    lines: [
+      { contactId: "c2", destination: { kind: "bank", bankAccountId: "b2", displayName: "Weber" }, asset: "EUR", amount: "1200.50", note: "October" },
+      { contactId: "c1", destination: { kind: "bank", bankAccountId: "b1", displayName: "Kessler GmbH" }, asset: "EUR", amount: "80" },
+    ],
+  });
+  assert.equal(core.view, "payments");
+  assert.equal(ap.tab, "drafts");
+  assert.equal(errEl.textContent, "");
+});
+
+await check("New payment: a payee with no amount saves nothing and says whose", async () => {
+  payees = [payeeRow("c1", "80"), payeeRow("c2", "")];
+  calls.length = 0;
+  answer = (url) => {
+    if (url === "/api/orgs/o1/contacts") return json(200, { contacts: [
+      { id: "c1", name: "Kessler", bankAccounts: [{ id: "b1", iban: "DE89370400440532013000" }] },
+      { id: "c2", name: "Weber", bankAccounts: [{ id: "b2", iban: "FR1420041010050500013M02606" }] },
+    ] });
+    throw new Error(`unexpected call: ${url}`);
+  };
+  core.setView("send", { push: false });
+  assert.equal(await ACTIONS["send-create"](), "keep");
+  assert.match(errEl.textContent, /for Weber/);
+  assert.equal(calls.filter((c) => c.url.endsWith("/drafts")).length, 0);
+  errEl.textContent = "";
+  payees = [payeeRow("c1", "250")];
 });
 
 const pageshow = (persisted: boolean) => handlers.pageshow({ persisted });

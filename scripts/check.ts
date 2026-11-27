@@ -131,6 +131,7 @@ const scripts = [
   "business:home:test",
   "business:signout-send:test",
   "business:payment:test",
+  "business:send-model:test",
   "phone:home-cards:test",
   "desktop:handle:test",
   "desktop:send:test",
