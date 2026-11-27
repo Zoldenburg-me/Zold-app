@@ -45,6 +45,7 @@ import {
   publicPaymentRequest,
   quoteCrypto,
   validateCreate,
+  wholeCents,
   withQuote,
   type CryptoQuote,
   type PaymentRequest,
@@ -298,6 +299,12 @@ export async function createPaymentRequest(
       (p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && effectiveState(p) === "OPEN",
     );
     if (alreadyOpen) throw new PaymentRequestError("that invoice already has an open payment link", 409);
+    // Paid through its link before the bank credit settles the invoice itself
+    // (a Zold transfer is matched first): a second link would collect it twice.
+    const paidByLink = !input.test && (await store.list("paymentRequests")).some(
+      (p) => p.invoiceId === invoice.id && p.orgId === invoice.orgId && !p.test && p.state === "PAID",
+    );
+    if (paidByLink) throw new PaymentRequestError("that invoice has already been paid through its payment link", 409);
     const due = payableEur(invoice);
     if (due === undefined) {
       throw new PaymentRequestError("that invoice has no issued amount to collect", 409);
@@ -459,7 +466,8 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
    */
   const heldByOther = async (handle: string, r: PaymentRequest) => {
     const holder = await store.findUserByHandle(handle);
-    return (!!holder && holder.id !== r.userId)
+    // A company link's userId is its creator, never a payee: no person's handle opens it.
+    return (!!holder && (!!r.accountId || holder.id !== r.userId))
       || (!!(await store.findOrgByHandle(handle)) && (await companyPageHandle(r.userId, r.orgId, r.accountId)) !== handle);
   };
 
@@ -569,7 +577,7 @@ export function createPaymentRequestRouter(requireUserSession: SessionCheck): ex
         return res.status(503).json({ error: "crypto payment is unavailable on this link just now — try bank transfer, or try again in a few minutes" });
       }
       const n = Number(req.body?.amountEur);
-      if (!Number.isFinite(n) || n <= 0 || n > MAX_REQUEST_EUR || Math.round(n * 100) !== n * 100) {
+      if (!Number.isFinite(n) || n <= 0 || n > MAX_REQUEST_EUR || !wholeCents(n)) {
         return res.status(400).json({ error: "amountEur must be a positive amount up to €1,000,000 with at most two decimals" });
       }
       if (hit.r.amountEur !== undefined && n !== hit.r.amountEur) {

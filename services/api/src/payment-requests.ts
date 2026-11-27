@@ -236,13 +236,18 @@ export function availableMethods(user: Pick<User, "iban" | "paymentPage">): { me
   ];
 }
 
+/** At most two decimals, read past binary rounding: 19.99 * 100 is 1998.9999999999998. */
+export function wholeCents(n: number): boolean {
+  return Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+}
+
 export function validateCreate(body: any, user: Pick<User, "iban" | "paymentPage">, now = new Date()): CreateInput {
   const b = body ?? {};
   let amountEur: number | undefined;
   if (b.amountEur !== undefined && b.amountEur !== null && b.amountEur !== "") {
     const n = Number(b.amountEur);
     if (!Number.isFinite(n) || n <= 0) throw new PaymentRequestError("amountEur must be a positive number");
-    if (Math.round(n * 100) !== n * 100) throw new PaymentRequestError("amountEur has at most two decimals");
+    if (!wholeCents(n)) throw new PaymentRequestError("amountEur has at most two decimals");
     if (n > MAX_REQUEST_EUR) throw new PaymentRequestError("amountEur is above the €1,000,000 ceiling");
     amountEur = n;
   }

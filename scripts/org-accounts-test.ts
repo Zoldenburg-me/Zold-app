@@ -41,7 +41,7 @@ const { createOrgRouter } = await import("../services/api/src/routes/orgs.js");
 const { createBusinessRouter } = await import("../services/api/src/routes/business.js");
 const { createPaymentRequestRouter } = await import("../services/api/src/routes/payment-requests.js");
 const { createPaymentPageRouter } = await import("../services/api/src/routes/payment-page.js");
-const { linkMethods, linkPayee } = await import("../services/api/src/routes/business/invoice-pay-link.js");
+const { linkMethods, linkPayee, openLinkPath } = await import("../services/api/src/routes/business/invoice-pay-link.js");
 const { accountIsSpendable } = await import("../services/api/src/domain/accounts.js");
 
 let failed = 0;
@@ -588,10 +588,40 @@ console.log("a company's own account");
     assert.equal(r.body.amountEur, 238);
     assert.equal((await store.findPaymentRequest(r.body.id))!.accountId, "acc_own");
   });
+  await check("an invoice paid through its link gets no second link before the bank credit settles it", async () => {
+    const link = (await store.list("paymentRequests")).find((x) => x.invoiceId === "inv_own")!;
+    await store.updatePaymentRequest(link.id, { state: "PAID" } as any);
+    try {
+      const again = await call("POST", "/api/orgs/org_own/payment-requests", { invoiceId: "inv_own" }, "u_co");
+      assert.equal(again.status, 409, JSON.stringify(again.body));
+      assert.match(again.body.error, /already been paid through its payment link/);
+    } finally { await store.updatePaymentRequest(link.id, { state: "OPEN" } as any); }
+  });
+  await check("a price like €19.99 is whole cents; €19.991 is not", async () => {
+    const ok = await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: "19.99" }, "u_admin");
+    assert.equal(ok.status, 201, JSON.stringify(ok.body));
+    assert.equal(ok.body.amountEur, 19.99);
+    assert.equal((await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: 19.991 }, "u_admin")).status, 400);
+  });
+  await check("the company's former handle, claimed by the creator, never opens a company link", async () => {
+    const org = (await store.findOrganisation("org_own"))!;
+    const u = (await store.findUser("u_admin"))!;
+    await store.updateOrganisation("org_own", { paymentPage: { ...org.paymentPage!, handle: "weber-bau-gmbh" } });
+    await store.updateUser("u_admin", { paymentPage: { ...u.paymentPage!, handle: "weber-bau" } } as any);
+    try {
+      assert.equal((await call("GET", `/api/pay/weber-bau/${ownCode}`, undefined, "")).status, 404);
+      assert.equal((await call("GET", `/api/pay/weber-bau-gmbh/${ownCode}`, undefined, "")).status, 200);
+    } finally {
+      await store.updateUser("u_admin", { paymentPage: u.paymentPage } as any);
+      await store.updateOrganisation("org_own", { paymentPage: org.paymentPage });
+    }
+  });
   await check("once the IBAN is no longer the company's verified one, no link is offered and open ones stop resolving", async () => {
+    assert.ok(await openLinkPath({ id: "inv_own", orgId: "org_own" }), "the Pay button while the account qualifies");
     await store.updateAccount("acc_own", { moneriumProfile: { id: "prof_x", kind: "personal", name: "Sara Lindner", checkedAt: now } } as any);
     assert.equal((await offer()).allowed, false);
     assert.equal((await call("GET", `/api/pay/weber-bau/${ownCode}`, undefined, "")).status, 404);
+    assert.equal(await openLinkPath({ id: "inv_own", orgId: "org_own" }), undefined, "no Pay button that leads to a 404");
   });
   await check("a company link without its account's bank details shows none, never the creator's", async () => {
     const { publicPaymentRequest } = await import("../services/api/src/payment-requests.js");

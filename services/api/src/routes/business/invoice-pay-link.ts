@@ -53,7 +53,11 @@ export async function openLinkFor(invoice: Pick<Invoice, "id" | "orgId">): Promi
 /** Where the open link lives, relative to the site, for the invoice page. */
 export async function openLinkPath(invoice: Pick<Invoice, "id" | "orgId">): Promise<string | undefined> {
   const link = await openLinkFor(invoice);
-  return link ? `/pay/${encodeURIComponent(link.handle)}/${displayCode(link.code)}` : undefined;
+  if (!link) return undefined;
+  // A company link opens only while its account and page qualify (resolvePublic);
+  // kept as is, so it pays again if the account is restored before expiry.
+  const handle = link.accountId ? (await companyPageHandle(link.userId, link.orgId, link.accountId)) : link.handle;
+  return handle ? `/pay/${encodeURIComponent(handle)}/${displayCode(link.code)}` : undefined;
 }
 
 /** The invoice had a link and it ran out: the page says so instead of the
