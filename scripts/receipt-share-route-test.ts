@@ -130,6 +130,17 @@ await check("an edit cannot change a link: a stale composer's edit is refused an
   assert.equal((await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS })).status, 201);
 });
 
+await check("a composer showing a replaced link cannot turn off the newer one", async () => {
+  const shown = (await call("GET", "/transfers/t1/share")).body.slug;
+  const newer = (await call("POST", "/transfers/t1/share", { ...DEFAULT_SHARE_FIELDS })).body.slug;
+  const stale = await call("DELETE", "/transfers/t1/share", { slug: shown });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.code, "LINK_REPLACED");
+  assert.equal((await call("GET", `/r/${newer}`)).status, 200, "the newer link is still on");
+  assert.equal((await call("DELETE", "/transfers/t1/share", { slug: newer })).status, 200, "the link on screen is turned off");
+  assert.equal((await call("GET", `/r/${newer}`)).status, 410);
+});
+
 await check("two shares at once leave one live link, and DELETE turns it off", async () => {
   await store.addTransfer({ ...(await store.findTransfer("t1"))!, id: "t2" } as any);
   await store.addReceiptShare({

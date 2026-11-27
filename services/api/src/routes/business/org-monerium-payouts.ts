@@ -202,6 +202,11 @@ const prune = () => {
  *  case (in a real process they expire in APPROVAL_WINDOW_MS). */
 export const clearPendingPayouts = () => pendingPayouts.clear();
 
+/** Payouts whose submission in this process can still place the order. Such
+ *  a row is `unknown` only because Monerium has not answered: it is not an
+ *  owner's to clear. A crash empties this, and the row is then clearable. */
+const submitting = new Set<string>();
+
 /** What the Safe holds less what payouts already claim: orders Monerium holds
  *  (`pending`) or may hold (`unknown`), and approvals in this process.
  *  `except` is the submission asking, whose own approval must not be counted
@@ -532,6 +537,7 @@ export function createOrgMoneriumPayoutRoutes(
         createdAt: at,
         updatedAt: at,
       };
+      submitting.add(payout.id);
       await writePayout(s.account.id, payout);
       // The row holds the euros now: the approval's own hold is let go, so a
       // second payout is not refused for money counted twice.
@@ -624,6 +630,7 @@ export function createOrgMoneriumPayoutRoutes(
       }
     } finally {
       pendingPayouts.delete(requestId);
+      submitting.delete(requestId);
     }
   }));
 
@@ -631,7 +638,8 @@ export function createOrgMoneriumPayoutRoutes(
    * An owner clears an `unknown` payout that has no order id, after checking
    * Monerium has no such order: the row becomes `failed` and holds nothing.
    * Never automatic, never for a row with an order id (the list re-reads
-   * that one from Monerium), and audited with who cleared it.
+   * that one from Monerium), never while its submission can still place the
+   * order, and audited with who cleared it.
    */
   r.post("/:orgId/monerium/payouts/:payoutId/clear", wrap(async (req, res) => {
     const ctx = await gate(req, res, "transfers.sign");
@@ -643,25 +651,31 @@ export function createOrgMoneriumPayoutRoutes(
     const id = String(req.params.payoutId);
     if (!account || !(account.moneriumPayouts ?? []).some((p) => p.id === id)) return res.status(404).json({ error: "no such payout" });
     const at = new Date().toISOString();
+    // Kept from the locked write: the history cap may drop the row once it
+    // is failed, and the audit and the answer still name it.
+    let cleared: CompanyBankPayout | undefined;
     try {
       await writePayouts(account.id, (rows) => rows.map((p) => {
         if (p.id !== id) return p;
+        if (submitting.has(id)) {
+          throw new Refusal(409, "PAYOUT_IN_FLIGHT", "This payout is still being sent to Monerium. Nothing was changed. Look again in a minute.");
+        }
         if (p.state !== "unknown" || p.orderId) {
           throw new Refusal(409, "PAYOUT_NOT_UNCLEAR", "Only an unclear payout without a Monerium order can be cleared. Nothing was changed.");
         }
-        return {
+        return (cleared = {
           ...p,
           state: "failed" as const,
           error: "An owner cleared this payout after checking Monerium held no order for it. Nothing was sent.",
           clearedByMemberId: ctx.member.id,
           clearedAt: at,
           updatedAt: at,
-        };
+        });
       }));
     } catch (err) {
       return answer(res, err);
     }
-    const cleared = await payoutOf(account.id, id);
+    if (!cleared) return res.status(404).json({ error: "no such payout" });
     await store.audit(auditEntry("org_payout.cleared", { orgId: ctx.org.id, accountId: account.id, payoutId: id, amountEur: cleared.amountEur, memberId: ctx.member.id }, ctx.userId));
     res.json({ payout: publicPayout(cleared) });
   }));
@@ -701,7 +715,10 @@ export function createOrgMoneriumPayoutRoutes(
         }
       }
     }
-    res.json({ payouts: recentPayouts((await store.findAccount(account.id))!.moneriumPayouts).map(publicPayout) });
+    res.json({
+      payouts: recentPayouts((await store.findAccount(account.id))!.moneriumPayouts)
+        .map((p) => ({ ...publicPayout(p), ...(submitting.has(p.id) ? { inFlight: true } : {}) })),
+    });
   }));
 
   return r;

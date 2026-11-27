@@ -650,6 +650,45 @@ try {
     assert.equal((await call("POST", `/org_co/monerium/payouts/${held.id}/clear`, "u_anna", { checkedMonerium: true })).status, 409);
   });
 
+  await check("a payout still being sent is not cleared: the hold stays and the order is placed", async () => {
+    await reset();
+    bal = 300;
+    let cleared: any, listed: any;
+    mon.wait = async () => {
+      const id = (await payouts())[0].id;
+      listed = (await call("GET", "/org_co/monerium/payouts", "u_otto")).data.payouts[0];
+      cleared = await call("POST", `/org_co/monerium/payouts/${id}/clear`, "u_otto", { checkedMonerium: true });
+      assert.equal((await call("POST", "/org_co/monerium/payouts/start", "u_anna", input({ amountEur: 1 }))).data.code, "AMOUNT_OVER_BALANCE", "the euros stay held");
+    };
+    const r = await pay({ amountEur: 300 });
+    assert.equal(cleared.status, 409, cleared.text);
+    assert.equal(cleared.data.code, "PAYOUT_IN_FLIGHT");
+    assert.equal(listed.inFlight, true);
+    assert.equal(model.payoutRows([listed])[0].clearable, false, "Settings offers no clear while it is being sent");
+    assert.equal(r.status, 200, r.text);
+    assert.equal((await payouts())[0].state, "pending", "the order placed meanwhile is what the row says");
+    assert.equal((await store.list("audit")).filter((a: any) => a.kind === "org_payout.cleared" && a.payoutId === (r.data.payout.id)).length, 0);
+    assert.equal((await call("GET", "/org_co/monerium/payouts", "u_otto")).data.payouts[0].inFlight, undefined, "answered: no longer in flight");
+  });
+
+  await check("an old unclear payout behind newer ones is still listed, and clearing it past the history cap answers and is audited", async () => {
+    await reset();
+    const at = (n: number) => new Date(Date.parse(now) - n * 60_000).toISOString();
+    const row = (id: string, state: string, n: number) => ({ id, amountEur: 5, recipientName: "Bob GmbH", recipientIban: OTHER_IBAN, memo: "m", message: "x", issuedAt: at(n), safeAddress: SAFE, profileId: PROFILE, signedByMemberId: "m_anna", state, createdAt: at(n), updatedAt: at(n) });
+    await store.updateAccount("acc_co", { moneriumPayouts: [...Array.from({ length: 50 }, (_, i) => row(`done-${i}`, "failed", i)), row("old-unclear", "unknown", 99)] } as any);
+    const list = (await call("GET", "/org_co/monerium/payouts", "u_anna")).data.payouts;
+    assert.equal(list.length, 21, "the newest twenty and the one still holding money");
+    assert.equal(model.payoutRows(list).find((p: any) => p.id === "old-unclear")?.clearable, true);
+    const before = (await store.list("audit")).filter((a: any) => a.kind === "org_payout.cleared").length;
+    const r = await call("POST", "/org_co/monerium/payouts/old-unclear/clear", "u_anna", { checkedMonerium: true });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.data.payout.state, "failed");
+    assert.ok(!(await payouts()).some((p) => p.id === "old-unclear"), "(the cap dropped the cleared row)");
+    const audit = (await store.list("audit")).filter((a: any) => a.kind === "org_payout.cleared");
+    assert.equal(audit.length, before + 1, "who cleared it is recorded");
+    assert.equal((audit.at(-1) as any).userId, "u_anna");
+  });
+
   await check("Settings words: pending is not sent, unclear says to check, the IBAN is masked", () => {
     assert.match(model.payoutNotice({ state: "pending" }), /not sent until Monerium processes/);
     assert.match(model.payoutNotice({ state: "unknown" }), /Check Monerium before sending it again/);

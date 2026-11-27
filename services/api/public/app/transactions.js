@@ -334,7 +334,9 @@ $("m-share-revoke").onclick = async () => {
   // A link being made could land after the turn-off and be live unseen.
   if (m.busy) return;
   try {
-    await api(`/api/transfers/${m.transferId}/share`, undefined, "DELETE");
+    // Names the link on screen (the URL ends in its slug): if another tab
+    // replaced it, the newer link is not turned off unseen.
+    await api(`/api/transfers/${m.transferId}/share`, { slug: String(m.link).split("/r/").pop() }, "DELETE");
     if (mShare !== m) return;
     // No link is a known state, even after a confirmation that failed: the
     // composer is unlocked and Create link starts a new one. A read still in
@@ -348,6 +350,13 @@ $("m-share-revoke").onclick = async () => {
     paintShare();
   } catch (e) {
     if (mShare !== m) return;
+    if (e?.body?.code === "LINK_REPLACED") {
+      // Show the link that is live; a failed read leaves the screen locked.
+      m.loaded = false;
+      await loadShare(m).catch(() => {});
+      if (mShare !== m) return;
+      paintShare();
+    }
     showErr("m-share-err", e);
   }
 };

@@ -480,7 +480,7 @@ await t("a confirmation read that lands after Turn this link off does not offer 
   live();
   run(`__getGate = new Promise((r) => { __releaseGet = r; }); __gets = 0;
     api = async (p, body, method) => {
-      if (method === "DELETE") return {};
+      if (method === "DELETE") { __delBody = body; return {}; }
       if (method === "GET") { __gets++; await __getGate; return { url: ${JSON.stringify(URL_NEW)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: { ...SHARE_DEFAULTS } }; }
       throw Object.assign(new Error("Zold’s answer didn’t arrive."), { offline: true }); };`);
   el("m-share-err").classList.add("hidden");
@@ -489,6 +489,7 @@ await t("a confirmation read that lands after Turn this link off does not offer 
   for (let i = 0; i < 20 && run("__gets") === 0; i++) await new Promise((r) => setTimeout(r, 0));
   assert.equal(run("__gets"), 1, "(the confirmation read is waiting)");
   await el("m-share-revoke").onclick();
+  assert.deepEqual({ ...run("__delBody") }, { slug: "abcDEF123" }, "the turn-off names the link on screen");
   run("__releaseGet()");
   await making;
   assert.equal(run("mShare.link"), null, "the revoked link is not brought back");

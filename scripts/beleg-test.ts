@@ -381,6 +381,24 @@ await check("a company payout from its own Safe gets a Beleg naming the company 
   const { belegOfLine } = await import("../services/api/src/bookkeeping/issue.js");
   const booked = (await store.ledgerOf("org_co")).find((e) => e.id === payout.id)!;
   assert.ok("live" in ((await belegOfLine(booked)) ?? {}), "live, so the receipts ZIP carries it");
+
+  // Filed under the owner, and theirs only while they are in the company.
+  const express = (await import("express")).default;
+  const { createDocumentsRouter } = await import("../services/api/src/routes/documents.js");
+  const server = express().use("/api", createDocumentsRouter({ requireUserSession: async () => ({ id: "s" }) } as any)).listen(0);
+  try {
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/users/u_1/documents`;
+    const codes = async () => ((await (await fetch(base)).json()) as any).documents.map((d: any) => d.code);
+    assert.equal(doc.userId, "u_1");
+    assert.ok((await codes()).includes(doc.code), "an active owner lists the company's Beleg");
+    await store.updateMember("m_co", { status: "deactivated" } as any);
+    assert.ok(!(await codes()).includes(doc.code), "out of the company: its Beleg codes are not handed out");
+    assert.equal((await fetch(`${base}/${doc.code}`, { method: "DELETE" })).status, 404, "nor revoked");
+    assert.equal((await store.findDocumentByCode(doc.code))?.revokedAt, undefined);
+    await store.updateMember("m_co", { status: "active" } as any);
+  } finally {
+    server.close();
+  }
 });
 
 console.log("\nPublic PDF");

@@ -146,6 +146,11 @@ export function createReceiptShareRouter(deps: ReceiptShareDeps) {
       if (!(await requireUserSession(req, res, transfer.userId))) return;
       const share = await store.findReceiptShareByTransfer(transfer.id);
       if (!share || share.revokedAt) return res.status(404).json({ error: "no live share for this transfer" });
+      // A composer names the link it shows: one opened before a newer link
+      // replaced it must not turn off a link it never showed.
+      if (typeof req.body?.slug === "string" && req.body.slug !== share.slug) {
+        return res.status(409).json({ code: "LINK_REPLACED", error: "that link was already replaced by a newer one, which is still on" });
+      }
       res.json(shareResponse(req, await store.revokeReceiptShare(share.id)));
     }),
   );
