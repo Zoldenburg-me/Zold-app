@@ -55,6 +55,32 @@ export function activatePasskeySafePlan(plan: NonNullable<User["passkeySafe"]>):
   };
 }
 
+/** Whether this user's debit is a Safe operation their own passkey signs: an
+ *  active passkey Safe that is the account's address. */
+export function signsSafeDebit(
+  user: User,
+): user is User & { passkey: NonNullable<User["passkey"]>; passkeySafe: NonNullable<User["passkeySafe"]> } {
+  return (
+    !!user.passkey?.credentialId &&
+    user.passkeySafe?.status === "active" &&
+    user.address.toLowerCase() === user.passkeySafe.address.toLowerCase()
+  );
+}
+
+/**
+ * Why a bank run of `lines` payees cannot be sent as one run, or null.
+ *
+ * Each line's fee debit is its own Safe operation, and draft execution
+ * prepares them all before the first is signed: every one would carry the
+ * Safe's next nonce, so only the first could execute and the later payees
+ * would not be paid. With no fee, or one under half a cent (a quote rounds it
+ * away), there is no Safe debit and nothing to refuse.
+ */
+export function sharedNonceRunProblem(user: User, lines: number, feeEur: number): string | null {
+  if (lines < 2 || !(Math.round(feeEur * 100) > 0) || !signsSafeDebit(user)) return null;
+  return `Each bank transfer carries a €${feeEur} fee that is signed on its own, so a payment with a fee is sent to one payee at a time. Save each payee as its own payment.`;
+}
+
 export function passkeySafeChallenge(challenge: `0x${string}`): string {
   return bufToB64url(Buffer.from(challenge.slice(2), "hex"));
 }

@@ -17,7 +17,8 @@ import express from "express";
 import { bankLineProblem, walletLineProblem } from "../../domain/invoices.js";
 import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
-import { FX, railFeeEur } from "../../config.js";
+import { FX, HARNESS, railFeeEur } from "../../config.js";
+import { sharedNonceRunProblem } from "../../wallet/passkey-safe-plan.js";
 import { createQuote, roundEur } from "../../fx.js";
 import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "../../adapters/monerium-connection.js";
 import { accountBalances } from "../../chain.js";
@@ -100,6 +101,20 @@ export async function walletRunProblem(draft: DraftPayment): Promise<string | un
             : undefined;
 }
 
+/**
+ * Why a bank run from this account can never be sent as one run, or
+ * undefined: sharedNonceRunProblem for the member whose account pays.
+ * Checked at save and at submit, so a run is not approved only to be refused
+ * (execution asks again with the signer it has read). The harness chain
+ * prepares no Safe operation (transfers/build.ts), so nothing is refused there.
+ */
+async function bankRunProblem(source: DraftPayment["source"], lines: number): Promise<string | undefined> {
+  if (HARNESS.enabled || source.kind !== "account") return undefined;
+  const backer = (await store.findAccount(source.accountId))?.backingUserId;
+  const user = backer ? await store.findUser(backer) : undefined;
+  return (user && sharedNonceRunProblem(user, lines, railFeeEur("sepa"))) || undefined;
+}
+
 export function createDraftRoutes(
   deps: OrgRoutes,
   buildTransferFromQuote: TransferFactory,
@@ -162,6 +177,8 @@ export function createDraftRoutes(
         }));
         if (!lines.length) return res.status(400).json({ error: "A draft needs at least one line." });
         assertOneLinePerInvoice(lines);
+        const runProblem = await bankRunProblem(source, lines.length);
+        if (runProblem) return res.status(422).json({ error: `${runProblem} Nothing was saved.`, code: "ONE_PAYEE_PER_RUN" });
 
         const now = new Date().toISOString();
         const draft = await store.addDraft({
@@ -269,6 +286,8 @@ export function createDraftRoutes(
       if (walletProblem) {
         return res.status(422).json({ error: `${walletProblem} Fix the line, then submit.`, problems: [{ lineId: checked.lines[0].id, reason: walletProblem }] });
       }
+      const runProblem = await bankRunProblem(checked.source, checked.lines.length);
+      if (runProblem) return res.status(422).json({ error: runProblem, code: "ONE_PAYEE_PER_RUN" });
       try {
         assertTransition(checked.state, "PENDING_REVIEW");
         const submitted = await store.updateDraftFrom(draft.id, { state: "PENDING_REVIEW" }, {
@@ -703,6 +722,12 @@ export function createDraftRoutes(
         problems,
       });
     }
+
+    // Several lines with a fee would each be a Safe operation at the same
+    // nonce: refused whole, before the draft is claimed or a transfer built.
+    // The harness chain prepares no Safe operation (transfers/build.ts).
+    const nonceProblem = HARNESS.enabled ? null : sharedNonceRunProblem(user, plans.length, railFeeEur("sepa"));
+    if (nonceProblem) return res.status(422).json({ error: `${nonceProblem} Nothing was created.`, code: "ONE_PAYEE_PER_RUN" });
 
     // Each line is its own transfer and therefore its own fixed fee. Checked
     // against the balance as a TOTAL: the per-transfer check inside

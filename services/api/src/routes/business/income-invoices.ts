@@ -419,15 +419,8 @@ export function createIncomeInvoiceRoutes(deps: OrgRoutes): express.Router {
       });
     }
 
-    // A month the wallets may not have delivered in full is issued only by
-    // someone who has been told so, the way a compliance warning is accepted.
-    const incomplete = current.fromReceipts?.syncWarnings ?? [];
-    if (incomplete.length && req.body?.acceptWarnings !== true) {
-      return res.status(409).json({
-        error: "This month may be incomplete. Re-send with acceptWarnings: true to issue it anyway.",
-        warnings: incomplete.map((message) => ({ severity: "warning", field: "receipts", message })),
-      });
-    }
+    // A month the wallets may not have delivered in full is confirmed by issueOutgoing,
+    // in one answer with the compliance warnings.
 
     // What it bills must not change while the VIES and rate lookups run: the
     // wallets still proven, the rows still at the values on the lines.

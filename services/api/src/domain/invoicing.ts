@@ -963,6 +963,8 @@ function checkDirectiveContent(
   const { totals, regime, add } = ctx;
   const de = jur.ruleSet === "DE";
   const basis = (deBasis: string, eu: string) => (de ? deBasis : eu);
+  const vatIdName = de ? "USt-IdNr." : "VAT ID";
+  let issuerVatIdFlagged = false;
   if (draft.issuerNameIsTradingName) {
     add(
       "error",
@@ -1007,8 +1009,33 @@ function checkDirectiveContent(
     // every jurisdiction in checkCompliance.
     const builtIn = EXEMPTION_REASONS[t.reason as ExemptionReasonId];
     const shown = builtIn ? reasonForRuleSet(builtIn, jur.ruleSet) : undefined;
-    if (shown?.requiresIssuerVatId && !vatIdLooksValid(draft.issuer.vatId ?? "")) {
-      add("error", "issuer.vatId", `${shown.label} requires your ${de ? "USt-IdNr." : "VAT ID"} on the invoice.`, shown.legalBasis);
+    const issuerVatId = (draft.issuer.vatId ?? "").trim();
+    if (shown?.requiresIssuerVatId && !vatIdLooksValid(issuerVatId)) {
+      // A note in the field ("USt-IdNr. beantragt") is the issuer saying the
+      // number is applied for and a corrected invoice follows (§31 Abs. 5 UStDV):
+      // a reverse-charge service issues after a confirmed warning. An empty
+      // field, a mistyped number (country letters then a digit) and an
+      // intra-community supply of goods, whose exemption rests on the VAT IDs,
+      // still refuse.
+      const looksLikeANumber = /^[A-Za-z]{2}\s*\d/.test(issuerVatId);
+      if (issuerVatId && !looksLikeANumber && t.reason === "reverse_charge_eu") {
+        add(
+          "warning",
+          "issuer.vatId",
+          `${shown.label} needs your ${vatIdName} on the invoice. "${issuerVatId}" prints in its place; issue a corrected invoice once you have the number.`,
+          shown.legalBasis,
+        );
+      } else {
+        add(
+          "error",
+          "issuer.vatId",
+          looksLikeANumber
+            ? `${issuerVatId} is not a valid ${vatIdName}${de ? "" : "."} ${shown.label} requires yours on the invoice.`
+            : `${shown.label} requires your ${vatIdName} on the invoice.`,
+          shown.legalBasis,
+        );
+      }
+      issuerVatIdFlagged = true;
     }
     if (shown?.requiresRecipientVatId && !vatIdLooksValid((draft.recipient.vatId ?? "").trim())) {
       add("error", "recipient.vatId", `${shown.label} requires the customer's VAT ID on the invoice.`, shown.legalBasis);
@@ -1043,7 +1070,7 @@ function checkDirectiveContent(
     }
   }
 
-  if (has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
+  if (!issuerVatIdFlagged && has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
     add("warning", "issuer.vatId", `${draft.issuer.vatId} does not look like a VAT ID.`);
   }
   if (has(draft.recipient.vatId)) {

@@ -8,7 +8,8 @@
  */
 import { $, Z, api, cap, chainId, day, deviceLib, dialog, esc, eur, maskIban, me, org, plain, readHealth, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
-import { sendAmount, sendState, walletOf } from "./send.js";
+import { sendState, walletOf } from "./send.js";
+import { bankLines, sendAmount } from "./send-model.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
@@ -426,6 +427,13 @@ async function signCryptoRun(sends) {
   toast(out.join(" "), !ok);
 }
 
+/** One picked payee of New payment's bank form, as it stands in the page. */
+const payeeRow = (el) => ({
+  contactId: el.dataset.line,
+  amount: el.querySelector('[data-lf="amount"]').value,
+  note: el.querySelector('[data-lf="note"]').value,
+});
+
 export const ACTIONS = {
   // ── Documents (views.js RENDER.documents) ────────────────────────────────
   async "doc-statement"() {
@@ -597,10 +605,12 @@ export const ACTIONS = {
           }] : [],
         },
       });
-      // From New payment: saving redraws the form, so what was typed rides in sendState. Cancel stores nothing.
+      // From New payment: saving redraws the form, so what was typed and picked rides in sendState. Cancel stores nothing.
       if (fromSend) {
         sendState.amount = $("#d-amt")?.value.trim() || "";
         sendState.note = $("#d-note")?.value.trim() || "";
+        sendState.rows = [...document.querySelectorAll("#send-lines [data-line]")].map(payeeRow);
+        sendState.accountId = $('#send-form input[name="account"]:checked')?.value || null;
         sendState.contactId = r.contact.id;
       }
       toast("Contact added.");
@@ -1228,32 +1238,39 @@ export const ACTIONS = {
     const err = $("#send-err");
     err.textContent = "";
     const crypto = sendState.mode === "crypto" && !!$("#send-form input[name=token]");
-    const amount = sendAmount($("#d-amt").value, crypto);
-    if (!amount) {
-      err.textContent = crypto ? "Enter an amount, like 250 or 12.5 (at most 6 decimals)." : "Enter an amount in euros and cents, like 250 or 250.00.";
-      $("#d-amt").focus();
-      return "keep";
-    }
     const picked = (name) => $(`#send-form input[name="${name}"]:checked`)?.value;
-    if (!picked("contact")) { err.textContent = "Pick who you’re paying."; return "keep"; }
-    const [{ contacts }, health] = await Promise.all([api(`/api/orgs/${org.id}/contacts`), crypto ? api("/api/health") : null]);
-    const c = contacts.find((x) => x.id === picked("contact"));
-    let line;
+    let lines;
     if (crypto) {
+      const amount = sendAmount($("#d-amt").value, true);
+      if (!amount) {
+        err.textContent = "Enter an amount, like 250 or 12.5 (at most 6 decimals).";
+        $("#d-amt").focus();
+        return "keep";
+      }
+      if (!picked("contact")) { err.textContent = "Pick who you’re paying."; return "keep"; }
+      const [{ contacts }, health] = await Promise.all([api(`/api/orgs/${org.id}/contacts`), api("/api/health")]);
+      const c = contacts.find((x) => x.id === picked("contact"));
       const w = c && walletOf(c, health.chainId);
       if (!w) { err.textContent = "That contact has no wallet on this network."; return "keep"; }
-      line = { destination: { kind: "wallet", chainId: w.chainId, address: w.address, displayName: c.name }, asset: picked("token") === "USDC" ? "USDC" : "EURE" };
+      lines = [{ contactId: c.id, destination: { kind: "wallet", chainId: w.chainId, address: w.address, displayName: c.name }, asset: picked("token") === "USDC" ? "USDC" : "EURE", amount, note: $("#d-note").value.trim() || undefined }];
     } else {
-      const b = c?.bankAccounts.find((x) => x.iban);
-      if (!b) { err.textContent = "That contact has no IBAN."; return "keep"; }
-      line = { destination: { kind: "bank", bankAccountId: b.id, displayName: b.holderName || c.name }, asset: "EUR" };
+      // Every payee picked, each with its own amount and note, as one draft.
+      // The contacts are read again: a line is built from the address book as
+      // it is now, never from what the form drew.
+      const els = [...document.querySelectorAll("#send-lines [data-line]")];
+      const rows = els.map(payeeRow);
+      const { contacts } = rows.length ? await api(`/api/orgs/${org.id}/contacts`) : { contacts: [] };
+      const built = bankLines(rows, contacts, { companyBank: org.entity === "company" });
+      if (built.error) {
+        err.textContent = built.error;
+        els.find((el) => el.dataset.line === built.contactId)?.querySelector('[data-lf="amount"]').focus();
+        return "keep";
+      }
+      lines = built.lines;
     }
     const r = await api(`/api/orgs/${org.id}/drafts`, {
       method: "POST",
-      body: {
-        source: { kind: "account", accountId: picked("account") },
-        lines: [{ contactId: c.id, ...line, amount, note: $("#d-note").value.trim() || undefined }],
-      },
+      body: { source: { kind: "account", accountId: picked("account") }, lines },
     });
     sendState.contactId = null;
     sendState.mode = "bank";
