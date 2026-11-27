@@ -377,12 +377,12 @@ Say this plainly rather than letting the surface imply otherwise:
   on a local Postgres 17 and on GitHub's linux-arm64 runner (`npm run
   check:pg`, the manual `oracle-host` workflow). The pre-import report has
   not been run on a copy of the testnet or the mainnet db.json, so no
-  foreign key is in the schema and no real duplicate is known. There is no
-  Oracle host, no cluster, no pgBackRest backup and no restore drill: the
-  provisioning script, units and runbook (`scripts/oracle-host/`,
-  `docs/oracle-host.md`) have never run as a whole: their tests render the
-  config and run the SQL on a throwaway cluster (locally and on that runner),
-  with `systemctl` and the host stubbed.
+  foreign key is in the schema and no real duplicate is known. Mainnet's
+  cluster exists on the Oracle host with a first full backup in both
+  repositories (OCI Frankfurt and Cloudflare R2) and one daily dump, but it
+  holds no data: nothing has been imported, the API has not run there, and
+  no restore drill or alert test has run (`docs/oracle-host.md`). Testnet
+  has no cluster.
 - Timeout values everywhere were chosen, not measured.
 
 **PARKED, and it gates one customer**: merchant-book privacy. One Safe per
