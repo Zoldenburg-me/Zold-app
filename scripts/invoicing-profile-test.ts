@@ -451,6 +451,23 @@ await check("a link lives until 60 days after the due date, at least 30 days, at
   assert.equal(days(linkExpiry("2027-06-01", at)), 364);
 });
 
+await check("reverse charge with a note in place of the USt-IdNr.: shown before it issues, and printed though the VAT ID block is off", async () => {
+  await addOrg("org_rc", "DE", { invoicing: { vatId: "USt-IdNr. beantragt", display: { issuerVatId: false } } });
+  const body = {
+    ...invoiceFor("SE"),
+    recipient: { name: "Kund AB", addressLine: "Gatan 1", postalCode: "11122", city: "Stockholm", country: "SE", isBusiness: true, vatId: "SE556677889901" },
+    vat: { kind: "exempt", reason: "reverse_charge_eu" },
+    acceptWarnings: undefined,
+  };
+  const asked = await call("POST", "/api/orgs/org_rc/invoicing/issue", "u_owner", body);
+  assert.equal(asked.status, 409, JSON.stringify(asked.data));
+  assert.ok(asked.data.warnings.some((w: any) => w.field === "issuer.vatId" && /corrected invoice/.test(w.message)));
+  const issued = await call("POST", "/api/orgs/org_rc/invoicing/issue", "u_owner", { ...body, acceptWarnings: true });
+  assert.equal(issued.status, 201, JSON.stringify(issued.data));
+  assert.equal(issued.data.invoice.issued.issuer.vatId, "USt-IdNr. beantragt");
+  assert.equal(issued.data.invoice.issued.display.issuerVatId, true, "a reason that needs the issuer's VAT ID prints it");
+});
+
 console.log("\nNumbering: one number, once, picked at write time");
 
 const issueIn = (orgId: string, over: Record<string, unknown> = {}) =>
