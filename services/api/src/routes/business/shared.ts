@@ -37,6 +37,7 @@ import {
   type VatTreatment,
 } from "../../domain/invoicing.js";
 import { dayOf } from "../../domain/income-invoices.js";
+import { vatIdShape } from "../../domain/vat-ids.js";
 import { createQuote } from "../../fx.js";
 import { midRates, referenceRate } from "../../rates.js";
 import { redactedMessage } from "../../http/log-cause.js";
@@ -170,8 +171,9 @@ export function issuerIdentityFrom(
     if (typeof raw !== "string") continue;
     const problem = issuerTaxIdProblem(field, raw, ruleSet, country);
     if (problem) return { ok: false, error: problem, field };
-    // An EU number is stored normalised; one Zold has no format for, as written.
-    patch[field] = (field === "vatId" && ruleSet !== "GENERIC" ? normaliseVatId(raw) : raw.trim()) || undefined;
+    // An EU VAT ID is stored normalised; anything else (a note, a foreign number) as written.
+    const euVatId = field === "vatId" && ruleSet !== "GENERIC" && vatIdShape(raw).ok;
+    patch[field] = (euVatId ? normaliseVatId(raw) : raw.trim()) || undefined;
   }
   for (const field of ["registerCourt", "registerNumber", "managingDirector"] as const) {
     const raw = body[field];
