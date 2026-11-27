@@ -60,10 +60,15 @@ export async function openLinkPath(invoice: Pick<Invoice, "id" | "orgId">): Prom
   return handle ? `/pay/${encodeURIComponent(handle)}/${displayCode(link.code)}` : undefined;
 }
 
-/** The owner's view of a link, under the address it opens at now: a company
- *  link follows the company's current handle, as the payer side does. */
+/** The owner's view of a link. A company link keeps the address it was made
+ *  under, which opens it for good (resolvePublic), until someone else holds
+ *  that handle; then the company's current one. Never an intermediate handle,
+ *  which the next rename would close. */
 export async function ownerLink(link: PaymentRequest, baseUrl: string) {
-  const handle = link.accountId ? (await companyPageHandle(link.userId, link.orgId, link.accountId)) : undefined;
+  if (!link.accountId) return ownerPaymentRequest(link, baseUrl);
+  const other = await store.findOrgByHandle(link.handle);
+  const taken = !!(await store.findUserByHandle(link.handle)) || (!!other && other.id !== link.orgId);
+  const handle = taken ? (await companyPageHandle(link.userId, link.orgId, link.accountId)) : undefined;
   return ownerPaymentRequest(handle ? { ...link, handle } : link, baseUrl);
 }
 

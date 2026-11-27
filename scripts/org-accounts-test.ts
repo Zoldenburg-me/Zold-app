@@ -611,6 +611,18 @@ console.log("a company's own account");
     assert.equal(ok.body.amountEur, 19.99);
     assert.equal((await call("POST", "/api/orgs/org_own/payment-requests", { amountEur: 19.991 }, "u_admin")).status, 400);
   });
+  await check("a renamed company page keeps handing out the address a link was made under, which still opens it", async () => {
+    const org = (await store.findOrganisation("org_own"))!;
+    const urlNow = async () => (await call("GET", "/api/orgs/org_own/payment-requests", undefined, "u_admin")).body.paymentRequests.find((x: any) => x.code === ownCode).url;
+    try {
+      for (const h of ["weber-bau-2", "weber-bau-3"]) {
+        await store.updateOrganisation("org_own", { paymentPage: { ...org.paymentPage!, handle: h } });
+        const url = await urlNow();
+        assert.match(url, /\/pay\/weber-bau\//, "never an intermediate handle the next rename closes");
+        assert.equal((await call("GET", `/api${new URL(url).pathname}`, undefined, "")).status, 200, h);
+      }
+    } finally { await store.updateOrganisation("org_own", { paymentPage: org.paymentPage }); }
+  });
   await check("the company's former handle, claimed by the creator, never opens a company link", async () => {
     const org = (await store.findOrganisation("org_own"))!;
     const u = (await store.findUser("u_admin"))!;
