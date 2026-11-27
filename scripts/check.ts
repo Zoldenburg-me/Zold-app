@@ -60,6 +60,7 @@ const scripts = [
   "persist-failure:test",
   "store-backend:test",
   "pg-import:test",
+  "oracle-host:test",
   "store-gates:test",
   "send-after-commit:test",
   "single-flight:test",

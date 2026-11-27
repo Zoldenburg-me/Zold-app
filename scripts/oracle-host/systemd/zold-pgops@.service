@@ -1,0 +1,9 @@
+# One cluster job (scripts/oracle-host/pgops.sh); %i is <deployment>-<job>,
+# e.g. zold-pgops@mainnet-alerts. Started by the zold-pg-*@ timers.
+[Unit]
+Description=Zold Postgres job %i
+
+[Service]
+Type=oneshot
+ExecStart=/opt/zold-host/pgops.sh %i
+TimeoutStartSec=6h

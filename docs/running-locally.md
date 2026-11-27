@@ -195,21 +195,23 @@ Human testing on zoldhq.com follows `docs/test-round.md`.
 | payments | `paylinks:test` `shopify:test` `shopify:orders:test` `receipt:test` `pay:test` `crypto:test` `convert:test` |
 | ops | `reconcile:test` `anchor:*:test` `country:policy:test` `segments:test` `onboarding:test` `gnosispay:test` |
 | live (network) | `travelrule:test` `trustline:test` `stellar:payout:live` `anchor:test` `eur:proof` |
-| store | `store-backend:test` (the store suite on JSON and PGlite) `pg-import:test` `store-gates:test`; `check:pg` (below) is NOT in check |
+| store | `store-backend:test` (the store suite on JSON and PGlite) `pg-import:test` `store-gates:test` `oracle-host:test` (the host scripts parse, rendered config, units); `check:pg` (below) is NOT in check |
 
 ## Postgres
 
 Every deployment runs the JSON store (`data/db.json`). The Postgres backend
 (`docs/postgres-store-design.md`) runs in the suites and nowhere else: no
-Oracle host, cluster, backup or cut-over exists yet (§8 rows S7, S8).
+Oracle host, cluster, backup or cut-over exists yet. The host's scripts and
+runbook are written (`scripts/oracle-host/`, `docs/oracle-host.md`) and have
+not run on a host (§8 rows S7b, S8).
 
 - `STORE_BACKEND=postgres` with `DATABASE_URL` (and `DATABASE_CA` for a TLS
   host) puts the API on it. Config refuses it on a real-money chain until
   the cut-over. The API takes the one-process start lock and checks that
-  every migration is applied; it never migrates. There is no migrate
-  command: `migrate()` (`store/pg/migrate.ts`) is run by the tests, and the
-  deploy step that runs it as the owner role and then
-  `SELECT zold_grant_app('<app role>')` is S7.
+  every migration is applied; it never migrates. The deploy migrates:
+  `DATABASE_URL=<as the owner role> APP_ROLE=<app role> npm run db:migrate -- apply`
+  runs `migrate()` and then `SELECT zold_grant_app('<app role>')`; `status`
+  and `check` only read.
 - **Local Postgres 17**: Homebrew `postgresql@17`
   (`brew services start postgresql@17`). It listens on the socket in `/tmp`,
   which is `check:pg`'s default.
@@ -221,8 +223,13 @@ Oracle host, cluster, backup or cut-over exists yet (§8 rows S7, S8).
   on this machine unless `ZOLD_TEST_DB_REMOTE_OK=1` says it is disposable.
   It runs what PGlite cannot show (parallel connections, a second lock
   holder), the grants, the import and export CLIs, and the API suites that
-  hold the race tests, as the application role. Run it when you change
-  `store/`, `services/api/migrations/` or a path in the design note's §2.
+  hold the race tests, as the application role. Then
+  `scripts/oracle-host-test.ts --pg`: the host's database step and checks
+  under per-run role and database names, and a throwaway `initdb` cluster
+  (needs `initdb` and `psql` 17; `PG_BIN` if they are not on the Homebrew
+  path) started on the rendered `pg_hba.conf` and `pg_ident.conf`. Run it
+  when you change `store/`, `services/api/migrations/`,
+  `scripts/oracle-host/` or a path in the design note's §2.
 
 ### db.json ↔ Postgres
 
@@ -270,6 +277,5 @@ blocking finding; import and verify run it first.
   delete the plain file.
 - **`ledger_history`** has no place in db.json: with history rows the export
   refuses unless `--ledger-history` names a file, written only through the
-  pinned `age` (`npm run age:fetch`) to `.age-recipients`. `scripts/_age.sh`
-  pins no linux-arm64 build, so on the planned Oracle host (aarch64) such an
-  export refuses until S7 adds one. Both files are published or neither.
+  pinned `age` (`npm run age:fetch`; `scripts/_age.sh` pins the linux-arm64
+  build the Oracle host needs too) to `.age-recipients`. Both files are published or neither.
