@@ -297,10 +297,14 @@ function paper(check) {
   const unitMoney = (p) => new Intl.NumberFormat(PAPER_LOCALES[lang] || "en-GB", { style: "currency", currency: cur || "EUR", maximumFractionDigits: 6 }).format(Number(p || 0));
   const iss = profile.issuer || {};
   const rec = invoiceDraft.recipient || {};
-  const taxId = iss.taxNumber ? [t.taxNo, iss.taxNumber] : iss.vatId ? [t.vatId, iss.vatId] : [t.vatId, null];
   const totals = check.totals || pv.totals;
   const reason = invoiceDraft.vat.kind === "exempt"
     ? [...(profile.reference.exemptionReasons || []), ...(profile.reference.customReasons || [])].find((x) => x.id === invoiceDraft.vat.reason) : null;
+  // The VAT ID itself where the invoice needs it, as issueOutgoing prints it:
+  // a taxed invoice outside Germany (Art. 226(3)) or a reason that requires it.
+  const needsVatId = (invoiceDraft._jur?.ruleSet === "EU" && invoiceDraft.vat.kind === "standard") || !!reason?.requiresIssuerVatId;
+  const taxId = needsVatId ? [t.vatId, iss.vatId || null]
+    : iss.taxNumber ? [t.taxNo, iss.taxNumber] : iss.vatId ? [t.vatId, iss.vatId] : [t.vatId, null];
   // Matches vatNoteFor: German text under de, English under every other
   // language; an org's own rule has the one note it was written with.
   const vatNote = !reason ? ""
