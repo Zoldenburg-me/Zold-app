@@ -951,7 +951,7 @@ function checkGermanContent(
 ): void {
   const { totals, regime, smallBusiness, notVerified, add } = ctx;
   const basis = (de: string, _eu?: string) => de;
-  let issuerVatIdWarned = false;
+  let issuerVatIdFlagged = false;
   if (!has(draft.issueDate)) {
     add("error", "issueDate", "The issue date is required.", basis("§ 14 Abs. 4 Nr. 3 UStG", "Art. 226(1) VAT Directive"));
   }
@@ -1037,23 +1037,29 @@ function checkGermanContent(
     if (reason?.requiresIssuerVatId && !vatIdLooksValid(issuerVatId)) {
       // A note in the field ("USt-IdNr. beantragt") is the issuer saying the
       // number is applied for and a corrected invoice follows (§31 Abs. 5 UStDV):
-      // it issues after a confirmed warning. An empty field still refuses.
-      if (issuerVatId) {
+      // a reverse-charge service issues after a confirmed warning. An empty
+      // field, a mistyped number (country letters then a digit) and an
+      // intra-community supply of goods, whose exemption rests on the VAT IDs,
+      // still refuse.
+      const looksLikeANumber = /^[A-Za-z]{2}\s*\d/.test(issuerVatId);
+      if (issuerVatId && !looksLikeANumber && exempt.reason === "reverse_charge_eu") {
         add(
           "warning",
           "issuer.vatId",
           `${reason.label} needs your USt-IdNr. on the invoice. "${issuerVatId}" prints in its place; issue a corrected invoice once you have the number.`,
           reason.legalBasis,
         );
-        issuerVatIdWarned = true;
       } else {
         add(
           "error",
           "issuer.vatId",
-          `${reason.label} requires your USt-IdNr. on the invoice.`,
+          looksLikeANumber
+            ? `${issuerVatId} is not a valid USt-IdNr. ${reason.label} requires yours on the invoice.`
+            : `${reason.label} requires your USt-IdNr. on the invoice.`,
           reason.legalBasis,
         );
       }
+      issuerVatIdFlagged = true;
     }
     if (reason?.requiresRecipientVatId) {
       // A built-in EU reason means an EU VAT ID, and that shape is checkable.
@@ -1111,7 +1117,7 @@ function checkGermanContent(
     }
   }
   // Outside the EU Zold knows no format for the issuer's identifier.
-  if (!issuerVatIdWarned && has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
+  if (!issuerVatIdFlagged && has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
     add("warning", "issuer.vatId", `${draft.issuer.vatId} does not look like a VAT ID.`);
   }
   if (has(draft.recipient.vatId)) {

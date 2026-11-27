@@ -338,6 +338,30 @@ check("EU reverse charge demands BOTH VAT IDs", () => {
   const noted = pending.warnings.filter((w) => w.field === "issuer.vatId");
   assert.equal(noted.length, 1, "one warning for the note, not a second 'not a VAT ID' one");
   assert.match(noted[0].message, /corrected invoice/);
+
+  // A mistyped number is not a note: it still refuses, naming the value.
+  const typo = checkCompliance(
+    draft({
+      treatment: t,
+      issuer: { ...issuer, vatId: "DE12345678" },
+      recipient: { ...recipient, country: "SE", vatId: "SE556677889901" },
+    }),
+  );
+  assert.equal(typo.ok, false);
+  assert.match(typo.errors.find((e) => e.field === "issuer.vatId")!.message, /DE12345678 is not a valid USt-IdNr/);
+  assert.equal(typo.warnings.filter((w) => w.field === "issuer.vatId").length, 0);
+});
+
+check("an intra-community supply of goods still refuses a note in place of the USt-IdNr.", () => {
+  const r = checkCompliance(
+    draft({
+      treatment: { kind: "exempt", reason: "intra_community_supply" },
+      issuer: { ...issuer, vatId: "USt-IdNr. beantragt" },
+      recipient: { ...recipient, country: "SE", vatId: "SE556677889901" },
+    }),
+  );
+  assert.equal(r.ok, false);
+  assert.ok(r.errors.some((e) => e.field === "issuer.vatId"));
 });
 
 check("reverse charge to a German customer is flagged as probably wrong", () => {

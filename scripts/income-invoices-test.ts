@@ -663,6 +663,21 @@ await check("warnings must be accepted: without that the draft stays a draft, an
   assert.equal((await store.findInvoice(d.id))!.state, "DRAFT");
 });
 
+await check("an incomplete month and a compliance warning are shown in one answer, so one acceptance covers only what was shown", async () => {
+  const [d] = await drafts2("2025-09");
+  const org = (await store.findOrganisation("org_2"))!;
+  await store.updateOrganisation("org_2", { invoicing: { ...org.invoicing, vatId: "USt-IdNr. beantragt" } } as any);
+  try {
+    const r = await call("POST", `/org_2/income-invoices/${d.id}/issue`, {});
+    assert.equal(r.status, 409, JSON.stringify(r.body));
+    const fields = r.body.warnings.map((w: any) => w.field);
+    assert.ok(fields.includes("receipts"), "the incomplete month");
+    assert.ok(fields.includes("issuer.vatId"), "the compliance warning, in the same answer");
+  } finally {
+    await store.updateOrganisation("org_2", { invoicing: org.invoicing } as any);
+  }
+});
+
 await check("a draft whose receipts have all gone is not issuable", async () => {
   const [d] = await drafts2("2025-09");
   await store.updateLedgerEntry("w_1", { txType: "internal_transfer" });
