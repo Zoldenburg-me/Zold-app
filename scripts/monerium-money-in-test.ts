@@ -340,13 +340,20 @@ await check("USDC that arrived while no rate could be read is valued later at it
     issued: { number: "RE-UNRATED", issueDate: at.slice(0, 10), netCents: 10000, vatCents: 0, grossCents: 10000, currency: "EUR" },
   } as any);
   const inv = await store.addCryptoDeposit(row("co-unrated-inv", 918, { invoiceId: "inv_co_unrated" }) as any);
+  // A person's pay-link payment, matched and settled with no euro value yet.
+  await store.addPaymentRequest({
+    id: "pr_unrated", code: "UNRATEDCODE2345", userId: "u_owner", orgId: "org_owner", handle: "owner", amountEur: 100, currency: "EUR", methods: ["crypto"], state: "PAID",
+    cryptoQuotes: [], source: { kind: "app" }, expiresAt: at, createdAt: at, updatedAt: at,
+    payments: [{ id: "pay_unrated", method: "crypto", ref: "u-unrated-link", depositId: "u-unrated-link", amountEur: 100, amountUsdc: 110, kind: "full", settledAsset: "USDC", at }],
+  } as any);
+  await store.addCryptoDeposit(row("u-unrated-link", 919, { accountId: undefined, userId: "u_owner", paymentAddress: addr("a"), paymentRequestId: "pr_unrated" }) as any);
   const { recordInvoiceSettlement } = await import("../services/api/src/adapters/crypto-deposits.js");
   await recordInvoiceSettlement(inv);
   assert.equal((await store.findInvoice("inv_co_unrated"))!.state, "SUBMITTED", "a €0 payment leaves it open");
   const before = process.env.TRANSF_RATES_FIXED;
   process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, KES: 147.53 });
   try {
-    assert.equal(await valueUnratedReceipts(), 2);
+    assert.equal(await valueUnratedReceipts(), 3);
     assert.equal(await valueUnratedReceipts(), 0, "stamped once");
   } finally {
     if (before === undefined) delete process.env.TRANSF_RATES_FIXED; else process.env.TRANSF_RATES_FIXED = before;
@@ -363,6 +370,8 @@ await check("USDC that arrived while no rate could be read is valued later at it
   const paidInv = (await store.findInvoice("inv_co_unrated"))!;
   assert.equal(paidInv.state, "PAID", "the valued payment covers the invoice");
   assert.deepEqual(paidInv.settlements!.map((s) => [s.ref, s.amountEur]), [["deposit:co-unrated-inv", 100]], "rewritten in place, not a second payment");
+  const link = (await store.findPaymentRequest("pr_unrated"))!;
+  assert.deepEqual(link.payments.map((p) => [p.id, p.settledEur]), [["pay_unrated", 100]], "the pay link's payment now holds its euro value, once");
   await writeStatementLines();
   const line = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "deposit:co-unrated:held");
   assert.equal(line?.statement?.amountCents, 10000, "the books get the receipt they lacked");
@@ -390,6 +399,63 @@ await check("USDC that arrived while no rate could be read is valued later at it
   assert.equal(kept.txType, "transfer_in");
   assert.equal(kept.accountCode, "4100");
   assert.equal(kept.accountCodeAuto, false);
+});
+
+await check("an invoice is paid when its payments, in the order they arrived, first cover it: a receipt valued late does not backdate it", async () => {
+  const { settlementUpdate } = await import("../services/api/src/domain/invoices.js");
+  const invoice: any = { direction: "outgoing", state: "SUBMITTED", issued: { grossCents: 10000 },
+    settlements: [{ ref: "bank:tue", method: "bank", amountEur: 40, at: "2026-10-13T09:00:00.000Z" }, { ref: "deposit:mon", method: "crypto", amountEur: 0, at: "2026-10-12T09:00:00.000Z" }] };
+  const u = settlementUpdate(invoice, { ref: "deposit:mon", method: "crypto", amountEur: 60, at: "2026-10-12T09:00:00.000Z" } as any);
+  assert.equal(u.state, "PAID");
+  assert.equal(u.payment!.paidAt, "2026-10-13T09:00:00.000Z", "covered on Tuesday, when the second payment arrived");
+  assert.equal(settlementUpdate({ ...invoice, settlements: [] }, { ref: "deposit:mon", method: "crypto", amountEur: 60, at: "2026-10-12T09:00:00.000Z" } as any).state, undefined, "€60 of €100 leaves it open");
+  // Bank credits, the usual path: paid at the credit that completes it.
+  const bank = (ref: string, amountEur: number, at: string) => ({ ref, method: "bank", amountEur, at }) as any;
+  const open: any = { ...invoice, settlements: [] };
+  assert.equal(settlementUpdate(open, bank("monerium:full", 100, "2026-10-14T08:00:00.000Z")).payment!.paidAt, "2026-10-14T08:00:00.000Z", "one full credit");
+  const first = settlementUpdate(open, bank("monerium:a", 40, "2026-10-14T08:00:00.000Z"));
+  assert.equal(first.state, undefined, "€40 of €100 leaves it open");
+  const second = settlementUpdate({ ...open, settlements: first.settlements }, bank("monerium:b", 60, "2026-10-15T08:00:00.000Z"));
+  assert.equal(second.payment!.paidAt, "2026-10-15T08:00:00.000Z", "two credits: paid when the second completed it");
+  // A credit recorded late but dated earlier than the one before it: paid when the two first covered it.
+  const late = settlementUpdate({ ...open, settlements: [bank("monerium:c", 60, "2026-10-16T08:00:00.000Z")] }, bank("monerium:d", 40, "2026-10-14T08:00:00.000Z"));
+  assert.equal(late.payment!.paidAt, "2026-10-16T08:00:00.000Z");
+  // Closed first, then an earlier receipt is valued: the paid date moves back to when the payments first covered it.
+  const mon0 = { ref: "deposit:mon", method: "crypto", amountEur: 0, at: "2026-10-12T09:00:00.000Z" } as any;
+  const wed = settlementUpdate({ ...open, settlements: [mon0] }, bank("monerium:wed", 70, "2026-10-14T09:00:00.000Z"));
+  const tue = settlementUpdate({ ...open, settlements: wed.settlements }, bank("monerium:tue", 40, "2026-10-13T09:00:00.000Z"));
+  assert.equal(tue.state, "PAID");
+  assert.equal(tue.payment!.paidAt, "2026-10-14T09:00:00.000Z", "€0 + €40 + €70: covered on Wednesday");
+  const paidInvoice: any = { ...open, state: "PAID", settlements: tue.settlements, payment: tue.payment };
+  const valued = settlementUpdate(paidInvoice, { ...mon0, amountEur: 60 });
+  assert.equal(valued.state, undefined, "the state is left as it is");
+  assert.equal(valued.payment!.paidAt, "2026-10-13T09:00:00.000Z", "€60 + €40 covered it on Tuesday");
+  assert.equal(settlementUpdate(paidInvoice, bank("monerium:extra", 60, "2026-10-12T00:00:00.000Z")).payment, undefined, "a new payment on a PAID invoice changes no date, though it would cover it on Tuesday");
+});
+
+await check("an EURe settlement is dated when the money landed on chain, not when the scanner saw it", async () => {
+  const { buildCryptoSettlement } = await import("../services/api/src/domain/invoices.js");
+  const s = buildCryptoSettlement({ id: "d-e", token: "EURE", txHash: `0x${"1".repeat(64)}`, amountEur: 60, creditedEur: 60, holding: "none", txs: [],
+    arrivedAt: "2026-10-12T23:59:40.000Z", detectedAt: "2026-10-13T00:00:10.000Z" } as any);
+  assert.equal(s.at, "2026-10-12T23:59:40.000Z");
+});
+
+await check("a stored credit that loses its mint to an earlier credit no longer carries the mint's hash", async () => {
+  const H = (k: number) => `0x${k.toString(16).padStart(64, "0")}`;
+  const at = "2026-10-20T15:00:10.000Z";
+  await store.recordMoneriumIssue({ orderId: "ord-mint-b", accountId: "acc_co", amountEur: 77, processedAt: "2026-10-20T15:00:00.000Z", recordedAt: at });
+  await store.addCryptoDeposit({ id: "co-mint", accountId: "acc_co", chainId: 31337, token: "EURE", txHash: H(931), logIndex: 0, from: `0x${"0".repeat(40)}`,
+    amountUnits: "77000000000000000000", amountEur: 77, creditedEur: 77, settlementAsset: "EURE", holding: "none", settledAt: at, arrivedAt: at, txs: [], detectedAt: at, updatedAt: at } as any);
+  await writeStatementLines();
+  const lineB = async () => (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "monerium:issue:ord-mint-b")!;
+  assert.equal((await lineB()).txHash, H(931));
+  // An earlier equal credit is recorded late: processed first, it takes the one mint.
+  await store.recordMoneriumIssue({ orderId: "ord-mint-a", accountId: "acc_co", amountEur: 77, processedAt: "2026-10-20T14:59:00.000Z", recordedAt: at });
+  await writeStatementLines();
+  const b = await lineB();
+  assert.equal(b.txHash, undefined, "the stored row, which the CSV export reads");
+  assert.deepEqual(b.statement!.links.txHashes, []);
+  assert.equal((await store.ledgerOf("org_co")).find((e) => e.statement?.key === "monerium:issue:ord-mint-a")!.txHash, H(931));
 });
 
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {
