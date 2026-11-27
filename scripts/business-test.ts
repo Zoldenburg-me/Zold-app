@@ -421,6 +421,12 @@ check("a CSV row with a NUL or half an emoji is rejected and reported; the other
   assert.match(out.rejected[0].reason, /NUL character or half of an emoji/);
 });
 
+check("a rejection after a blank row names the row as it is in the file", () => {
+  const csv = "Recipient Address,Token,Amount\n\n0x1111111111111111111111111111111111111111,USDC,1.00\n0xbad,USDC,1.00";
+  const out = importCsv(csv, { recipientAddress: "Recipient Address", token: "Token", amount: "Amount" });
+  assert.deepEqual(out.rejected.map((r) => r.row), [4]);
+});
+
 check("quoted fields with commas survive", () => {
   const csv =
     'Recipient Address,Token,Amount,Recipient Name\n0x1111111111111111111111111111111111111111,USDC,100.00,"Acme, Inc."';
