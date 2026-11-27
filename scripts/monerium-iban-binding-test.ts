@@ -304,8 +304,10 @@ await check("a pending IBAN is checked with Monerium at most once per MONERIUM_I
   const u = await addUser(46);
   await store.updateUser(u.id, { iban: "", kycStatus: "pending", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
   ibansOf.set(u.token, []);
+  const before = fake.reads;
   await refreshPendingIbanThrottled((await store.findUser(u.id))!);
   const reads = fake.reads;
+  assert.ok(reads > before, "the first call reads Monerium");
   ibansOf.set(u.token, [listed(u.iban, u.address)]);
   const after = await refreshPendingIbanThrottled((await store.findUser(u.id))!);
   assert.equal(fake.reads, reads, "the second call within the interval reads nothing");
