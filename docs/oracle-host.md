@@ -117,7 +117,10 @@ adds a drop-in to the cluster's unit (`PIDFile=` in the socket directory,
 `RequiresMountsFor=` the volume; the PID file path is the first thing to
 confirm on the host), installs the
 units and timers, drops TCP 5432-5433 in iptables, and fails if anything
-other than sshd listens on a public address.
+other than sshd listens on a public address (loopback and the `tailscale0`
+interface, the owner's tailnet, are not public). The package makes
+`/var/spool/pgbackrest` and `/var/log/pgbackrest` `postgres:postgres 750`;
+provision makes them root's 755 so `pg-<dep>` can reach its own directory.
 
 Then `cloudflared service install <token>`, with the tunnel's ingress for
 each hostname at `http://127.0.0.1:<API port>`.
