@@ -7,6 +7,10 @@
 set -euo pipefail
 source "$(dirname "$0")/_age.sh"
 umask 077
+# The default path is the JSON store's: a deployment on Postgres is backed up
+# by pgBackRest and the daily dump (docs/oracle-host.md), and its db.json is
+# stale or absent. An explicit TRANSF_DB_PATH (a pg-export) is still encrypted.
+[[ "${STORE_BACKEND:-json}" == json || -n "${TRANSF_DB_PATH:-}" ]] || { echo "STORE_BACKEND=$STORE_BACKEND: set TRANSF_DB_PATH to back up an explicit JSON file; Postgres is backed up by pgBackRest and the daily dump (docs/oracle-host.md)" >&2; exit 1; }
 require_age; require_recipients
 
 src="${TRANSF_DB_PATH:-$ROOT/data/db.json}"

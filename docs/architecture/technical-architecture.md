@@ -1147,8 +1147,8 @@ flowchart LR
   there must be one writer process. The path is `TRANSF_DB_PATH`, or
   `data/db.json` for `npm run api`. `npm run dev` uses `data/db.dev.json`,
   which it deletes on each start. Tests use `$TMPDIR/zold-test-db-<pid>.json`.
-- Production requires `ALLOW_PLAINTEXT_STORE=1`, which acknowledges the file
-  store. Only Monerium tokens and secrets and Shopify tokens are
+- Production on this store requires `ALLOW_PLAINTEXT_STORE=1`, which
+  acknowledges the file store; `STORE_BACKEND=postgres` does not ask for it. Only Monerium tokens and secrets and Shopify tokens are
   field-encrypted. Emails, names, recovery channel targets and IBANs are
   plaintext.
 - Collections:
@@ -1273,7 +1273,7 @@ only self-hosted fonts.
   - Monerium: a sandbox URL or chain name, no OAuth client and no encryption
     key, no webhook secret while app credentials are set, or a non-https
     redirect.
-  - Store: `ALLOW_PLAINTEXT_STORE` missing.
+  - Store: `ALLOW_PLAINTEXT_STORE` missing on the JSON store.
   - Bridge: live without a key.
   - Candide: a CANDIDE chain that differs from the app chain, a recovery
     signer without https or a token, the 3-minute recovery module, or no
@@ -1332,16 +1332,12 @@ and starts the API next to `cloudflared`.
   keeps the lease and its `/data` volume.
 - **The database is the JSON store** (`/data/db.json`) on both leases. The
   Postgres store (`STORE_BACKEND=postgres`, `docs/postgres-store-design.md`)
-  is built and runs only in the suites (`npm run check:pg`); config refuses
-  it on a real-money chain. The move off Akash to one Oracle Cloud ARM host
+  serves no deployment yet. The move off Akash to one Oracle Cloud ARM host
   (Postgres 17 on unix sockets, one cluster per deployment, pgBackRest to
-  Object Storage in two regions, daily dumps the host cannot delete) and the
-  cut-over (`pg-import` in, `pg-export` as the rollback) are not done. The
-  host's provisioning script, systemd units, deploy pull loop (the
-  replacement for this lease's loop) and runbook are written
-  (`scripts/oracle-host/`, `docs/oracle-host.md`) and have run only against
-  a local Postgres 17: the design note's §8 rows S7b and S8, waiting on the
-  owner.
+  OCI Object Storage and Cloudflare R2, daily dumps the host cannot delete)
+  has begun for mainnet: its cluster and backups run on the host
+  (`docs/oracle-host.md`). The cut-over (`pg-import` in, `pg-export` as the
+  rollback, §8 row S8) is not done, and testnet has no cluster.
 - **Deploying sends the secrets, so the operator runs it.** The SDL is
   generated from `.env` on the operator's machine and never committed.
   Provider bids expire within minutes, so creating the deployment and

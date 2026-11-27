@@ -465,6 +465,10 @@ console.log("ok - store suite on the JSON backend");
     connectionString: "postgresql://zold_app@/zold?host=/run/postgresql-mainnet&port=5432",
   });
   assert.ok(pgPoolConfig("postgresql:///zold?host=/tmp", real));
+  for (const url of ["postgresql://u@/zold", "postgresql:///zold", "postgresql://u@/zold?port=5432"]) {
+    assert.throws(() => pgPoolConfig(url, real), /names no host/, `${url}: an empty host falls back to PGHOST`);
+    assert.ok(pgPoolConfig(url, { realMoney: false }), `${url} on a test chain`);
+  }
   assert.ok(pgPoolConfig("postgresql://u@localhost:5432/zold", real));
   assert.ok(pgPoolConfig("postgres://u@127.0.0.1/zold", real));
   assert.ok(pgPoolConfig("postgresql://u@[::1]/zold", real));
@@ -515,10 +519,12 @@ console.log("ok - store suite on the JSON backend");
   const typo = run({ STORE_BACKEND: "pg" });
   assert.notEqual(typo.status, 0);
   assert.match(typo.stderr, /STORE_BACKEND must be json or postgres/);
+  // A real-money chain takes Postgres; the pool's TLS rule above guards a host
+  // that is not this machine (pgPoolConfig with realMoney).
   for (const chain of [undefined, "8453", "100"]) {
     const real = run({ STORE_BACKEND: "postgres", DATABASE_URL: url, TRANSF_CHAIN_ID: chain });
-    assert.notEqual(real.status, 0, `chain ${chain ?? "default"}`);
-    assert.match(real.stderr, /refused on a real-money chain until the cut-over/);
+    assert.equal(real.status, 0, `chain ${chain ?? "default"}: ${real.stderr}`);
+    assert.match(run({ STORE_BACKEND: "postgres", TRANSF_CHAIN_ID: chain }).stderr, /needs DATABASE_URL/);
   }
   const noUrl = run({ STORE_BACKEND: "postgres", TRANSF_CHAIN_ID: "84532" });
   assert.notEqual(noUrl.status, 0);
@@ -526,5 +532,18 @@ console.log("ok - store suite on the JSON backend");
   const testnet = run({ STORE_BACKEND: "postgres", DATABASE_URL: url, TRANSF_CHAIN_ID: "84532" });
   assert.equal(testnet.status, 0, testnet.stderr);
   assert.equal(run({ STORE_BACKEND: "json" }).status, 0);
-  console.log("ok - STORE_BACKEND: json or postgres; postgres needs DATABASE_URL and is refused on a real-money chain until the cut-over");
+  // Production asks for the JSON store's acknowledgement only when the JSON store is used.
+  // Both set explicitly: env.ts loads .env only for variables the process lacks.
+  const prod = (env: Record<string, string | undefined>) =>
+    spawnSync(process.execPath, ["--import", "tsx", "-e", "await import('./services/api/src/config/production.ts')"], {
+      env: { ...process.env, DATABASE_URL: undefined, TRANSF_CHAIN_ID: "8453", NODE_ENV: "production", STORE_BACKEND: "json", ALLOW_PLAINTEXT_STORE: "", ...env },
+      encoding: "utf8",
+    });
+  const prodJson = prod({});
+  assert.match(prodJson.stderr, /production configuration is incomplete/, prodJson.stderr);
+  assert.match(prodJson.stderr, /ALLOW_PLAINTEXT_STORE=1 is required/);
+  const prodPg = prod({ STORE_BACKEND: "postgres", DATABASE_URL: url });
+  assert.match(prodPg.stderr, /production configuration is incomplete/, prodPg.stderr);
+  assert.doesNotMatch(prodPg.stderr, /ALLOW_PLAINTEXT_STORE/);
+  console.log("ok - STORE_BACKEND: json or postgres; postgres needs DATABASE_URL, on any chain; production asks ALLOW_PLAINTEXT_STORE of json only");
 }
