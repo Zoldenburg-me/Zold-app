@@ -117,6 +117,9 @@ async function load() {
       $("accepts-lbl").textContent = "SEND ONLY";
       $("note-send").textContent = `Send only ${accepts[0].symbol} on ${accepts[0].chainName || chainName(accepts[0].chainId)}.`;
     }
+    // Kept as sent: nothing to tell the payer about where it settles.
+    // "?." and "manual": a cached pay.html has no such span.
+    $("note-settle")?.toggleAttribute("hidden", !p.autoConvert);
     $("note-settlement").textContent = p.autoConvert
       ? (p.settlementAsset === "USDC" ? p.token.symbol : "EUR(e)")
       : "manual";

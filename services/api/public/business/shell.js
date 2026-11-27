@@ -6,7 +6,7 @@
  * leak or be lost on the next render.
  */
 import {
-  $, api, cap, esc, gateHtml, invoiceInputListener, org, orgs, readHealth, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
+  $, api, cap, countrySelect, zipMode, esc, gateHtml, invoiceInputListener, org, orgs, readHealth, readRecovery, recoveryPending, recoveryUnknown, setInvoiceInputListener, ensureMe, setOrg,
   setChainId, setOrgs, setTestMode, setUsdSymbol, setView, signOut, toast, token, view,
 } from "./core.js";
 import { KNOWN, planBanner, refreshSide, renderNav, setMenu } from "./nav.js";
@@ -107,6 +107,8 @@ export async function render({ focus = false } = {}) {
         t = setTimeout(refreshInvoiceCheck, 400);
       }, { signal: invoiceInputListener.signal });
       box.addEventListener("change", (e) => {
+        // The postcode keyboard follows the customer's country.
+        if (e.target?.id === "inv-r-country") $("#inv-r-zip").inputMode = zipMode(e.target.value);
         // Leaving the VAT ID field looks it up in VIES (which then checks
         // again); any other change just checks again.
         if (e.target?.id === "inv-r-vat") checkCustomerVatId();
@@ -249,7 +251,8 @@ export async function boot() {
       // The name given at signup; the rest is asked here.
       if (u.companyName) $("#new-org-name").defaultValue = u.companyName;
     } else if (u?.name) $("#new-org-name").defaultValue = u.name;
-    if (u?.country) $("#new-org-country").defaultValue = u.country;
+    // A picker, not two typed letters; the select keeps the input's id.
+    $("#new-org-country").outerHTML = countrySelect("new-org-country", u?.country);
     // A business says whether it is a company or a sole trader; a personal space is neither.
     const showEntity = () => $("#new-org-entity-row")?.classList.toggle("hidden", $("#new-org-type").value !== "business");
     $("#new-org-type").onchange = showEntity;

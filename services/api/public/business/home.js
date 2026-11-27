@@ -22,7 +22,7 @@ import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { setTopBalance, submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, invWho, loadMembers, memberName } from "./screens.js";
 import { APP_LINKS, isOwnCompanyOrg, loadAccess } from "./access-model.js";
-import { companyBalance, countedLines, hasIban, assetTotals, lastMonth, localDay, monthIn, monthSummary, noIbanStep, owedInvoices, payingInvoices, pendingRuns, securityRows, setupOpen, setupSteps, submitFor, topBy, unreadOf } from "./home-model.js";
+import { companyBalance, countedLines, lineWho, hasIban, assetTotals, lastMonth, localDay, monthIn, monthSummary, noIbanStep, owedInvoices, payingInvoices, pendingRuns, securityRows, setupOpen, setupSteps, submitFor, topBy, unreadOf } from "./home-model.js";
 import { runLink } from "./payment.js";
 import { openSearch } from "./search.js";
 import { companyKeysHere, companySteps } from "./org-monerium-model.js";
@@ -318,7 +318,7 @@ function activity(all, limit = ACTIVITY_ROWS, runs = null) {
   const rows = tab === "pending" ? pendingRows(runs, limit) : [...all].filter((l) => tab === "all" || (tab === "in") === (l.amountCents >= 0))
     .sort((a, b) => b.valueDate.localeCompare(a.valueDate)).slice(0, limit).map((l) => {
       const inbound = l.amountCents >= 0;
-      const who = l.counterparty?.name || (inbound ? "Money in" : "Payment");
+      const who = lineWho(l);
       // A payment this organisation sent opens its run; anything else opens Books.
       const run = runIdForLine(runs, l);
       return `<tr><td class="z-dim">${esc(when(ymd(l.valueDate)))}</td>

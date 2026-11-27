@@ -216,6 +216,9 @@ assert.deepEqual(
     payers: [["Café Ostwind", 120000]], payees: [["Holzhandel Maier", 70000], ["Payment", 9000]],
   }, "one month only, payees summed by name, an unnamed one as Payment");
   assert.deepEqual(m.monthSummary(lines, "2026-08"), { count: 0, inCents: 0, outCents: 0, payers: [], payees: [] });
+  assert.equal(m.lineWho({ amountCents: 23800, links: { invoiceNumber: "RE-2026-0002" } }), "Invoice RE-2026-0002", "no name: the invoice it paid");
+  assert.equal(m.lineWho({ amountCents: 23800, counterparty: { name: "Nordlicht" }, links: { invoiceNumber: "RE-1" } }), "Nordlicht", "a name wins");
+  assert.equal(m.lineWho({ amountCents: 500 }), "Money in");
 
   const inv = (id: string, extra: object) => ({ id, direction: "outgoing", state: "ISSUED", ...extra });
   const owed = m.owedInvoices([

@@ -145,13 +145,17 @@ export function lastMonth(now = new Date()) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
 }
 
+/** Who a statement line is with. No name on the line: the invoice it paid says more than "Money in". */
+export const lineWho = (l) => l.counterparty?.name
+  || (l.links?.invoiceNumber ? `Invoice ${l.links.invoiceNumber}` : l.amountCents >= 0 ? "Money in" : "Payment");
+
 /** The biggest names on one side of some statement lines, in cents: [[name, cents], ...]. */
 export function topBy(lines, dir, n = 4) {
   const by = new Map();
   for (const l of lines) {
     const v = dir === "in" ? l.amountCents : -l.amountCents;
     if (v <= 0) continue;
-    const who = l.counterparty?.name || (dir === "in" ? "Money in" : "Payment");
+    const who = lineWho(l);
     by.set(who, (by.get(who) || 0) + v);
   }
   return [...by].sort((a, b) => b[1] - a[1]).slice(0, n);
