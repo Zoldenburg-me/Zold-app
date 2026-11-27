@@ -333,6 +333,10 @@ $("m-share-revoke").onclick = async () => {
   const m = mShare;
   // A link being made could land after the turn-off and be live unseen.
   if (m.busy) return;
+  // Busy until the turn-off answers: a new link made meanwhile would land
+  // after it and be live while the screen says none is.
+  m.busy = true;
+  paintShare();
   try {
     // Names the link on screen (the URL ends in its slug): if another tab
     // replaced it, the newer link is not turned off unseen.
@@ -347,7 +351,6 @@ $("m-share-revoke").onclick = async () => {
     m.published = null;
     m.loaded = true;
     clearErr("m-share-err");
-    paintShare();
   } catch (e) {
     if (mShare !== m) return;
     if (e?.body?.code === "LINK_REPLACED") {
@@ -355,8 +358,10 @@ $("m-share-revoke").onclick = async () => {
       m.loaded = false;
       await loadShare(m).catch(() => {});
       if (mShare !== m) return;
-      paintShare();
     }
     showErr("m-share-err", e);
+  } finally {
+    m.busy = false;
+    if (mShare === m) paintShare();
   }
 };

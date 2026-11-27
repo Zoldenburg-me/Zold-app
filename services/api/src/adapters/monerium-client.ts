@@ -12,6 +12,7 @@
 import { partnerTimeout } from "../http.js";
 import { moneriumFetch } from "./monerium-limit.js";
 import { describeCause } from "../http/log-cause.js";
+import { EncryptionUnavailableError } from "../crypto-at-rest.js";
 
 /** The shape an order id must have before it may go into a request path. */
 export function isMoneriumOrderId(orderId: string): boolean {
@@ -197,7 +198,9 @@ export class MoneriumClient {
       token = await this.accessToken();
     } catch (err) {
       // Nothing was sent to `path`: whatever failed, failed before it.
-      if (err instanceof MoneriumAccessError || err instanceof MoneriumTokenError) throw err;
+      // A missing encryption key is the deployment's fault, not Monerium's:
+      // it keeps its own answer (http/known-errors.ts).
+      if (err instanceof MoneriumAccessError || err instanceof MoneriumTokenError || err instanceof EncryptionUnavailableError) throw err;
       throw new MoneriumTokenError(`Monerium auth failed before ${method} ${path}: ${describeCause(err)}`);
     }
     const res = await moneriumFetch(`${this.cfg.baseUrl}${path}`, {

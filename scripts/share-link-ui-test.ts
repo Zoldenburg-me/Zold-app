@@ -427,6 +427,22 @@ await t("Turn this link off is refused while a new link is being made", async ()
   assert.equal(el("m-share-revoke").disabled, false);
 });
 
+await t("no new link is made while Turn this link off is unanswered", async () => {
+  live();
+  run(`__delGate = new Promise((r) => { __releaseDel = r; });
+    api = async (p, body, method) => { if (method === "DELETE") { await __delGate; return {}; } __posts.push(p); return { url: ${JSON.stringify(URL_NEW)}, expiresAt: ${JSON.stringify(EXPIRES)}, fields: body }; };`);
+  const revoking = el("m-share-revoke").onclick();
+  assert.equal(el("m-share-revoke").disabled, true);
+  await run(`setShare("route", true)`);
+  await el("m-share-copy").onclick();
+  assert.equal(run("__posts.length"), 0, "a link made now would be live while the screen says none is");
+  run("__releaseDel()");
+  await revoking;
+  assert.equal(run("mShare.link"), null);
+  assert.equal(run("mShare.busy"), false);
+  assert.equal(el("m-share-copy").textContent, "Create link");
+});
+
 await t("a new link for receipt A that lands after receipt B opened leaves B's link and choices alone", async () => {
   run(`openShare = __realOpenShare; mobileNav = () => {};`);
   live(`, transferId: "tA"`);

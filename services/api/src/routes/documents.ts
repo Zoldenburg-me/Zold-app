@@ -284,11 +284,18 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
 
   /** A Beleg belongs to its company's books: the person it is filed under
    *  lists or revokes it only while an active member who may read them. */
-  const mayHold = async (user: User, doc: StoredDocument): Promise<boolean> => {
-    if (!doc.orgId) return true;
-    const org = await store.findOrganisation(doc.orgId);
-    const member = (await store.membersOf(doc.orgId)).find((m) => m.userId === user.id && m.status === "active");
-    return !!org && !!member && roleCan(member.role, "ledger.read", orgEntity(org));
+  const mayHold = (user: User, doc: StoredDocument, asked = new Map<string, Promise<boolean>>()): Promise<boolean> => {
+    const orgId = doc.orgId;
+    if (!orgId) return Promise.resolve(true);
+    // A list asks once per company, not once per document.
+    if (!asked.has(orgId)) {
+      asked.set(orgId, (async () => {
+        const org = await store.findOrganisation(orgId);
+        const member = (await store.membersOf(orgId)).find((m) => m.userId === user.id && m.status === "active");
+        return !!org && !!member && roleCan(member.role, "ledger.read", orgEntity(org));
+      })());
+    }
+    return asked.get(orgId)!;
   };
 
   /** Checked before any chain read: a statement is about fifty of them. */
@@ -336,7 +343,8 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       const user = await userFor(req, res);
       if (!user) return;
       const held = [];
-      for (const d of await store.documentsForUser(user.id)) if (await mayHold(user, d)) held.push(d);
+      const asked = new Map<string, Promise<boolean>>();
+      for (const d of await store.documentsForUser(user.id)) if (await mayHold(user, d, asked)) held.push(d);
       res.json({
         documents: held
           .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))

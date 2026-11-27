@@ -365,6 +365,9 @@ export interface CompanyBankPayout {
   processedAt?: string;
   /** A fixed explanation for `failed` or `unknown`; never Monerium's body. */
   error?: string;
+  /** Monerium answered the order with a 2xx but no usable id: it holds an
+   *  order Zold cannot follow, so the row is never cleared by hand. */
+  acceptedWithoutId?: true;
   /** The owner member who cleared an `unknown` row after checking Monerium. */
   clearedByMemberId?: string;
   clearedAt?: string;

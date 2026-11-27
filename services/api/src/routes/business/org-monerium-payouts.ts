@@ -48,7 +48,7 @@ import { moneriumIbanList } from "../../domain/monerium-profile.js";
 import type { Account, CompanyBankPayout, Organisation } from "../../domain/types.js";
 import { MoneriumAccessError, MoneriumApiError, MoneriumTokenError, isMoneriumOrderId } from "../../adapters/monerium-client.js";
 import { redactedMessage } from "../../http/log-cause.js";
-import { SEPA_REMITTANCE_MAX, moneriumAmountString, moneriumRedeemMessage, paymentMemo, redeemMessageStale } from "../../sepa.js";
+import { REDEEM_WINDOW_SEC, SEPA_REMITTANCE_MAX, moneriumAmountString, moneriumRedeemMessage, paymentMemo, redeemMessageStale } from "../../sepa.js";
 import { store } from "../../store.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../../webauthn.js";
 import { orgSafeMessageSignature, safeMessageHash, webauthnOwnerFromJwk, type BrowserPasskeyAssertion } from "../../wallet/candide.js";
@@ -206,6 +206,30 @@ export const clearPendingPayouts = () => pendingPayouts.clear();
  *  a row is `unknown` only because Monerium has not answered: it is not an
  *  owner's to clear. A crash empties this, and the row is then clearable. */
 const submitting = new Set<string>();
+
+/** An order sent just inside the signed message's window can still land a
+ *  while after a timeout here: a clear waits this long past the stamp. */
+const CLEAR_AFTER_MS = (REDEEM_WINDOW_SEC + 6 * 60) * 1000;
+
+/** Why an owner may not clear this row, if they may not: only an `unknown`
+ *  row with no order to follow, not accepted by Monerium, no longer being
+ *  sent, and old enough that its order can no longer land. */
+function clearRefusal(p: CompanyBankPayout): Refusal | undefined {
+  if (submitting.has(p.id)) {
+    return new Refusal(409, "PAYOUT_IN_FLIGHT", "This payout is still being sent to Monerium. Nothing was changed. Look again in a minute.");
+  }
+  if (p.state !== "unknown" || p.orderId) {
+    return new Refusal(409, "PAYOUT_NOT_UNCLEAR", "Only an unclear payout without a Monerium order can be cleared. Nothing was changed.");
+  }
+  if (p.acceptedWithoutId) {
+    return new Refusal(409, "PAYOUT_ACCEPTED", "Monerium accepted this payout, so it cannot be cleared here. Nothing was changed. Check the order in Monerium.");
+  }
+  // An unreadable stamp never passes: the row stays held.
+  if (!(Date.now() > Date.parse(p.issuedAt) + CLEAR_AFTER_MS)) {
+    return new Refusal(409, "PAYOUT_TOO_RECENT", "This payout was sent too recently: Monerium may still place its order. Nothing was changed. Check Monerium again in ten minutes.");
+  }
+  return undefined;
+}
 
 /** What the Safe holds less what payouts already claim: orders Monerium holds
  *  (`pending`) or may hold (`unknown`), and approvals in this process.
@@ -578,6 +602,7 @@ export function createOrgMoneriumPayoutRoutes(
           // Accepted, but nothing can follow it: never shown as sent.
           await patchPayout(s.account.id, payout.id, {
             state: "unknown",
+            acceptedWithoutId: true,
             ...(providerState ? { providerState } : {}),
             error: "Monerium accepted the payout but returned no order id, so Zold cannot follow it. Check Monerium before sending it again.",
           });
@@ -637,9 +662,8 @@ export function createOrgMoneriumPayoutRoutes(
   /**
    * An owner clears an `unknown` payout that has no order id, after checking
    * Monerium has no such order: the row becomes `failed` and holds nothing.
-   * Never automatic, never for a row with an order id (the list re-reads
-   * that one from Monerium), never while its submission can still place the
-   * order, and audited with who cleared it.
+   * Never automatic, only where clearRefusal allows (a row with an order id
+   * is re-read from Monerium by the list), and audited with who cleared it.
    */
   r.post("/:orgId/monerium/payouts/:payoutId/clear", wrap(async (req, res) => {
     const ctx = await gate(req, res, "transfers.sign");
@@ -657,12 +681,8 @@ export function createOrgMoneriumPayoutRoutes(
     try {
       await writePayouts(account.id, (rows) => rows.map((p) => {
         if (p.id !== id) return p;
-        if (submitting.has(id)) {
-          throw new Refusal(409, "PAYOUT_IN_FLIGHT", "This payout is still being sent to Monerium. Nothing was changed. Look again in a minute.");
-        }
-        if (p.state !== "unknown" || p.orderId) {
-          throw new Refusal(409, "PAYOUT_NOT_UNCLEAR", "Only an unclear payout without a Monerium order can be cleared. Nothing was changed.");
-        }
+        const refusal = clearRefusal(p);
+        if (refusal) throw refusal;
         return (cleared = {
           ...p,
           state: "failed" as const,
@@ -717,7 +737,7 @@ export function createOrgMoneriumPayoutRoutes(
     }
     res.json({
       payouts: recentPayouts((await store.findAccount(account.id))!.moneriumPayouts)
-        .map((p) => ({ ...publicPayout(p), ...(submitting.has(p.id) ? { inFlight: true } : {}) })),
+        .map((p) => ({ ...publicPayout(p), ...(clearRefusal(p) ? {} : { clearable: true }) })),
     });
   }));
 

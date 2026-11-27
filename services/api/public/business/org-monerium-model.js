@@ -124,9 +124,8 @@ export function payoutRows(payouts) {
     state: PAYOUT_STATE_WORD[p.state] || p.state,
     bad: p.state === "failed" || p.state === "unknown",
     note: p.error || "",
-    // Unclear with no Monerium order to follow, and no longer being sent:
-    // only an owner who checked Monerium clears it.
-    clearable: p.state === "unknown" && !p.orderId && !p.inFlight,
+    // The API says which rows an owner who checked Monerium may clear.
+    clearable: p.clearable === true,
   }));
 }
 
