@@ -27,6 +27,7 @@ import { vatIdShape } from "../../domain/vat-ids.js";
 import { checkVatId } from "../../adapters/vies.js";
 import { assertTransition, newLinkToken, ownerInvoiceView, settlementRef, settlementUpdate } from "../../domain/invoices.js";
 import type { Invoice } from "../../domain/types.js";
+import { sealInvoiceLink } from "../../stored-secrets.js";
 import type { OrgContext } from "../org-context.js";
 import {
   customReasonsOf, draftDueDate, draftFrom, issuedNumbersOf, jurisdictionOf, languageOf, nextNumberOf, seriesOf, str,
@@ -132,6 +133,8 @@ export async function issueOutgoing(
     }
     const now = new Date();
     const { token, hash } = newLinkToken();
+    const id = fromDraft?.id ?? `inv_${randomUUID()}`;
+    const linkTokenEnc = sealInvoiceLink(id, token);
     const display: Record<string, boolean> = {
       ...DEFAULT_DISPLAY,
       ...(ctx.org.invoicing?.display as Record<string, boolean> | undefined),
@@ -192,12 +195,13 @@ export async function issueOutgoing(
     };
 
     const invoice = fromDraft
-      ? (await issueDraft(fromDraft, document, hash))
+      ? (await issueDraft(fromDraft, { ...document, linkTokenEnc }, hash))
       : (await store.addInvoice({
-          id: `inv_${randomUUID()}`,
+          id,
           direction: "outgoing",
           orgId: ctx.org.id,
           linkTokenHash: hash,
+          linkTokenEnc,
           state: "SUBMITTED", // issued and locked; nothing for a supplier to fill in
           ...document,
           createdByMemberId: ctx.member.id,

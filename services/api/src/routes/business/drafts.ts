@@ -14,6 +14,7 @@
  * because an address-book edit can land between approval and execution.
  */
 import express from "express";
+import { bankLineProblem, walletLineProblem } from "../../domain/invoices.js";
 import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
 import { FX, railFeeEur } from "../../config.js";
@@ -79,6 +80,12 @@ export type BalanceReader = (address: `0x${string}`) => Promise<{ safeBalanceEur
  * Why a run with a wallet line can never be sent, or undefined. Checked at
  * submit and at execution, so a run is not approved only to be refused.
  */
+/** A line's invoiceId arrived in a request body: only this org's invoice counts. */
+const invoiceOf = async (orgId: string, invoiceId: string) => {
+  const found = await store.findInvoice(invoiceId);
+  return found?.orgId === orgId ? found : undefined;
+};
+
 export async function walletRunProblem(draft: DraftPayment): Promise<string | undefined> {
   if (!draft.lines.some((l) => l.destination.kind === "wallet")) return undefined;
   const [line] = draft.lines;
@@ -88,7 +95,8 @@ export async function walletRunProblem(draft: DraftPayment): Promise<string | un
     : d.kind !== "wallet" || !d.address || !contact || contact.orgId !== draft.orgId ? "A wallet payment goes to a saved contact's wallet address."
       : d.chainId !== CHAIN_ID ? `That wallet is on network ${d.chainId}; this account pays on network ${CHAIN_ID}.`
         : !["EURE", "USDC"].includes(line.asset.toUpperCase()) ? "A wallet payment sends EURe or USDC."
-          : undefined;
+          : line.invoiceId ? walletLineProblem(await invoiceOf(draft.orgId, line.invoiceId), draft.id, line)
+            : undefined;
 }
 
 export function createDraftRoutes(
@@ -649,6 +657,14 @@ export function createDraftRoutes(
         });
         continue;
       }
+      // A linked invoice follows this transfer to PAID, and a sent-back run
+      // is editable: an edited amount or account must not close it.
+      const linked = line.invoiceId ? (await invoiceOf(checked.orgId, line.invoiceId)) : undefined;
+      const invoiceProblem = linked?.state === "PAYING" && linked.payment?.draftId === checked.id ? bankLineProblem(linked, line, bank.iban) : undefined;
+      if (invoiceProblem) {
+        problems.push({ lineId: line.id, reason: invoiceProblem });
+        continue;
+      }
       const sendEur = roundEur(Number(line.amount));
       // createQuote refuses these too, but refusing here keeps the whole batch
       // atomic instead of failing halfway through.
@@ -674,7 +690,9 @@ export function createDraftRoutes(
 
     if (problems.length) {
       return res.status(422).json({
-        error: `${problems.length} of ${checked.lines.length} line(s) cannot be paid. Nothing was created.`,
+        // The screen shows only this text: one refusal is said in its own words.
+        error: problems.length === 1 ? `${problems[0].reason} Nothing was created.`
+          : `${problems.length} of ${checked.lines.length} line(s) cannot be paid. Nothing was created.`,
         problems,
       });
     }

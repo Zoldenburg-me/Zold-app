@@ -214,9 +214,12 @@ export function deviceLib() {
   return Promise.race([window.__deviceLib, late]).finally(() => clearTimeout(timer));
 }
 
-/** May this member act on a supplier invoice: Pay (a draft, `propose`) when
- *  it has an IBAN, else Mark paid or Reconcile (invoices.manage, `invoices`). */
-export const mayActOnInvoice = (i) => roleCan(org?.role, i.state === "SUBMITTED" && i.payTo?.kind === "bank" && i.payTo.bank?.iban ? "propose" : "invoices");
+/** May this member pay a submitted supplier invoice: a draft (`propose`) to
+ *  the IBAN or wallet address it carries. */
+export const mayPayInvoice = (i) => i.state === "SUBMITTED" && !!(i.payTo?.bank?.iban || i.payTo?.address) && roleCan(org?.role, "propose");
+/** May this member act on a supplier invoice: Pay, or Mark paid and
+ *  Reconcile (invoices.manage, `invoices`). */
+export const mayActOnInvoice = (i) => mayPayInvoice(i) || roleCan(org?.role, "invoices");
 
 /** Server text for people: the API's words for a few chain and passkey
  *  errors, said plainly. A passkey is named for this device (Z.onPhone). */

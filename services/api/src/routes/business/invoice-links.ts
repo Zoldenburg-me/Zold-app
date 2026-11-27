@@ -1,23 +1,25 @@
 /**
  * The supplier's half of the invoice flow: no account, no wallet, no session.
  *
- * Mounted at /api/invoice-links and reached only with the one-time token. Every
+ * Mounted at /api/invoice-links and reached only with the link's token. Every
  * response goes through supplierView(), which is an ALLOWLIST — a field added
  * to Invoice later must be chosen into it rather than leaking by default.
  *
- * The token and its optional password are bearer secrets, so both compare in
- * constant time and this router sits on the tight rate bucket. The password is
- * human-chosen, so its wrong guesses are also counted per link, across every
- * source address.
+ * The token and its optional password are bearer secrets, so this router sits
+ * on the tight rate bucket. The token is 32 random bytes, looked up by its
+ * hash; the password is compared in constant time and, being human-chosen,
+ * its wrong guesses are also counted per link, across every source address.
  */
 import express from "express";
 import { store } from "../../store.js";
 import { ContactError, chainName } from "../../domain/contacts.js";
-import { CHAIN_ID } from "../../config.js";
+import { CHAIN_ID, cryptoSendEnabled } from "../../config.js";
 import { mailAvailable, sendInvoiceSubmitted, sendSendLinkFilled } from "../../adapters/mailer.js";
 import {
   InvoiceError,
   assertTransition as assertInvoiceTransition,
+  badDueDate,
+  payToProblem,
   hashToken,
   supplierView,
   validateLines,
@@ -37,7 +39,6 @@ const PASSWORD_FAILURES_MAX = 10;
 const PASSWORD_FAILURE_WINDOW_MS = 15 * 60_000;
 const SEND_LIMIT_MISSES_MAX = 5;
 const SEND_LIMIT_MISS_WINDOW_MS = 24 * 60 * 60_000;
-const DUE_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
 const payorName = async (invoice: Invoice) =>
   (await store.findOrganisation(invoice.orgId))?.name ?? "";
@@ -96,8 +97,11 @@ const payeeState = async (invoice: Invoice): Promise<Invoice> => {
 };
 
 /** The chains a supplier may name for a wallet payout: the one this
- *  deployment runs on, the only one the payor's account holds money on. */
-export const payoutChains = () => [{ chainId: CHAIN_ID, name: chainName(CHAIN_ID) }];
+ *  deployment runs on, the only one the payor's account holds money on, and
+ *  none where sending to a wallet is off: a wallet nobody could pay is not
+ *  taken, and the pages offer no wallet field. */
+export const payoutChains = () => (cryptoSendEnabled() ? [{ chainId: CHAIN_ID, name: chainName(CHAIN_ID) }] : []);
+const wrongChain = () => (payoutChains().length ? `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` : "Paying to a wallet is not open here. Give a bank account.");
 
 /**
  * Mail whoever made the link that the supplier submitted it. Never blocks or
@@ -202,7 +206,7 @@ export function createInvoiceLinkRouter(): express.Router {
         const payTo = parsePayTo(raw && typeof raw === "object" && raw.kind === "bank" ? { kind: "bank", bank: { ...(raw.bank ?? raw), holderName: name } } : raw, "EUR");
         if (!payTo) return res.status(400).json({ error: "Say where to send the money: an IBAN or a wallet address." });
         if (payTo.kind === "wallet" && !payoutChains().some((c) => c.chainId === payTo.chainId)) {
-          return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+          return res.status(400).json({ error: wrongChain() });
         }
         try { assertSendLinkLimit(invoice.sendLink, total); } catch (err) {
           recordFailure(missKey, SEND_LIMIT_MISS_WINDOW_MS);
@@ -245,12 +249,15 @@ export function createInvoiceLinkRouter(): express.Router {
         }
       }
       const dueDate = req.body?.dueDate;
-      if (dueDate !== undefined && dueDate !== null && dueDate !== "" && !(typeof dueDate === "string" && DUE_DATE.test(dueDate))) {
+      if (badDueDate(dueDate)) {
         return res.status(400).json({ error: "The due date must be a date, YYYY-MM-DD." });
       }
       const payTo = parsePayTo(req.body?.payTo, invoice.currency);
+      // Submitting locks the invoice: one nobody could pay is refused now.
+      const unpayable = payToProblem(invoice.currency, payTo);
+      if (unpayable) return res.status(400).json({ error: unpayable });
       if (payTo?.kind === "wallet" && !payoutChains().some((c) => c.chainId === payTo.chainId)) {
-        return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+        return res.status(400).json({ error: wrongChain() });
       }
       assertInvoiceTransition(invoice.state, "SUBMITTED");
       // Only over a link still waiting: the first submit stands.

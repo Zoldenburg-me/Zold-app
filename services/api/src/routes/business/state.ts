@@ -137,7 +137,9 @@ export const syncInvoicePayment = async (invoice: Invoice): Promise<Invoice> => 
       return invoice;
     }
     const draft = invoice.payment?.draftId ? (await store.findDraft(invoice.payment.draftId)) : undefined;
-    if (!draft || draft.state === "FAILED" || draft.state === "REJECTED" || draft.state === "CANCELLED") {
+    // A sent-back run is still this invoice's payment: it is edited and sent
+    // again, or cancelled, and only cancelling it frees the invoice.
+    if (!draft || draft.state === "FAILED" || draft.state === "CANCELLED") {
       return await move({
         state: "SUBMITTED",
         payment: { ...invoice.payment, draftId: undefined },
