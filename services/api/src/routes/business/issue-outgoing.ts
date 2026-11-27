@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
 import {
   DEFAULT_DISPLAY,
+  EXEMPTION_REASONS,
   InvoiceComplianceError,
   SETTLEMENT_CURRENCY,
   checkCompliance,
@@ -21,6 +22,7 @@ import {
   invoiceDueDate,
   invoiceLanguage,
   vatNoteFor,
+  type ExemptionReasonId,
   type InvoiceLanguage,
 } from "../../domain/invoicing.js";
 import { vatIdShape } from "../../domain/vat-ids.js";
@@ -88,11 +90,18 @@ export async function issueOutgoing(
       { ...report },
     );
   }
-  if (report.warnings.length && body.acceptWarnings !== true) {
+  // A receipt month the wallets may not have delivered in full is confirmed in
+  // the same answer as the compliance warnings, so one acceptance covers only
+  // what the issuer was shown.
+  const receiptWarnings = (fromDraft?.fromReceipts?.syncWarnings ?? [])
+    .map((message) => ({ severity: "warning" as const, field: "receipts", message }));
+  if ((report.warnings.length || receiptWarnings.length) && body.acceptWarnings !== true) {
     return refusal(
       409,
-      "There are warnings on this invoice. Re-send with acceptWarnings: true to issue it anyway.",
-      { ...report },
+      receiptWarnings.length
+        ? "This month may be incomplete. Re-send with acceptWarnings: true to issue it anyway."
+        : "There are warnings on this invoice. Re-send with acceptWarnings: true to issue it anyway.",
+      { ...report, warnings: [...receiptWarnings, ...report.warnings] },
     );
   }
   if (fromDraft) {
@@ -139,6 +148,12 @@ export async function issueOutgoing(
       ...DEFAULT_DISPLAY,
       ...(ctx.org.invoicing?.display as Record<string, boolean> | undefined),
     };
+    // A reason that requires the issuer's VAT ID prints it (or the note in its
+    // place) whatever the display setting: §14a UStG, Art. 226 Nr. 3.
+    const t = draft.treatment;
+    if (t.kind === "exempt" && EXEMPTION_REASONS[t.reason as ExemptionReasonId]?.requiresIssuerVatId) {
+      display.issuerVatId = true;
+    }
 
     const document: Pick<Invoice, "lines" | "currency" | "total" | "dueDate" | "supplier" | "issued" | "submittedAt"> = {
       lines: report.totals.lines.map((l, i) => ({
