@@ -30,7 +30,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
-const { OPERATOR: OPERATOR_CONFIG } = await import("../services/api/src/config.js");
+const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
 const { operatorKit } = await import("./_operator.js");
 const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { MONERIUM } = await import("../services/api/src/config.js");
@@ -211,6 +211,13 @@ await check("a pickup hash that differs from the recorded send is still shown", 
   const { transactions } = JSON.parse((await get("/api/admin/transactions")).text);
   const route = transactions.find((t: any) => t.id === "t_anchor_differs").route;
   assert.ok(route.some((r: any) => r.hash === H) && route.some((r: any) => r.hash === H3), JSON.stringify(route));
+});
+
+await check("a passkey saved with no rpId is offered where the admin RP ID is still the app's", async () => {
+  assert.equal(OPERATOR_CONFIG.rpId, SECURITY.rpId, "this suite runs with no ADMIN_ORIGIN");
+  await store.addOperatorCredential(kit.operator.id, { credentialId: "legacy-1", key: { jwk: {}, alg: "ES256" }, signCount: 0, label: "Old", createdAt: new Date().toISOString() });
+  const c = await realFetch(`${API}/api/admin/auth/login/challenge`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  assert.ok((await c.json()).allowCredentials.some((x: any) => x.id === "legacy-1"));
 });
 
 server.close();

@@ -227,6 +227,13 @@ await check("production refuses to start with KYC_OPERATOR_TOKEN set", async () 
   // but not over the token.
   assert.doesNotMatch(boot({ KYC_OPERATOR_TOKEN: "" }).stderr, /KYC_OPERATOR_TOKEN/);
 });
+await check("an ADMIN_ORIGIN ending in a dot is refused at start", async () => {
+  const r = spawnSync(process.execPath, ["--import", "tsx", "-e", 'await import("./services/api/src/config.js")'], {
+    cwd: ROOT, encoding: "utf8", env: { ...process.env, ADMIN_ORIGIN: "https://admin.test." },
+  });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /ADMIN_ORIGIN must not end in a dot/);
+});
 
 console.log("enrolment");
 await check("npm run operator:enrol writes a single-use enrolment next to the store and prints the link once", async () => {
@@ -497,6 +504,9 @@ await check("passkeys made for another RP ID do not count toward the cap and are
   const id = "op_third";
   const stale = (n: number) => ({ credentialId: `old-${n}`, key: { jwk: {}, alg: "ES256" }, signCount: 0, label: `Old ${n}`, createdAt: new Date().toISOString() });
   await store.addOperator({ id, name: "Third", email: "third@example.com", createdAt: new Date().toISOString(), credentials: [1, 2, 3, 4, 5].map(stale) } as any);
+  const before = await req("POST", "/api/admin/auth/login/challenge", {}, { "cf-access-jwt-assertion": thirdJwt });
+  assert.equal(before.status, 409, "only passkeys for another host: told to enrol");
+  assert.equal(before.body.code, "PASSKEYS_OTHER_HOST");
   const third = await operatorKit({ base: BASE, origin: ADMIN, rpId: "admin.test", dataDir, name: "Third", email: "third@example.com", accessJwt: () => thirdJwt });
   assert.equal(third.operator.id, id, "re-enrols onto the same operator");
   assert.deepEqual((third.operator as any).passkeys.map((p: any) => p.label), ["Soft key"], "only the usable passkey is listed");

@@ -61,4 +61,6 @@ if (explicitAdminOrigin) {
     throw new Error("ADMIN_ORIGIN must be an origin such as https://admin.zoldhq.com");
   }
   if (u.origin !== explicitAdminOrigin) throw new Error("ADMIN_ORIGIN must be an origin only: scheme, host and port, no path");
+  // The host policy compares against the Host header with its dot stripped: a dotted origin would match nothing.
+  if (u.hostname.endsWith(".")) throw new Error("ADMIN_ORIGIN must not end in a dot");
 }

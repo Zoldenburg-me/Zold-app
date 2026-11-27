@@ -10,7 +10,7 @@
  */
 import express from "express";
 import { randomBytes } from "node:crypto";
-import { OPERATOR } from "../config.js";
+import { OPERATOR, SECURITY } from "../config.js";
 import { auditEntry } from "../audit.js";
 import { redactedMessage } from "../http/log-cause.js";
 import { clientKey, forgetFailure, recordFailure, tooManyFailures } from "../http/policy.js";
@@ -50,8 +50,9 @@ function label(raw: unknown, fallback: string): string {
   return v || fallback;
 }
 
-/** The passkeys that can sign in on this admin host. */
-const usable = (o: Operator) => o.credentials.filter((c) => c.rpId === OPERATOR.rpId);
+/** The passkeys that can sign in on this admin host. One saved with no rpId
+ *  was made for the app's RP_ID, as every operator passkey once was. */
+const usable = (o: Operator) => o.credentials.filter((c) => (c.rpId ?? SECURITY.rpId) === OPERATOR.rpId);
 
 const publicOperator = (o: Operator) => ({
   id: o.id,
@@ -116,6 +117,13 @@ export function createOperatorAuthRouter() {
     // Behind Access, only the signed-in person's passkeys are offered.
     const email = accessEmailOf(req);
     const operators = (await store.list("operators")).filter((o) => !o.disabledAt && (email === undefined || o.email === email));
+    const mine = email === undefined ? undefined : operators[0];
+    if (mine && mine.credentials.length && !usable(mine).length) {
+      return res.status(409).json({
+        error: `your passkeys were made for another admin host, not ${OPERATOR.rpId}: enrol a new one with npm run operator:enrol`,
+        code: "PASSKEYS_OTHER_HOST",
+      });
+    }
     res.json({
       challenge: issueChallenge("operator_login"),
       rpId: OPERATOR.rpId,
