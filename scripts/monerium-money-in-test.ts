@@ -420,6 +420,42 @@ await check("an invoice is paid when its payments, in the order they arrived, fi
   // A credit recorded late but dated earlier than the one before it: paid when the two first covered it.
   const late = settlementUpdate({ ...open, settlements: [bank("monerium:c", 60, "2026-10-16T08:00:00.000Z")] }, bank("monerium:d", 40, "2026-10-14T08:00:00.000Z"));
   assert.equal(late.payment!.paidAt, "2026-10-16T08:00:00.000Z");
+  // Closed first, then an earlier receipt is valued: the paid date moves back to when the payments first covered it.
+  const mon0 = { ref: "deposit:mon", method: "crypto", amountEur: 0, at: "2026-10-12T09:00:00.000Z" } as any;
+  const wed = settlementUpdate({ ...open, settlements: [mon0] }, bank("monerium:wed", 70, "2026-10-14T09:00:00.000Z"));
+  const tue = settlementUpdate({ ...open, settlements: wed.settlements }, bank("monerium:tue", 40, "2026-10-13T09:00:00.000Z"));
+  assert.equal(tue.state, "PAID");
+  assert.equal(tue.payment!.paidAt, "2026-10-14T09:00:00.000Z", "€0 + €40 + €70: covered on Wednesday");
+  const paidInvoice: any = { ...open, state: "PAID", settlements: tue.settlements, payment: tue.payment };
+  const valued = settlementUpdate(paidInvoice, { ...mon0, amountEur: 60 });
+  assert.equal(valued.state, undefined, "the state is left as it is");
+  assert.equal(valued.payment!.paidAt, "2026-10-13T09:00:00.000Z", "€60 + €40 covered it on Tuesday");
+  assert.equal(settlementUpdate(paidInvoice, bank("monerium:extra", 5, "2026-10-12T00:00:00.000Z")).payment, undefined, "a new payment on a PAID invoice changes no date");
+});
+
+await check("an EURe settlement is dated when the money landed on chain, not when the scanner saw it", async () => {
+  const { buildCryptoSettlement } = await import("../services/api/src/domain/invoices.js");
+  const s = buildCryptoSettlement({ id: "d-e", token: "EURE", txHash: `0x${"1".repeat(64)}`, amountEur: 60, creditedEur: 60, holding: "none", txs: [],
+    arrivedAt: "2026-10-12T23:59:40.000Z", detectedAt: "2026-10-13T00:00:10.000Z" } as any);
+  assert.equal(s.at, "2026-10-12T23:59:40.000Z");
+});
+
+await check("a stored credit that loses its mint to an earlier credit no longer carries the mint's hash", async () => {
+  const H = (k: number) => `0x${k.toString(16).padStart(64, "0")}`;
+  const at = "2026-10-20T15:00:10.000Z";
+  await store.recordMoneriumIssue({ orderId: "ord-mint-b", accountId: "acc_co", amountEur: 77, processedAt: "2026-10-20T15:00:00.000Z", recordedAt: at });
+  await store.addCryptoDeposit({ id: "co-mint", accountId: "acc_co", chainId: 31337, token: "EURE", txHash: H(931), logIndex: 0, from: `0x${"0".repeat(40)}`,
+    amountUnits: "77000000000000000000", amountEur: 77, creditedEur: 77, settlementAsset: "EURE", holding: "none", settledAt: at, arrivedAt: at, txs: [], detectedAt: at, updatedAt: at } as any);
+  await writeStatementLines();
+  const lineB = async () => (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "monerium:issue:ord-mint-b")!;
+  assert.equal((await lineB()).txHash, H(931));
+  // An earlier equal credit is recorded late: processed first, it takes the one mint.
+  await store.recordMoneriumIssue({ orderId: "ord-mint-a", accountId: "acc_co", amountEur: 77, processedAt: "2026-10-20T14:59:00.000Z", recordedAt: at });
+  await writeStatementLines();
+  const b = await lineB();
+  assert.equal(b.txHash, undefined, "the stored row, which the CSV export reads");
+  assert.deepEqual(b.statement!.links.txHashes, []);
+  assert.equal((await store.ledgerOf("org_co")).find((e) => e.statement?.key === "monerium:issue:ord-mint-a")!.txHash, H(931));
 });
 
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {
