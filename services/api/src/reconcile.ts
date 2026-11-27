@@ -22,7 +22,7 @@ import { usersWithOwnCredentials } from "./adapters/monerium-connection.js";
 import { moneriumSandboxEnabled } from "./config.js";
 import { store } from "./store.js";
 import { eur } from "./chain.js";
-import { listProcessedIssueOrders } from "./adapters/monerium-sandbox.js";
+import { companiesWithOwnKeys, listProcessedIssueOrders } from "./adapters/monerium-sandbox.js";
 import { moneyInHolder } from "./bookkeeping/money-in.js";
 
 export type FindingKind = "UNMIRRORED" | "PHANTOM" | "CONVERSION_OVERLAP";
@@ -54,9 +54,10 @@ export async function reconcile(): Promise<ReconcileReport> {
 
   // --- mirror seam: Monerium's deposits vs the ones we credited ------------
   let moneriumOrders: Awaited<ReturnType<typeof listProcessedIssueOrders>> = [];
-  // App credentials OR any account on its own keys: listProcessedIssueOrders
-  // already walks both, so an API-keys-only deployment is reconciled too.
-  if (moneriumSandboxEnabled() || (await usersWithOwnCredentials()).length > 0) {
+  // App credentials OR any user or company on its own keys:
+  // listProcessedIssueOrders walks all three, so a deployment with only
+  // API keys, a person's or a company's, is reconciled too.
+  if (moneriumSandboxEnabled() || (await usersWithOwnCredentials()).length > 0 || (await companiesWithOwnKeys()).length > 0) {
     moneriumOrders = await listProcessedIssueOrders();
     const known = new Map(moneriumOrders.map((o) => [o.id, o]));
 

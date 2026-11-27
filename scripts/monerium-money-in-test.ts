@@ -469,6 +469,23 @@ await check("a company's keys that fail are skipped; the other sources are still
   assert.ok(warned.some((w) => w.includes("org_co")), warned.join(" | "));
 });
 
+await check("a company credit the scanner saw as a mint and the poller as an issue order is one sepa_in line, no eure_in", async () => {
+  const { settleOnArrival } = await import("../services/api/src/adapters/crypto-deposits.js");
+  const id = issue(COMPANY_SAFE, "33.00");
+  coOrders.set(id, orders.get(id));
+  orders.delete(id);
+  const mint = await store.addCryptoDeposit({
+    id: "co-mint", accountId: "acc_co", chainId: 31337, token: "EURE", txHash: `0x${"9a".repeat(32)}`, logIndex: 0,
+    from: `0x${"0".repeat(40)}`, amountUnits: "33000000000000000000", amountEur: 33, creditedEur: 33, settlementAsset: "EURE",
+    paymentAddress: COMPANY_SAFE, holding: "awaiting_approval", txs: [], arrivedAt: now, detectedAt: now, updatedAt: now,
+  } as any);
+  await settleOnArrival(mint);
+  await pollDepositsOnce();
+  const lines = (await store.ledgerOf("org_co")).filter((e) => e.statement?.links.orderId === id || e.statement?.links.depositId === "co-mint");
+  assert.deepEqual(lines.map((e) => e.statement!.event), ["sepa_in"], JSON.stringify(lines.map((e) => e.statement)));
+  assert.equal(lines[0].statement!.amountCents, 3300);
+});
+
 await check("a company invoice paid by bank with its number is settled when the credit lands on the company's Safe", async () => {
   const invoiceId = "inv_co_bank";
   await store.addInvoice({
@@ -494,6 +511,45 @@ await check("a company invoice paid by bank with its number is settled when the 
   assert.equal(inv.state, "PAID", JSON.stringify(inv.settlements));
   assert.equal(inv.settlements?.length, 1);
   assert.equal((inv.settlements![0] as any).matchedOn, "invoice-number");
+  // A later number that reads alike ("CO/2026/0042"): the re-polled credit is
+  // already on the paid invoice and pays no second one.
+  await store.addInvoice({ ...(await store.findInvoice(invoiceId))!, id: "inv_co_alike", state: "SUBMITTED", settlements: [], payment: undefined,
+    issued: { ...(await store.findInvoice(invoiceId))!.issued!, number: "CO/2026/0042" } } as any);
+  await pollDepositsOnce();
+  assert.equal((await store.findInvoice("inv_co_alike"))!.state, "SUBMITTED", "one bank order pays one invoice");
+  assert.equal(((await store.findInvoice("inv_co_alike"))!.settlements ?? []).length, 0);
+  // A new credit quoting that number names both: left for a person, the paid one is not the excuse to pick the other.
+  const again = issue(COMPANY_SAFE);
+  coOrders.set(again, { ...orders.get(again), memo: "CO/2026/0042" });
+  orders.delete(again);
+  await pollDepositsOnce();
+  assert.equal(((await store.findInvoice("inv_co_alike"))!.settlements ?? []).length, 0, "ambiguous over every issued number");
+  assert.equal((await store.findInvoice(invoiceId))!.settlements?.length, 1);
+});
+
+await check("the reconciler runs on company keys alone, and does not report a company credit on another chain or currency", async () => {
+  const { MONERIUM } = await import("../services/api/src/config.js");
+  const onOtherChain = issue(COMPANY_SAFE);
+  coOrders.set(onOtherChain, { ...orders.get(onOtherChain), chain: "ethereum" });
+  orders.delete(onOtherChain);
+  const inGbp = issue(COMPANY_SAFE);
+  coOrders.set(inGbp, { ...orders.get(inGbp), currency: "gbp" });
+  orders.delete(inGbp);
+  const missed = issue(COMPANY_SAFE);
+  coOrders.set(missed, orders.get(missed));
+  orders.delete(missed);
+  const appId = MONERIUM.clientId;
+  (MONERIUM as any).clientId = ""; // no app keys; no user has their own
+  try {
+    const report = await reconcile();
+    assert.ok(report.findings.some((f) => f.kind === "UNMIRRORED" && f.orderId === missed), "company keys alone open the comparison");
+    assert.ok(!report.findings.some((f) => f.orderId === onOtherChain || f.orderId === inGbp), JSON.stringify(report.findings));
+  } finally {
+    (MONERIUM as any).clientId = appId;
+  }
+  await pollDepositsOnce();
+  assert.equal(await store.isOrderProcessed(onOtherChain), false);
+  assert.equal(await store.isOrderProcessed(inGbp), false);
 });
 
 console.log("\nFail closed");

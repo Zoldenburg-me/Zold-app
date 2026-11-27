@@ -741,17 +741,22 @@ export async function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike):
     const holder = await moneyInHolder(address);
     const orgIds = holder.kind === "user" ? await orgsBackedBy(holder.user.id) : holder.kind === "account" ? new Set([holder.org.id]) : undefined;
     if (!orgIds) return;
-    const named = (await store.list("invoices")).filter(
+    const invoices = await store.list("invoices");
+    // One bank order pays one invoice: once it is on any invoice (by number or
+    // a pay link), a re-seen order settles no other, whatever state that one is in.
+    const ref = `monerium:${order.id}`;
+    if (invoices.some((invoice) => (invoice.settlements ?? []).some((s) => settlementRef(s) === ref))) return;
+    // Ambiguity is judged over every issued number, settled ones too: "INV-1"
+    // and "INV/1" read alike, and a paid one must not hand its credit on.
+    const named = invoices.filter(
       (invoice) =>
         invoice.direction === "outgoing" &&
         orgIds.has(invoice.orgId) &&
         invoice.state !== "DELETED" &&
-        invoice.state !== "PAID" &&
-        invoice.state !== "RECONCILED" &&
         orderNamesInvoice(order, invoice),
     );
     if (named.length === 1) {
-      await recordBankSettlement(named[0].id, order, "invoice-number");
+      if (named[0].state !== "PAID" && named[0].state !== "RECONCILED") await recordBankSettlement(named[0].id, order, "invoice-number");
     } else if (named.length > 1) {
       // One credit quoting several numbers cannot be split by guessing; leave it
       // for a person rather than book all of it against whichever came first.
