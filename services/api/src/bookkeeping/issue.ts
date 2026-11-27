@@ -5,7 +5,8 @@
  * returns the existing document, and only replace revokes it for a new one.
  */
 import { randomUUID } from "node:crypto";
-import type { LedgerEntry } from "../domain/types.js";
+import { CHAIN_ID } from "../config.js";
+import type { Account, LedgerEntry, Organisation } from "../domain/types.js";
 import { holderBlock, newDocumentCode, normaliseCode, signSnapshot, type HolderBlock, type StoredDocument } from "../documents.js";
 import { store } from "../store.js";
 import { personKey } from "../users/verified-name.js";
@@ -27,12 +28,50 @@ export function holderFor(user: Parameters<typeof holderBlock>[0], profile: Hold
   };
 }
 
+/**
+ * A company account on its own Safe has no backing person: the company holds
+ * the IBAN. Its name is Monerium's for the corporate profile recorded on the
+ * account, else the org's legal name. Neither counts as verified here: the
+ * account's profile record is from its last check, not a verification.
+ */
+export function companyHolder(org: Organisation, account: Account): HolderBlock {
+  const profile = account.moneriumProfile;
+  const name = (profile?.kind === "corporate" && profile.name) || org.legalName || org.name;
+  return {
+    name,
+    nameSource: "self-declared",
+    addressLines: org.address?.country ? [org.address.country.toUpperCase()] : [],
+    ...(account.identifier.iban ? { iban: account.identifier.iban } : {}),
+    safeAddress: account.address!,
+    chainId: CHAIN_ID,
+    accountSince: account.createdAt,
+    ...(profile ? { moneriumProfile: { id: profile.id, kind: profile.kind, ...(profile.name ? { name: profile.name } : {}), checkedAt: profile.checkedAt } } : {}),
+  };
+}
+
+/** Who a company document is filed under: its earliest active owner. */
+async function companyFiler(orgId: string): Promise<string | undefined> {
+  const owners = (await store.membersOf(orgId)).filter((m) => m.role === "owner" && m.status === "active" && m.userId);
+  owners.sort((a, b) => (a.acceptedAt ?? a.invitedAt).localeCompare(b.acceptedAt ?? b.invitedAt));
+  return owners[0]?.userId;
+}
+
+/** Whose account the line is on: the backing person, or for a company
+ *  account on its own Safe, the company. */
+async function holderOf(account: Account | undefined): Promise<{ userId: string; holder: HolderBlock }> {
+  const user = account?.backingUserId ? (await store.findUser(account.backingUserId)) : undefined;
+  if (user) return { userId: user.id, holder: holderFor(user, account?.moneriumProfile) };
+  const org = account && !account.backingUserId && account.address ? (await store.findOrganisation(account.orgId)) : undefined;
+  const filer = org ? await companyFiler(org.id) : undefined;
+  if (!org || !filer) throw new Error("the line's account has no backing user or owning company, so there is no account holder to name");
+  return { userId: filer, holder: companyHolder(org, account!) };
+}
+
 export async function belegContextFor(entry: LedgerEntry): Promise<BelegContext & { userId: string }> {
   const s = entry.statement;
   if (!s) throw new Error("only a statement line has a Beleg");
   const account = entry.source.kind === "account" ? (await store.findAccount(entry.source.accountId)) : undefined;
-  const user = account?.backingUserId ? (await store.findUser(account.backingUserId)) : undefined;
-  if (!user) throw new Error("the line's account has no backing user, so there is no account holder to name");
+  const { userId, holder } = await holderOf(account);
   const deposit = s.links.depositId ? (await store.list("cryptoDeposits")).find((d) => d.id === s.links.depositId) : undefined;
   const transfer = s.links.transferId ? (await store.findTransfer(s.links.transferId)) : undefined;
   const issueOrder = s.links.orderId && !transfer ? (await store.list("moneriumIssueOrders")).find((o) => o.orderId === s.links.orderId) : undefined;
@@ -42,8 +81,8 @@ export async function belegContextFor(entry: LedgerEntry): Promise<BelegContext 
   // Whoever the invoice is with: its recipient if we issued it, its supplier if we pay it.
   const invoiceCounterpartyName = invoice?.issued?.recipient?.name ?? invoice?.supplier?.orgName;
   return {
-    userId: user.id,
-    holder: holderFor(user, account?.moneriumProfile),
+    userId,
+    holder,
     ...(deposit ? { deposit } : {}),
     ...(transfer ? { transfer } : {}),
     ...(issueOrder ? { issueOrder } : {}),
