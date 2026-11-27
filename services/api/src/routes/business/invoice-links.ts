@@ -13,7 +13,7 @@
 import express from "express";
 import { store } from "../../store.js";
 import { ContactError, chainName } from "../../domain/contacts.js";
-import { CHAIN_ID } from "../../config.js";
+import { CHAIN_ID, cryptoSendEnabled } from "../../config.js";
 import { mailAvailable, sendInvoiceSubmitted, sendSendLinkFilled } from "../../adapters/mailer.js";
 import {
   InvoiceError,
@@ -97,8 +97,11 @@ const payeeState = async (invoice: Invoice): Promise<Invoice> => {
 };
 
 /** The chains a supplier may name for a wallet payout: the one this
- *  deployment runs on, the only one the payor's account holds money on. */
-export const payoutChains = () => [{ chainId: CHAIN_ID, name: chainName(CHAIN_ID) }];
+ *  deployment runs on, the only one the payor's account holds money on, and
+ *  none where sending to a wallet is off: a wallet nobody could pay is not
+ *  taken, and the pages offer no wallet field. */
+export const payoutChains = () => (cryptoSendEnabled() ? [{ chainId: CHAIN_ID, name: chainName(CHAIN_ID) }] : []);
+const wrongChain = () => (payoutChains().length ? `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` : "Paying to a wallet is not open here. Give a bank account.");
 
 /**
  * Mail whoever made the link that the supplier submitted it. Never blocks or
@@ -203,7 +206,7 @@ export function createInvoiceLinkRouter(): express.Router {
         const payTo = parsePayTo(raw && typeof raw === "object" && raw.kind === "bank" ? { kind: "bank", bank: { ...(raw.bank ?? raw), holderName: name } } : raw, "EUR");
         if (!payTo) return res.status(400).json({ error: "Say where to send the money: an IBAN or a wallet address." });
         if (payTo.kind === "wallet" && !payoutChains().some((c) => c.chainId === payTo.chainId)) {
-          return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+          return res.status(400).json({ error: wrongChain() });
         }
         try { assertSendLinkLimit(invoice.sendLink, total); } catch (err) {
           recordFailure(missKey, SEND_LIMIT_MISS_WINDOW_MS);
@@ -254,7 +257,7 @@ export function createInvoiceLinkRouter(): express.Router {
       const unpayable = payToProblem(invoice.currency, payTo);
       if (unpayable) return res.status(400).json({ error: unpayable });
       if (payTo?.kind === "wallet" && !payoutChains().some((c) => c.chainId === payTo.chainId)) {
-        return res.status(400).json({ error: `A wallet must be on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+        return res.status(400).json({ error: wrongChain() });
       }
       assertInvoiceTransition(invoice.state, "SUBMITTED");
       // Only over a link still waiting: the first submit stands.

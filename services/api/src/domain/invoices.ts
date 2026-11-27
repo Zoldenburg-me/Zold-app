@@ -86,6 +86,30 @@ export function payToProblem(currency: string, payTo: Invoice["payTo"]): string 
   return currency === "EUR" ? "Say where to pay: an IBAN or a wallet address." : "Say where to pay: a wallet address.";
 }
 
+const decimal = (s: string) => s.trim().replace(/^0+(?=\d)/, "").replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+
+/**
+ * Why a wallet line no longer pays its invoice, or undefined. A run is
+ * editable after Pay made it, and a sent-back run is released from its
+ * invoice (syncInvoicePayment): the invoice follows the send to PAID, so the
+ * send must still be this invoice's payment, for exactly what it bills, to
+ * the wallet the supplier gave. Compared as decimals, never rounded.
+ */
+export function walletLineProblem(
+  invoice: Invoice | undefined,
+  draftId: string,
+  line: { asset: string; amount: string; destination: { address?: string } },
+): string | undefined {
+  if (!invoice || invoice.state !== "PAYING" || invoice.payment?.draftId !== draftId) {
+    return "This run no longer pays its invoice. Cancel it and pay the invoice again from Invoices.";
+  }
+  const p = invoice.payTo;
+  const asset = WALLET_ASSET[invoice.currency];
+  const exact = p?.kind === "wallet" && !!p.address && p.address.toLowerCase() === String(line.destination.address ?? "").toLowerCase()
+    && line.asset.toUpperCase() === asset && decimal(line.amount) === decimal(invoice.total);
+  return exact ? undefined : `A run that pays an invoice sends exactly what it bills, ${invoice.total} ${asset ?? invoice.currency}, to the wallet the supplier gave. Cancel it and pay the invoice again from Invoices.`;
+}
+
 export type InvoicePayee =
   | { kind: "bank"; iban: string; holderName: string; bic?: string }
   | { kind: "wallet"; address: `0x${string}`; chainId: number; asset: "EURE" | "USDC" };

@@ -19,6 +19,7 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-sen
 process.env.TRANSF_CHAIN_ID = "31337";
 process.env.TRANSF_RPC_URL ??= "http://127.0.0.1:18545";
 process.env.LOCAL_HARNESS = "";
+process.env.CRYPTO_SEND_ENABLED = "1";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 

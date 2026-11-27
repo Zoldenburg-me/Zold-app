@@ -6,7 +6,7 @@
  * and nowhere else. An action that opens a drawer returns "keep", so the
  * shell does not draw the page again under it.
  */
-import { $, Z, api, cap, chainId, day, deviceLib, dialog, esc, eur, maskIban, me, org, plain, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
+import { $, Z, api, cap, chainId, day, deviceLib, dialog, esc, eur, maskIban, me, org, plain, readHealth, reviewOn, roleCan, ROLE_WORD, setPersonalLater, setView, toast, token, view } from "./core.js";
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
 import { sendAmount, sendState, walletOf } from "./send.js";
 import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
@@ -965,6 +965,8 @@ export const ACTIONS = {
   },
   "invoice-link": async (el) => {
     const r = await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/link`);
+    // One overlay at a time: the drawer closes before the dialog opens.
+    Z.closeOverlay("inv-drawer");
     setTimeout(() => linkDialog("Copy the invoice link", "Anyone with this link can open the invoice.", location.origin + r.linkPath), 0);
     return "keep";
   },
@@ -978,11 +980,14 @@ export const ACTIONS = {
       await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/reconcile`, { method: "POST", body: { note: $("#d-note").value || undefined } });
       toast("Marked as paid.");
     }, { okLabel: "Mark as paid" }),
-  "new-invoice": () => dialog("Request an invoice",
-    `<p class="desc">Your supplier fills in a link, with no account. You pay it by bank transfer, or to their wallet.</p>
+  "new-invoice": async () => {
+    // A wallet is offered only where the API would pay one (capabilities().cryptoSend).
+    const wallets = (await readHealth().catch(() => null))?.capabilities?.cryptoSend === true;
+    dialog("Request an invoice",
+    `<p class="desc">Your supplier fills in a link, with no account. You pay it by bank transfer${wallets ? ", or to their wallet" : ""}.</p>
      <label for="d-cur">Currency</label><select id="d-cur" name="currency">
-       <option value="EUR">Euro: bank transfer, or EURe to a wallet</option>
-       <option value="USD"${org.reporting.currency === "USD" ? " selected" : ""}>US dollar: USDC to a wallet</option></select>
+       <option value="EUR">Euro: bank transfer${wallets ? ", or EURe to a wallet" : ""}</option>
+       ${wallets ? `<option value="USD"${org.reporting.currency === "USD" ? " selected" : ""}>US dollar: USDC to a wallet</option>` : ""}</select>
      ${field("d-due", 'Due <span class="desc">(optional)</span>', 'type="date"')}
      ${field("d-pw", 'Password <span class="desc">(optional, 12 characters or more)</span>', 'type="password" autocomplete="new-password" minlength="12" placeholder="Send it separately from the link…"')}`,
     async () => {
@@ -991,7 +996,8 @@ export const ACTIONS = {
         body: { currency: $("#d-cur").value, dueDate: $("#d-due").value || undefined, password: $("#d-pw").value || undefined },
       });
       setTimeout(() => linkDialog("Copy the invoice link", plain(r.note) || "Send it to your supplier yourself.", location.origin + r.linkPath), 0);
-    }, { okLabel: "Create link" }),
+    }, { okLabel: "Create link" });
+  },
   "new-coa": () => dialog("Add a category",
     `${field("d-code", "Code", 'inputmode="numeric" placeholder="6400…"')}
      ${field("d-name", "Name", 'placeholder="Marketing…"')}

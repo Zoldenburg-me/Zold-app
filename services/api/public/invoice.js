@@ -283,9 +283,9 @@ function renderForm(inv) {
       <label for="f-holder">Account holder</label><input id="f-holder" placeholder="Name on the account" />
       <label for="f-iban">IBAN</label><input id="f-iban" placeholder="DE89 3704 0044 0532 0130 00" />
       <label for="f-bic">BIC (optional)</label><input id="f-bic" placeholder="COBADEFFXXX" />
-      <details style="margin-top:.8rem"><summary style="cursor:pointer;color:var(--muted)">Or a wallet address instead, paid in EURe</summary>
+      ${chains.length ? `<details style="margin-top:.8rem"><summary style="cursor:pointer;color:var(--muted)">Or a wallet address instead, paid in EURe</summary>
         ${walletFields}
-      </details>`}
+      </details>` : ""}`}
     </div>
     <div style="margin-top:1.2rem"><button id="submit">Submit invoice</button></div>
     <div id="err" role="alert"></div>`;
@@ -306,7 +306,7 @@ function renderForm(inv) {
   $("#submit").onclick = async () => {
     $("#err").innerHTML = ""; $("#submit").disabled = true;
     try {
-      const wallet = $("#f-wallet").value.trim();
+      const wallet = $("#f-wallet")?.value.trim();
       const iban = usd ? "" : $("#f-iban").value.trim();
       const payTo = iban
         ? { kind: "bank", bank: { holderName: $("#f-holder").value.trim() || $("#f-org").value.trim(), iban, bic: $("#f-bic").value.trim() || undefined } }

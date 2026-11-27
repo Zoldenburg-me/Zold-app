@@ -144,6 +144,10 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
     if (!(INVOICE_CURRENCIES as readonly string[]).includes(currency)) {
       return res.status(400).json({ error: `An invoice can be requested in ${INVOICE_CURRENCIES.join(" or ")}.` });
     }
+    // A dollar invoice is paid to a wallet only: no link where no wallet can be paid.
+    if (currency === "USD" && !payoutChains().length) {
+      return res.status(400).json({ error: "Dollar invoices are paid in USDC to a wallet, and sending to a wallet is not open here." });
+    }
     const dueDate = req.body?.dueDate;
     if (badDueDate(dueDate)) {
       return res.status(400).json({ error: "The due date must be a date, YYYY-MM-DD." });
@@ -225,16 +229,18 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         throw err;
       }
       if (payee.kind === "wallet" && !payoutChains().some((c) => c.chainId === payee.chainId)) {
-        return res.status(409).json({ error: `The supplier's wallet is on another network; this account pays on ${payoutChains().map((c) => c.name).join(" or ")}.` });
+        return res.status(409).json({ error: payoutChains().length
+          ? `The supplier's wallet is on another network; this account pays on ${payoutChains().map((c) => c.name).join(" or ")}.`
+          : "Sending to a wallet is not open here. Reconcile this invoice once it is paid another way." });
       }
 
-      // A wallet is paid from the Safe behind the account, in the invoice's
-      // token: the euro account stands for it when no account is in dollars.
+      // A wallet is paid from the Safe behind the euro account, in the
+      // invoice's token: a dollar account is gated and has no Safe of its own.
       const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : undefined;
       const accounts = await store.accountsOf(ctx.org.id);
       const account = accountId
         ? (await store.findAccount(accountId))
-        : accounts.find((a) => a.currency === invoice.currency) ?? (payee.kind === "wallet" ? accounts.find((a) => a.currency === "EUR") : undefined);
+        : accounts.find((a) => a.currency === (payee.kind === "wallet" ? "EUR" : invoice.currency));
       if (!account || account.orgId !== ctx.org.id) {
         return res.status(400).json({ error: `This organisation has no ${invoice.currency} account to pay from.` });
       }
