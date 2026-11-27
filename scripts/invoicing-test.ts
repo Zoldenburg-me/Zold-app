@@ -324,6 +324,20 @@ check("EU reverse charge demands BOTH VAT IDs", () => {
     }),
   );
   assert.ok(noIssuerId.errors.some((e) => e.field === "issuer.vatId"));
+
+  // A note in place of the USt-IdNr. issues after a confirmed warning; a
+  // corrected invoice follows once the number is granted.
+  const pending = checkCompliance(
+    draft({
+      treatment: t,
+      issuer: { ...issuer, vatId: "USt-IdNr. beantragt" },
+      recipient: { ...recipient, country: "SE", vatId: "SE556677889901" },
+    }),
+  );
+  assert.equal(pending.ok, true, pending.errors.map((e) => e.message).join("; "));
+  const noted = pending.warnings.filter((w) => w.field === "issuer.vatId");
+  assert.equal(noted.length, 1, "one warning for the note, not a second 'not a VAT ID' one");
+  assert.match(noted[0].message, /corrected invoice/);
 });
 
 check("reverse charge to a German customer is flagged as probably wrong", () => {

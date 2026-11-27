@@ -951,6 +951,7 @@ function checkGermanContent(
 ): void {
   const { totals, regime, smallBusiness, notVerified, add } = ctx;
   const basis = (de: string, _eu?: string) => de;
+  let issuerVatIdWarned = false;
   if (!has(draft.issueDate)) {
     add("error", "issueDate", "The issue date is required.", basis("§ 14 Abs. 4 Nr. 3 UStG", "Art. 226(1) VAT Directive"));
   }
@@ -1032,13 +1033,27 @@ function checkGermanContent(
           requiresRecipientVatId: custom.requiresRecipientVatId === true,
         }
       : shown;
-    if (reason?.requiresIssuerVatId && !vatIdLooksValid(draft.issuer.vatId ?? "")) {
-      add(
-        "error",
-        "issuer.vatId",
-        `${reason.label} requires your USt-IdNr. on the invoice.`,
-        reason.legalBasis,
-      );
+    const issuerVatId = (draft.issuer.vatId ?? "").trim();
+    if (reason?.requiresIssuerVatId && !vatIdLooksValid(issuerVatId)) {
+      // A note in the field ("USt-IdNr. beantragt") is the issuer saying the
+      // number is applied for and a corrected invoice follows (§31 Abs. 5 UStDV):
+      // it issues after a confirmed warning. An empty field still refuses.
+      if (issuerVatId) {
+        add(
+          "warning",
+          "issuer.vatId",
+          `${reason.label} needs your USt-IdNr. on the invoice. "${issuerVatId}" prints in its place; issue a corrected invoice once you have the number.`,
+          reason.legalBasis,
+        );
+        issuerVatIdWarned = true;
+      } else {
+        add(
+          "error",
+          "issuer.vatId",
+          `${reason.label} requires your USt-IdNr. on the invoice.`,
+          reason.legalBasis,
+        );
+      }
     }
     if (reason?.requiresRecipientVatId) {
       // A built-in EU reason means an EU VAT ID, and that shape is checkable.
@@ -1096,7 +1111,7 @@ function checkGermanContent(
     }
   }
   // Outside the EU Zold knows no format for the issuer's identifier.
-  if (has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
+  if (!issuerVatIdWarned && has(draft.issuer.vatId) && !vatIdLooksValid(draft.issuer.vatId!)) {
     add("warning", "issuer.vatId", `${draft.issuer.vatId} does not look like a VAT ID.`);
   }
   if (has(draft.recipient.vatId)) {
