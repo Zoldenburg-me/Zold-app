@@ -152,7 +152,7 @@ With in-memory pending executions, an unknown state must not keep signing.
   approval for every non-GET, bound to its method, path and body. Operator
   passkeys verify against `ADMIN_ORIGIN` only, with its host as their RP ID
   (not the app's `RP_ID`), so the admin host can be any name, such as
-  `admin.zoldhq.com`. There is no shared operator
+  `ops.zoldhq.com`. There is no shared operator
   token, and an operator session is never a user session.
 
 ### 4.2 The three independent checks
