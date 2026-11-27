@@ -35,7 +35,7 @@ key lives, and its backup, is in the owner's private notes.
 | Role | Setting | Key | Chains |
 |---|---|---|---|
 | Candide custodial withdrawer: recovers a payment-page deposit stuck in its forwarding address, after Candide's timelock | `CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER` (address) | owner; it withdraws with a transaction on the chain the deposit went to, so it must exist at its address on every source chain a page accepts: an EOA, or a Safe deployed at the same address on each. Mainnet pages accept Base only (`CANDIDE_FORWARDING_SOURCE_CHAIN_IDS` unset), where the mainnet withdrawer Safe is deployed | Base mainnet. Base Sepolia pages take zUSD straight into the Safe and do not use it |
-| Zoldenburg recovery guardian | `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` (address) | owner, hardware wallet only; on Base mainnet a 1-of-3 Safe the owner holds, confirmed in Safe Cover because /admin takes ECDSA only (`docs/recovery-and-signers.md`) | both |
+| Zoldenburg recovery guardian | `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` (address) | owner; a hardware-wallet EOA where /admin signs; on Base mainnet a 1-of-3 Safe the owner holds, confirmed in Safe Cover because /admin takes ECDSA only (`docs/recovery-and-signers.md`) | both |
 | Orchestrator: receives fees, submits payout steps | `ORCHESTRATOR_KEY` / `DEPLOY_ORCHESTRATOR_KEY` | server | both |
 | Ramp | `RAMP_KEY` / `DEPLOY_RAMP_KEY` | server | both |
 | Relay: pays gas for calls anyone may make, holds nothing else | `RELAY_KEY` | server | both |
