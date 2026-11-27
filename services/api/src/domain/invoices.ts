@@ -22,7 +22,7 @@ import type {
   InvoiceState,
 } from "./types.js";
 import type { CryptoDeposit } from "../store.js";
-import { chainName } from "./contacts.js";
+import { chainName, normaliseIban } from "./contacts.js";
 import { lineNetCents } from "./invoicing.js";
 
 export class InvoiceError extends Error {
@@ -108,6 +108,16 @@ export function walletLineProblem(
   const exact = p?.kind === "wallet" && !!p.address && p.address.toLowerCase() === String(line.destination.address ?? "").toLowerCase()
     && line.asset.toUpperCase() === asset && decimal(line.amount) === decimal(invoice.total);
   return exact ? undefined : `A run that pays an invoice sends exactly what it bills, ${invoice.total} ${asset ?? invoice.currency}, to the wallet the supplier gave. Cancel it and pay the invoice again from Invoices.`;
+}
+
+/** Why a bank line no longer pays the invoice it is linked to, or undefined:
+ *  the invoice follows the transfer to PAID, so the transfer is for exactly
+ *  what it bills, to the account the supplier gave. */
+export function bankLineProblem(invoice: Invoice, line: { amount: string }, iban: string): string | undefined {
+  const p = invoice.payTo;
+  const exact = invoice.currency === "EUR" && p?.kind === "bank" && !!p.bank?.iban
+    && normaliseIban(p.bank.iban) === normaliseIban(iban) && decimal(line.amount) === decimal(invoice.total);
+  return exact ? undefined : `A run that pays an invoice sends exactly what it bills, €${invoice.total}, to the account the supplier gave. Cancel it and pay the invoice again from Invoices.`;
 }
 
 export type InvoicePayee =

@@ -565,6 +565,27 @@ try {
     assert.equal(paidOther.draft.state, "DRAFT", "paying it is a draft, which goes through review like any other");
   });
 
+  // A run stays editable after Pay made it, and the invoice follows its
+  // transfer to PAID: an edited amount must not close the invoice.
+  const sendRun = async (d: any) => {
+    await ok("POST", `/api/orgs/${org.id}/drafts/${d.id}/submit`, { token: ownerToken });
+    await ok("POST", `/api/orgs/${org.id}/drafts/${d.id}/review`, { token: reviewer.sessionToken, body: { approve: true } });
+    return call("POST", `/api/orgs/${org.id}/drafts/${d.id}/execute`, { token: ownerToken });
+  };
+  const [ol] = paidOther.draft.lines;
+  await ok("PATCH", `/api/orgs/${org.id}/drafts/${paidOther.draft.id}`, {
+    token: ownerToken,
+    body: { lines: [{ id: ol.id, contactId: ol.contactId, invoiceId: ol.invoiceId, destination: ol.destination, asset: ol.asset, amount: "5.00" }] },
+  });
+  const underpaid = await sendRun(paidOther.draft);
+  const exact = await sendRun(paidFresh.draft);
+  check("a bank run edited to pay less than its invoice is refused; the untouched one reaches the quote", () => {
+    assert.equal(underpaid.status, 422, JSON.stringify(underpaid.data));
+    assert.match(underpaid.data.problems[0].reason, /exactly what it bills, €10\.00/);
+    assert.equal(exact.status, 409, JSON.stringify(exact.data));
+    assert.equal(exact.data.code, "MONERIUM_NOT_CONNECTED");
+  });
+
   console.log(`\nDRAFT EXECUTION TEST PASSED — ${passed}/${passed} checks.`);
   console.log("Draft execution is the same code path as a direct transfer, refuses as a whole,");
   console.log("and moves nothing without the account holder's device.\n");

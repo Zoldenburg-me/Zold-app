@@ -131,7 +131,7 @@ const contact = async (id: string, name: string, iban: string) => {
 const first = await contact("c_first", "First Supplier GmbH", "DE89370400440532013000");
 const second = await contact("c_second", "Second Supplier GmbH", "DE02120300000000202051");
 
-const invoice = async (id: string, number: string) =>
+const invoice = async (id: string, number: string, iban: string) =>
   await store.addInvoice({
     id,
     direction: "incoming",
@@ -142,12 +142,13 @@ const invoice = async (id: string, number: string) =>
     lines: [],
     currency: "EUR",
     total: "40.00",
+    payTo: { kind: "bank", bank: { holderName: number, iban } },
     payment: { draftId: "d_batch" },
     createdAt: now,
     updatedAt: now,
   } as any);
-await invoice("inv_first", "R-1");
-await invoice("inv_second", "R-2");
+await invoice("inv_first", "R-1", first.bankAccounts[0].iban);
+await invoice("inv_second", "R-2", second.bankAccounts[0].iban);
 
 const line = (id: string, c: Awaited<ReturnType<typeof contact>>, invoiceId: string) => {
   const l = {

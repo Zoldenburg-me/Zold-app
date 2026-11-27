@@ -14,7 +14,7 @@
  * because an address-book edit can land between approval and execution.
  */
 import express from "express";
-import { walletLineProblem } from "../../domain/invoices.js";
+import { bankLineProblem, walletLineProblem } from "../../domain/invoices.js";
 import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
 import { FX, railFeeEur } from "../../config.js";
@@ -655,6 +655,14 @@ export function createDraftRoutes(
           lineId: line.id,
           reason: `${def?.name ?? bank.currency} payouts are not open: ${def?.needs ?? "no rail"}`,
         });
+        continue;
+      }
+      // A linked invoice follows this transfer to PAID, and a sent-back run
+      // is editable: an edited amount or account must not close it.
+      const linked = line.invoiceId ? (await invoiceOf(checked.orgId, line.invoiceId)) : undefined;
+      const invoiceProblem = linked?.state === "PAYING" && linked.payment?.draftId === checked.id ? bankLineProblem(linked, line, bank.iban) : undefined;
+      if (invoiceProblem) {
+        problems.push({ lineId: line.id, reason: invoiceProblem });
         continue;
       }
       const sendEur = roundEur(Number(line.amount));
