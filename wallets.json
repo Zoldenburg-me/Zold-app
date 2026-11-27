@@ -6,7 +6,7 @@
       "keyHolder": "unknown"
     },
     "0x222222222211B5eB5be634822404F66f1A3adB00": {
-      "role": "Zoldenburg recovery guardian and Candide custodial withdrawer: a Safe whose signer is the owner's hardware wallet",
+      "role": "Zoldenburg recovery guardian and Candide custodial withdrawer: a 1-of-3 Safe the owner holds",
       "env": ["CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER", "CANDIDE_RECOVERY_GUARDIAN_ADDRESS"],
       "keyHolder": "owner"
     },

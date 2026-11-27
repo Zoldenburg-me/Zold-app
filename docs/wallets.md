@@ -35,7 +35,7 @@ key lives, and its backup, is in the owner's private notes.
 | Role | Setting | Key | Chains |
 |---|---|---|---|
 | Candide custodial withdrawer: recovers a payment-page deposit stuck in its forwarding address, after Candide's timelock | `CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER` (address) | owner; it withdraws with a transaction on the chain the deposit went to, so it must exist at its address on every source chain a page accepts: an EOA, or a Safe deployed at the same address on each. Mainnet pages accept Base only (`CANDIDE_FORWARDING_SOURCE_CHAIN_IDS` unset), where the mainnet withdrawer Safe is deployed | Base mainnet. Base Sepolia pages take zUSD straight into the Safe and do not use it |
-| Zoldenburg recovery guardian | `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` (address) | owner, hardware wallet only; on Base mainnet a Safe whose only signer is that hardware wallet, confirmed in Safe Cover because /admin takes ECDSA only (`docs/recovery-and-signers.md`) | both |
+| Zoldenburg recovery guardian | `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` (address) | owner, hardware wallet only; on Base mainnet a 1-of-3 Safe the owner holds, confirmed in Safe Cover because /admin takes ECDSA only (`docs/recovery-and-signers.md`) | both |
 | Orchestrator: receives fees, submits payout steps | `ORCHESTRATOR_KEY` / `DEPLOY_ORCHESTRATOR_KEY` | server | both |
 | Ramp | `RAMP_KEY` / `DEPLOY_RAMP_KEY` | server | both |
 | Relay: pays gas for calls anyone may make, holds nothing else | `RELAY_KEY` | server | both |
@@ -52,8 +52,8 @@ wallets and live in `deployments.json` or code.
 
 The Akash mainnet lease still uses the old withdrawer, whose `keyHolder` is
 `"unknown"`, so preflight fails on its env. The replacement,
-`0x222222222211B5eB5be634822404F66f1A3adB00` (a Safe whose signer is the
-owner's hardware wallet, also the Zoldenburg recovery guardian), is registered
+`0x222222222211B5eB5be634822404F66f1A3adB00` (a 1-of-3 Safe the owner
+holds, also the Zoldenburg recovery guardian), is registered
 and set in the Oracle host's mainnet env. It takes effect at the cut-over,
 and from then on steps 4 to 6 apply. Adding a source chain to
 `CANDIDE_FORWARDING_SOURCE_CHAIN_IDS` first needs that Safe deployed at the
