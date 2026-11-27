@@ -178,6 +178,15 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       next.logoId = checked.id;
     }
     if ("logoId" in next && next.logoId !== stored?.logoId && !requirePermission(ctx, res, "org.update")) return;
+    // On a logo change, keep only the logos an issued invoice prints, the new
+    // one and the one it replaces (an issue in flight may have just read it):
+    // the map would otherwise grow by every image ever tried.
+    const keptLogos = "logoId" in next && next.logoId !== stored?.logoId
+      ? new Set([
+        ...(await store.invoicesOf(ctx.org.id)).flatMap((i) => (i.issued?.logoId ? [i.issued.logoId] : [])),
+        ...(stored?.logoId ? [stored.logoId] : []),
+      ])
+      : undefined;
     if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
       next.paymentTermsDays = Math.round(b.paymentTermsDays);
     }
@@ -248,7 +257,12 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     const org = await store.patchOrgSub(ctx.org.id, "invoicing", (cur) => ({
       ...(cur ?? {}),
       ...next,
-      ...(logo ? { logos: { ...(cur?.logos ?? {}), [logo.id]: logo.dataUrl } } : {}),
+      ...(keptLogos ? {
+        logos: {
+          ...Object.fromEntries(Object.entries(cur?.logos ?? {}).filter(([id]) => keptLogos.has(id))),
+          ...(logo ? { [logo.id]: logo.dataUrl } : {}),
+        },
+      } : {}),
     }), {
       ...(clearsSignupTaxId(identity.patch) ? { taxId: undefined } : {}),
     });

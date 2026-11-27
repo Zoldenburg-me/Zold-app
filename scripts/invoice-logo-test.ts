@@ -126,5 +126,13 @@ await check("a new logo, then none: the issued invoice keeps the one it was issu
   assert.equal((await printed(first.linkToken)).logo, png("A"));
 });
 
+await check("logos tried and replaced before any invoice used them are dropped; issued ones stay", async () => {
+  for (const x of ["C", "D", "E"]) assert.equal((await setLogo(png(x))).status, 200);
+  const kept = Object.values((await store.findOrganisation("org_de"))!.invoicing?.logos ?? {}).sort();
+  // A and B are on issued invoices, D is the one E replaced, E is current.
+  assert.deepEqual(kept, [png("A"), png("B"), png("D"), png("E")].sort());
+  assert.equal((await printed(first.linkToken)).logo, png("A"));
+});
+
 server.close();
 console.log(`\n${passed} passed${process.exitCode ? ", with failures" : ""}`);

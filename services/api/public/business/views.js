@@ -12,8 +12,6 @@
  */
 import { isOwnCompanyOrg } from "./access-model.js";
 import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, mayPayInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, toast, ymd, zipMode } from "./core.js";
-// Called from an event, after every module has loaded: shell.js imports this one.
-import { render } from "./shell.js";
 
 export const RENDER = {};
 export const META = {};
@@ -666,12 +664,13 @@ RENDER["invoicing-settings"] = async () => {
 
 /** Scale the picked file to fit 800 x 230 in the browser, then save it on its
  *  own: a logo is not part of the form's Save. The server checks it again. */
-function bindLogoUpload(box) {
+/** `rerender` is shell.js's render, passed in: shell.js imports this module. */
+function bindLogoUpload(box, rerender) {
   box.querySelector("#i-logo")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const img = await createImageBitmap(file);
+      const img = await createImageBitmap(file).catch(() => { throw new Error("That image could not be read. Use a PNG, JPEG or WebP file."); });
       const k = Math.min(1, 800 / img.width, 230 / img.height);
       const c = Object.assign(document.createElement("canvas"), { width: Math.round(img.width * k), height: Math.round(img.height * k) });
       c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
@@ -679,13 +678,22 @@ function bindLogoUpload(box) {
       // send (the server takes at most 40 kB, invoice-logo.ts).
       const fits = (u) => u.length * 0.75 <= 40_000;
       let logo = c.toDataURL("image/png");
-      if (!fits(logo)) logo = c.toDataURL("image/jpeg", 0.85);
+      if (!fits(logo)) {
+        // JPEG has no transparency: paint white behind, or it prints black.
+        const g = c.getContext("2d");
+        g.globalCompositeOperation = "destination-over";
+        g.fillStyle = "#fff";
+        g.fillRect(0, 0, c.width, c.height);
+        logo = c.toDataURL("image/jpeg", 0.85);
+      }
       if (!fits(logo)) throw new Error("This image is too detailed for a logo. Use a simpler one, such as the logo on a plain background.");
       await api(`/api/orgs/${org.id}/invoicing/profile`, { method: "PATCH", body: { logo } });
       toast("Logo saved. New invoices print it.");
-      await render();
+      await rerender();
     } catch (err) {
       toast(err?.message || "That image could not be read.", true);
+    } finally {
+      e.target.value = ""; // the same file picked again fires change again
     }
   });
 }

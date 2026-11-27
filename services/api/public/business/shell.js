@@ -90,7 +90,7 @@ export async function render({ focus = false } = {}) {
     if (mine !== seq) return;   // a later render owns the page
     const r = typeof out === "string" ? { html: out } : out;
     box.innerHTML = r.html;
-    r.bind?.(box);
+    r.bind?.(box, render);
     if (view === "export") {
       $("#x-month")?.addEventListener("change", (e) => { setExportMonth(e.target.value); render(); });
     }
