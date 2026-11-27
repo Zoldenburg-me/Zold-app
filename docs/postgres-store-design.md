@@ -909,8 +909,16 @@ stopped and read-only, until the owner closes it (§6 step 8).
   then PostgreSQL will not remove it from the pg_wal directory, which may
   cause the volume to run out of space". The documentation does not say
   whether a segment stored in one repository but not the other is reported
-  to Postgres as archived. S7b tests it on the host by blocking `repo2` and
-  watching `pg_wal` and `pg_stat_archiver`, and writes the result here. We do
+  to Postgres as archived. On the host it is not: with `repo2` blocked,
+  `repo1` still received segments (three of the five waiting ones by the
+  time the backlog alert fired), but Postgres kept every one of them `.ready`
+  and counted a failure each minute. So
+  `pg_wal` grows until both repositories hold a segment. The backlog alert
+  fired after five minutes; the archiving-failed and `pgbackrest check`
+  alerts fired too. With `repo2` unreachable, `pgbackrest check` takes about
+  two minutes, so that alerts run overlaps the next minute's, which then
+  does not run. Once `repo2` answered again, the five waiting segments were
+  archived within 30 seconds. We do
   **not** set `archive-push-queue-max`: on reaching it pgBackRest reports the
   WAL as archived and drops it, and "PITR will not be possible past that
   point" (<https://pgbackrest.org/configuration.html#section-archive/option-archive-push-queue-max>).
