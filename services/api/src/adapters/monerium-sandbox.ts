@@ -30,6 +30,10 @@ import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js
 import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
 import { moneriumAmountEur, moneriumOrderProcessed, redeemMemoDiffers, redeemOrderDiffers } from "../domain/monerium-order.js";
 import { can } from "../domain/segments.js";
+import { orgEntity } from "../domain/org-entity.js";
+import { companyEurAccount } from "../domain/org-monerium-iban.js";
+import type { Organisation } from "../domain/types.js";
+import { companyMoneriumClient, type CompanyMonerium } from "../routes/business/org-monerium-iban.js";
 
 /**
  * The bank facts of a processed issue order on our chain, for the statement
@@ -684,6 +688,7 @@ export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
       for (const o of list) if (o.kind === "issue" && isProcessed(o)) seen.set(o.id, o);
     }
   }
+  for (const o of (await companyIssueOrders())) if (o.kind === "issue" && isProcessed(o)) seen.set(o.id, o);
   return [...seen.values()];
 }
 
@@ -741,8 +746,42 @@ export async function pollDepositsOnce(): Promise<number> {
       }
     }
   }
+  // A company's own keys (routes/business/org-monerium.ts): its IBAN sits
+  // under its own profile, which neither the app's keys nor a member's see.
+  for (const order of (await companyIssueOrders())) {
+    if ((await mirrorOrder(order)) === "recorded") credited++;
+    if (moneriumAmountEur(order.amount) === undefined) continue;
+    await attributeMoneriumOrder(order);
+    await attributeMoneriumOrderToInvoice(order);
+    await keepIssueFacts(order);
+  }
   await writeStatementLines();
   return credited;
+}
+
+/**
+ * Orders on each company's own Monerium keys, for its own Safe only. Those
+ * keys are the company's to choose, so an order they list for any other
+ * address is not taken as the company's: mirrorOrder books by address, and
+ * this keeps a company's keys from feeding orders for someone else's Safe.
+ * A company whose keys fail is skipped; the others are still read.
+ */
+export async function companyIssueOrders(client: (org: Organisation) => Pick<CompanyMonerium, "orders"> = companyMoneriumClient): Promise<MoneriumOrder[]> {
+  const out: MoneriumOrder[] = [];
+  for (const org of (await store.list("organisations"))) {
+    if (!org.monerium || orgEntity(org) !== "company") continue;
+    const safe = companyEurAccount(await store.accountsOf(org.id))?.address?.toLowerCase();
+    if (!safe) continue;
+    let list: MoneriumOrder[];
+    try {
+      list = orderList((await client(org).orders(org.monerium.profile.id)) as Awaited<ReturnType<MoneriumClient["orders"]>>);
+    } catch (err: any) {
+      console.warn(`monerium: could not read orders for org ${org.id} on its own keys: ${moneriumFailureReason(err)}`);
+      continue;
+    }
+    for (const o of list) if (String(o.address ?? "").toLowerCase() === safe) out.push(o);
+  }
+  return out;
 }
 
 /** The profiles a user's own credentials should be asked about: their default

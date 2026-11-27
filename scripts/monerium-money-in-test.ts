@@ -68,6 +68,8 @@ process.env.MONERIUM_CHAIN = "base";
 process.env.MONERIUM_MAX_RPS = "100000"; // the read limiter is not under test here
 
 const orders = new Map<string, any>();
+/** Orders only a company's own keys ("co-client") list: its own profile. */
+const coOrders = new Map<string, any>();
 /** While set, /auth/token answers this status with an OAuth error body. */
 let tokenFault = 0;
 const TOKEN_BODY = { error: "invalid_client", error_description: "client app-client unknown" };
@@ -124,7 +126,7 @@ const monerium = createServer((req, res) => {
       }
       tokenFault
         ? send(tokenFault, TOKEN_BODY)
-        : send(200, { access_token: "tok-app", token_type: "Bearer", expires_in: 3600 });
+        : send(200, { access_token: form.get("client_id") === "co-client" ? "tok-co" : "tok-app", token_type: "Bearer", expires_in: 3600 });
     });
     return;
   }
@@ -133,7 +135,7 @@ const monerium = createServer((req, res) => {
   if (url.pathname === "/tokens") {
     return send(200, [{ kind: "evm", currency: "eur", symbol: "EURe", chain: "base", chainId: 84532, decimals: 18, address: "0x00000000000000000000000000000000000000e0" }]);
   }
-  if (url.pathname === "/orders") return send(200, { orders: [...orders.values()] });
+  if (url.pathname === "/orders") return send(200, { orders: [...(bearer === "tok-co" ? coOrders : orders).values()] });
   if (url.pathname === "/ibans") return send(200, { ibans: [] });
   const m = url.pathname.match(/^\/orders\/([^/]+)$/);
   if (m) {
@@ -167,6 +169,7 @@ const { SECURITY } = await import("../services/api/src/config.js");
 const { payoutEvidence } = await import("../services/api/src/transfers/review-evidence.js");
 const { paymentMemo } = await import("../services/api/src/sepa.js");
 const { moneriumText } = await import("../services/api/src/adapters/monerium-client.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -299,6 +302,86 @@ await check("a SEPA credit to a sole trader's Safe is booked under the user, on 
   await Promise.all([writeStatementLines(), writeStatementLines()]);
   assert.equal((await store.ledgerOf("org_st")).filter((e) => e.statement?.links.orderId === id).length, 1, "one line, whichever sweep wrote it");
   assert.equal(await lineOf("org_st_personal", id), undefined);
+});
+
+console.log("\nA company's own Monerium keys");
+
+await check("a SEPA credit seen only on the company's own keys gets its issue record, a sepa_in line with the bank facts, and the reconciler lists it", async () => {
+  await store.updateOrganisation("org_co", { monerium: {
+    clientId: "co-client", clientSecretEnc: SECRETS.orgMoneriumApiSecret.seal("org_co", "co-secret-placeholder"),
+    profile: { id: "prof-co", state: "approved" }, connectedAt: now, checkedAt: now, connectedByMemberId: "m_co",
+  } } as any);
+  const id = issue(COMPANY_SAFE);
+  coOrders.set(id, orders.get(id));
+  orders.delete(id); // the app's keys never list it
+  // The company's keys listing an order for someone else's Safe: not the company's to feed.
+  const foreign = issue(addr("a"));
+  coOrders.set(foreign, orders.get(foreign));
+  orders.delete(foreign);
+  await pollDepositsOnce();
+  const r = (await recordOf(id))!;
+  assert.equal(r?.accountId, "acc_co", "booked to the company's account");
+  const line = await lineOf("org_co", id);
+  assert.equal(line?.statement?.event, "sepa_in");
+  assert.equal(line?.statement?.counterparty?.name, "Kunde GmbH");
+  assert.equal(await store.isOrderProcessed(foreign), false, "an order for another Safe on the company's keys books nothing");
+  assert.equal(await recordOf(foreign), undefined);
+  // The reconciler sees the same order: no PHANTOM for it, and the foreign one is not reported as missed.
+  const report = await reconcile();
+  assert.ok(!report.findings.some((f) => f.orderId === id || f.orderId === foreign), JSON.stringify(report.findings.filter((f) => f.orderId === id || f.orderId === foreign)));
+  await pollDepositsOnce(); // the poll re-sees it: still one record, one line
+  assert.equal((await store.list("moneriumIssueOrders")).filter((o) => o.orderId === id).length, 1);
+  assert.equal((await store.ledgerOf("org_co")).filter((e) => e.statement?.links.orderId === id).length, 1);
+});
+
+await check("a company deposit the poller never recorded is reported UNMIRRORED by the reconciler", async () => {
+  const id = issue(COMPANY_SAFE);
+  coOrders.set(id, orders.get(id));
+  orders.delete(id);
+  const report = await reconcile();
+  assert.ok(report.findings.some((f) => f.kind === "UNMIRRORED" && f.orderId === id), JSON.stringify(report.findings));
+  await pollDepositsOnce();
+  assert.equal((await recordOf(id))?.accountId, "acc_co");
+});
+
+await check("a company's keys that fail are skipped; the other sources are still read", async () => {
+  const { companyIssueOrders } = await import("../services/api/src/adapters/monerium-sandbox.js");
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (m: string) => warned.push(String(m));
+  try {
+    assert.deepEqual(await companyIssueOrders(() => ({ orders: async () => { throw new Error("401"); } })), []);
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.ok(warned.some((w) => w.includes("org_co")), warned.join(" | "));
+});
+
+await check("a company invoice paid by bank with its number is settled when the credit lands on the company's Safe", async () => {
+  const invoiceId = "inv_co_bank";
+  await store.addInvoice({
+    id: invoiceId, orgId: "org_co", direction: "outgoing", state: "SUBMITTED", linkTokenHash: "0".repeat(32),
+    lines: [{ description: "Work", quantity: "1", unitPrice: "12.50", amount: "12.50" }],
+    currency: "EUR", total: "12.50", createdByMemberId: "m_co", createdAt: now, updatedAt: now,
+    issued: {
+      number: "CO-2026-0042", issueDate: now.slice(0, 10), issuer: { name: "org_co" }, recipient: { name: "Kunde GmbH" },
+      vatTreatment: { kind: "exempt", reason: "kleinunternehmer" }, netCents: 1250, vatCents: 0, grossCents: 1250,
+      buckets: [{ rate: 0, netCents: 1250, vatCents: 0 }], currency: "EUR",
+    },
+  } as any);
+  // The same number paid to the owner's personal Safe is the owner's money: it settles nothing.
+  const personal = issue(addr("a"));
+  orders.get(personal).memo = "CO-2026-0042";
+  await pollDepositsOnce();
+  assert.equal((await store.findInvoice(invoiceId))!.state, "SUBMITTED");
+  const id = issue(COMPANY_SAFE);
+  coOrders.set(id, { ...orders.get(id), memo: "Rechnung CO-2026-0042" });
+  orders.delete(id);
+  await pollDepositsOnce();
+  const inv = (await store.findInvoice(invoiceId))!;
+  assert.equal(inv.state, "PAID", JSON.stringify(inv.settlements));
+  assert.equal(inv.settlements?.length, 1);
+  assert.equal((inv.settlements![0] as any).matchedOn, "invoice-number");
 });
 
 console.log("\nFail closed");
@@ -884,7 +967,6 @@ await check("a redeem in a state Monerium did not document halts: not PAID, not 
 
 console.log("\nOAuth token refresh across workers and restarts");
 
-const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { moneriumAccessToken, moneriumClientFor } = await import("../services/api/src/adapters/monerium-connection.js");
 const past = () => new Date(Date.now() - 3_600_000).toISOString();
 await user("u_oauth", addr("9"));

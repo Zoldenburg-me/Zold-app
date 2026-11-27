@@ -52,6 +52,7 @@ import {
 } from "../payment-requests.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { describeCause } from "../http/log-cause.js";
+import { moneyInHolder } from "../bookkeeping/money-in.js";
 
 type SessionCheck = (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
 
@@ -731,12 +732,13 @@ export async function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike):
     if ((order.meta?.state ?? order.state) !== "processed") return;
     const address = String(order.address ?? "").toLowerCase();
     if (!address) return;
-    const user = (await store.list("users")).find((u) => (u.address ?? "").toLowerCase() === address);
-    if (!user) return;
-    // Only organisations whose account IS the credited Safe. A member's personal
-    // Safe receiving a payment that quotes the company's invoice number is the
-    // member's money, and must not close the company's invoice.
-    const orgIds = await orgsBackedBy(user.id);
+    // Only organisations whose account IS the credited Safe: a person's Safe
+    // backs theirs, a company's own Safe is its one account. A member's
+    // personal Safe receiving a payment that quotes the company's invoice
+    // number is the member's money, and must not close the company's invoice.
+    const holder = await moneyInHolder(address);
+    const orgIds = holder.kind === "user" ? await orgsBackedBy(holder.user.id) : holder.kind === "account" ? new Set([holder.org.id]) : undefined;
+    if (!orgIds) return;
     const named = (await store.list("invoices")).filter(
       (invoice) =>
         invoice.direction === "outgoing" &&
