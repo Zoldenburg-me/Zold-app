@@ -533,9 +533,10 @@ console.log("ok - store suite on the JSON backend");
   assert.equal(testnet.status, 0, testnet.stderr);
   assert.equal(run({ STORE_BACKEND: "json" }).status, 0);
   // Production asks for the JSON store's acknowledgement only when the JSON store is used.
+  // Both set explicitly: env.ts loads .env only for variables the process lacks.
   const prod = (env: Record<string, string | undefined>) =>
     spawnSync(process.execPath, ["--import", "tsx", "-e", "await import('./services/api/src/config/production.ts')"], {
-      env: { ...process.env, DATABASE_URL: undefined, TRANSF_CHAIN_ID: "8453", NODE_ENV: "production", ALLOW_PLAINTEXT_STORE: undefined, ...env },
+      env: { ...process.env, DATABASE_URL: undefined, TRANSF_CHAIN_ID: "8453", NODE_ENV: "production", STORE_BACKEND: "json", ALLOW_PLAINTEXT_STORE: "", ...env },
       encoding: "utf8",
     });
   const prodJson = prod({});
