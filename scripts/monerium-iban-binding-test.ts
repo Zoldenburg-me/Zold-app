@@ -87,7 +87,7 @@ const { MONERIUM, SECURITY } = await import("../services/api/src/config.js");
 const { createMoneriumRouter } = await import("../services/api/src/routes/monerium.js");
 const { issueChallenge, stepUpBinding, verifyRegistration } = await import("../services/api/src/webauthn.js");
 const { makeSoftwarePasskey } = await import("./_software-passkey.js");
-const { verifyIbanBinding, applyIbanBinding, refreshPendingIban, ibanActivationRefusal, pollDepositsOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
+const { verifyIbanBinding, applyIbanBinding, refreshPendingIban, refreshPendingIbanThrottled, ibanActivationRefusal, pollDepositsOnce } = await import("../services/api/src/adapters/monerium-sandbox.js");
 const { accountBankOf } = await import("../services/api/src/routes/business/shared.js");
 
 let passed = 0;
@@ -298,6 +298,18 @@ await check("one user is re-read at most once per MONERIUM_IBAN_CHECK_MS", async
   const after = await verifyIbanBinding((await store.findUser(u.id))!);
   assert.equal(fake.reads, reads, "the second call within the interval reads nothing");
   assert.equal(after.iban, u.iban);
+});
+
+await check("a pending IBAN is checked with Monerium at most once per MONERIUM_IBAN_CHECK_MS", async () => {
+  const u = await addUser(46);
+  await store.updateUser(u.id, { iban: "", kycStatus: "pending", funding: { mode: "sandbox", status: "iban_pending", moneriumProfileId: PROFILE } });
+  ibansOf.set(u.token, []);
+  await refreshPendingIbanThrottled((await store.findUser(u.id))!);
+  const reads = fake.reads;
+  ibansOf.set(u.token, [listed(u.iban, u.address)]);
+  const after = await refreshPendingIbanThrottled((await store.findUser(u.id))!);
+  assert.equal(fake.reads, reads, "the second call within the interval reads nothing");
+  assert.equal(after.iban, "", "nothing attaches until the interval has passed");
 });
 
 console.log("\nMoving back");
@@ -571,7 +583,7 @@ await check("pending: the OAuth callback still sets the account up for IBAN acti
 });
 
 await check("approved: reconnecting by OAuth keeps the approval record and the IBAN, and is audited", async () => {
-  const u = await addUser(37);
+  const u = await addUser(45);
   const approval = { provider: "monerium", onboardingPath: "existing_monerium", checkedAt: "2026-10-01T00:00:00.000Z", applicantId: PROFILE, reason: "approved via connected Monerium profile" };
   await store.updateUser(u.id, { kyc: approval } as any);
   ibansOf.set(u.token, [listed(u.iban, u.address)]);
