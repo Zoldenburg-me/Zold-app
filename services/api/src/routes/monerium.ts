@@ -146,15 +146,16 @@ function otherProfileRefused(user: User, named: unknown) {
 }
 
 /** An IBAN Monerium attributes to this address on our chain, on the
- *  connected profile. An item that names another profile is not this
- *  account's; one that names none is taken on the address match alone. */
+ *  connected profile. An item that names another profile, or none, is not
+ *  this account's: one login's personal and company profiles can list the
+ *  same address. */
 function ownIbanOf(ibans: any[], address: string, profileId: string | undefined): string {
   return (
     ibans.find(
       (i: any) =>
         paysInto(i, address) &&
         i.iban &&
-        !(profileId && typeof i.profile === "string" && i.profile !== profileId),
+        (!profileId || i.profile === profileId),
     )?.iban ?? ""
   );
 }

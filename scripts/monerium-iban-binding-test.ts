@@ -582,6 +582,20 @@ await check("pending: the OAuth callback still sets the account up for IBAN acti
   assert.match(after.kyc?.reason ?? "", /activate IBAN with passkey/);
 });
 
+await check("pending: an IBAN that pays this Safe but names no profile neither approves nor attaches", async () => {
+  const u = await addUser(47);
+  await store.updateUser(u.id, { kycStatus: "pending", iban: "", monerium: undefined, funding: { mode: "sandbox", status: "kyc_pending" } } as any);
+  const { profile: _, ...unnamed } = listed(u.iban, u.address);
+  ibansOf.set(u.token, [unnamed]);
+  assert.equal((await oauthCallback(u.id, u.token)).location, "/app?monerium=connected");
+  const after = (await store.findUser(u.id))!;
+  assert.equal(after.kycStatus, "pending", "no approval from an IBAN without its profile");
+  assert.equal(after.iban, "");
+  assert.equal(after.funding?.status, "provisioning");
+  const polled = await refreshPendingIban({ ...after, funding: { ...after.funding!, status: "iban_pending" } } as any);
+  assert.equal(polled.iban, "", "the pending check does not attach it either");
+});
+
 await check("approved: reconnecting by OAuth keeps the approval record and the IBAN, and is audited", async () => {
   const u = await addUser(45);
   const approval = { provider: "monerium", onboardingPath: "existing_monerium", checkedAt: "2026-10-01T00:00:00.000Z", applicantId: PROFILE, reason: "approved via connected Monerium profile" };

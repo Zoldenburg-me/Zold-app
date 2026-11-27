@@ -82,8 +82,8 @@ export async function checkConnection() {
 
 /** Look up the issued IBAN for an address, if any yet — on the user's own
  *  credentials when they have some, since that is where their IBAN lives.
- *  An IBAN that names a profile other than the user's connected one is not
- *  theirs, whatever address it pays. */
+ *  An IBAN that names a profile other than the user's connected one, or
+ *  names none, is not theirs, whatever address it pays. */
 export async function findIban(address: string, user?: User): Promise<string | undefined> {
   const res = await (user ? moneriumClientFor(user) : getClient()).ibans();
   return ownIbanIn(Array.isArray(res) ? res : (res?.ibans ?? []), address, user);
@@ -96,7 +96,7 @@ function ownIbanIn(list: any[], address: string, user?: User): string | undefine
     (i: any) =>
       paysInto(i, address) &&
       i.iban &&
-      !(profileId && typeof i.profile === "string" && i.profile !== profileId),
+      (!profileId || i.profile === profileId),
   );
   return hit?.iban;
 }
