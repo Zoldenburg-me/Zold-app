@@ -133,7 +133,8 @@ async function adminFunding(deposit: CryptoDeposit) {
   return {
     kind: "funding" as const,
     id: deposit.id,
-    user: await adminUserSummary(deposit.userId),
+    user: deposit.userId ? await adminUserSummary(deposit.userId) : undefined,
+    ...(deposit.accountId ? { accountId: deposit.accountId } : {}),
     chainId: deposit.chainId,
     token: deposit.token,
     holding: deposit.holding,

@@ -633,6 +633,8 @@ export async function attributeDepositToRequest(given: CryptoDeposit): Promise<P
     // The stored row, not the caller's copy: a link or an attribution made
     // since it was read decides what this one may write.
     // The owner's row is the lock every writer of a deposit's money takes.
+    // A company Safe's deposit pays no person's pay link.
+    if (!given.userId) return undefined;
     const user = await store.lockUser(given.userId);
     const deposit = (await store.list("cryptoDeposits")).find((d) => d.id === given.id) ?? given;
     if (deposit.paymentRequestId) return await store.findPaymentRequest(deposit.paymentRequestId);

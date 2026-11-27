@@ -81,6 +81,8 @@ const warned = new Set<string>();
 interface Rows {
   transfersOf(userId: string): Transfer[] | Promise<Transfer[]>;
   depositsOf(userId: string): CryptoDeposit[] | Promise<CryptoDeposit[]>;
+  /** What landed on a company's own Safe, recorded under its account. */
+  depositsOfAccount(accountId: string): CryptoDeposit[] | Promise<CryptoDeposit[]>;
   cryptoSendsOf(userId: string): CryptoSend[] | Promise<CryptoSend[]>;
   issueOrdersOf(userId: string): MoneriumIssueRecord[] | Promise<MoneriumIssueRecord[]>;
   issueOrdersOfAccount(accountId: string): MoneriumIssueRecord[] | Promise<MoneriumIssueRecord[]>;
@@ -101,6 +103,7 @@ interface Rows {
 const storeRows: Rows = {
   transfersOf: async (id) => (await store.list("transfers")).filter((t) => t.userId === id),
   depositsOf: async (id) => withoutConversionOutputs((await store.list("cryptoDeposits")).filter((d) => d.userId === id), (await store.list("transfers")).filter((t) => t.userId === id)),
+  depositsOfAccount: async (id) => withoutConversionOutputs((await store.list("cryptoDeposits")).filter((d) => !d.userId && d.accountId === id), []),
   // A company send's userId is who queued it; it is the company's money.
   cryptoSendsOf: async (id) => (await store.list("cryptoSends")).filter((c) => c.userId === id && !c.safeOpId),
   issueOrdersOf: async (id) => (await store.list("moneriumIssueOrders")).filter((o) => o.userId === id),
@@ -138,7 +141,9 @@ async function companySends(sends: readonly CryptoSend[], account: Account): Pro
 async function groupedRows(): Promise<Rows> {
   const transfers = groupBy(await store.list("transfers"), (t) => t.userId);
   // A conversion's EURe output is not income (transfers/activity.ts).
-  const deposits = groupBy(withoutConversionOutputs(await store.list("cryptoDeposits"), await store.list("transfers")), (d) => d.userId);
+  const moneyIn = withoutConversionOutputs(await store.list("cryptoDeposits"), await store.list("transfers"));
+  const deposits = groupBy(moneyIn, (d) => d.userId);
+  const accountDeposits = groupBy(moneyIn, (d) => (d.userId ? undefined : d.accountId));
   const issueOrders = groupBy(await store.list("moneriumIssueOrders"), (o) => o.userId);
   const accountIssueOrders = groupBy(await store.list("moneriumIssueOrders"), (o) => o.accountId);
   const cryptoSends = groupBy((await store.list("cryptoSends")).filter((c) => !c.safeOpId), (c) => c.userId);
@@ -153,6 +158,7 @@ async function groupedRows(): Promise<Rows> {
   return {
     transfersOf: (id) => transfers.get(id) ?? [],
     depositsOf: (id) => deposits.get(id) ?? [],
+    depositsOfAccount: (id) => accountDeposits.get(id) ?? [],
     cryptoSendsOf: (id) => cryptoSends.get(id) ?? [],
     issueOrdersOf: (id) => issueOrders.get(id) ?? [],
     issueOrdersOfAccount: (id) => accountIssueOrders.get(id) ?? [],
@@ -217,8 +223,8 @@ export async function writeStatementLinesFor(user: User, rows: Rows = storeRows)
 
 /**
  * A company account on its own Safe: no person's movements are its, so its
- * lines are the bank credits booked to the account itself and the sends its
- * owners signed from its Safe.
+ * lines are the bank credits booked to the account itself, what landed on its
+ * Safe from other wallets, and the sends its owners signed from it.
  */
 export async function writeAccountStatementLines(account: Account, rows: Rows = storeRows): Promise<{ added: number; updated: number }> {
   return store.tx(async () => {
@@ -228,7 +234,7 @@ export async function writeAccountStatementLines(account: Account, rows: Rows = 
       safeAddress: account.address!,
       timeZone: await zoneOf(account.orgId),
       transfers: [],
-      deposits: [],
+      deposits: await rows.depositsOfAccount(account.id),
       issueOrders: await rows.issueOrdersOfAccount(account.id),
       sweeps: [],
       invoices: await rows.invoicesOf(account.orgId),
@@ -285,6 +291,17 @@ async function writeProjected(inp: StatementInputs, since: string | undefined, r
       await store.addLedgerEntries(entries);
       rows.added(inp.orgId, entries);
     }
+    if (toUpdate.some((u) => u.patch.txType)) {
+      // A changed type is re-coded by the rules, as on insert; a code a human set stays (applyRules).
+      const rules = await rows.rulesOf(inp.orgId);
+      const byId = new Map((await store.ledgerOf(inp.orgId)).map((e) => [e.id, e]));
+      toUpdate = toUpdate.map((u) => {
+        const cur = byId.get(u.id);
+        if (!u.patch.txType || !cur) return u;
+        const [e] = applyRules(rules, [{ ...cur, ...u.patch }]).entries;
+        return e.accountCode === cur.accountCode ? u : { ...u, patch: { ...u.patch, accountCode: e.accountCode, accountCodeAuto: true } };
+      });
+    }
     for (const u of toUpdate) await store.updateLedgerEntry(u.id, u.patch);
     return { added: toAdd.length, updated: toUpdate.length };
   });
@@ -316,7 +333,7 @@ export async function writeStatementLines(): Promise<{ added: number; updated: n
       }
       for (const a of (await store.list("accounts"))) {
         const paidOut = (a.moneriumPayouts ?? []).some((p) => p.state === "sent");
-        if (!a.address || (!(await rows.issueOrdersOfAccount(a.id)).length && !(await rows.cryptoSendsOfAccount(a)).length && !paidOut)) continue;
+        if (!a.address || (!(await rows.issueOrdersOfAccount(a.id)).length && !(await rows.depositsOfAccount(a.id)).length && !(await rows.cryptoSendsOfAccount(a)).length && !paidOut)) continue;
         try {
           const r = await writeAccountStatementLines(a, rows);
           added += r.added;

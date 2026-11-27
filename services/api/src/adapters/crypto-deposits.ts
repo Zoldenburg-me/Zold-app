@@ -43,17 +43,18 @@ import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment
 import { buildCryptoSettlement, settlementRef, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
-import { conversionOutputs } from "../transfers/conversion-outputs.js";
+import { conversionOutputs, depositOwner } from "../transfers/conversion-outputs.js";
 import { conversionReverted } from "../transfers/activity.js";
 import { userOperationOutcome } from "../wallet/candide.js";
 import { someSeq } from "../seq.js";
+import { moneyInHolder } from "../bookkeeping/money-in.js";
+import type { Account } from "../domain/types.js";
 
 
-interface WatchedAddress {
-  user: User;
-  address: `0x${string}`;
-  source: "payment-page" | "safe";
-}
+/** A person's address (`user`), or a company's own Safe (`account`). */
+type WatchedAddress =
+  | { user: User; account?: undefined; address: `0x${string}`; source: "payment-page" | "safe" }
+  | { user?: undefined; account: Account; address: `0x${string}`; source: "company-safe" };
 
 /** Accounts whose inbound transfers are recorded, either as direct Safe
  * funding or through page-scoped auto-settlement.
@@ -74,11 +75,11 @@ interface WatchedAddress {
  *   pending account's Safe can already receive, and skipping it moves the
  *   cursor past the transfer for good.
  */
-async function watchedAddresses(): Promise<WatchedAddress[]> {
+export async function watchedAddresses(): Promise<WatchedAddress[]> {
   const seen = new Set<string>();
   const out: WatchedAddress[] = [];
   for (const user of (await store.list("users"))) {
-    const add = (address: `0x${string}`, source: WatchedAddress["source"]) => {
+    const add = (address: `0x${string}`, source: "payment-page" | "safe") => {
       if (!/^0x[0-9a-fA-F]{40}$/.test(address ?? "") || /^0x0{40}$/i.test(address)) return;
       const key = address.toLowerCase();
       if (seen.has(key)) return;
@@ -87,6 +88,16 @@ async function watchedAddresses(): Promise<WatchedAddress[]> {
     };
     if (user.paymentPage?.depositAddress) add(user.paymentPage.depositAddress, "payment-page");
     add(user.address, "safe");
+  }
+  // A company's own Safe, once its money is the account's alone (the rule a
+  // Monerium credit is booked by). A person's address above wins.
+  for (const account of (await store.list("accounts"))) {
+    const address = account.address;
+    if (!address || !/^0x[0-9a-fA-F]{40}$/.test(address) || /^0x0{40}$/i.test(address) || seen.has(address.toLowerCase())) continue;
+    const holder = await moneyInHolder(address);
+    if (holder.kind !== "account" || holder.account.id !== account.id) continue;
+    seen.add(address.toLowerCase());
+    out.push({ account, address, source: "company-safe" });
   }
   return out;
 }
@@ -102,8 +113,9 @@ async function watchedAddresses(): Promise<WatchedAddress[]> {
  * than the receipt. Stored as such rather than dressed up as intraday.
  *
  * Returns undefined when no rate is available (rates.ts has no stale
- * fallback). The deposit is then recorded without a receipt value and can be
- * valued later; a made-up rate would put a wrong figure in the books.
+ * fallback). The deposit is then recorded without a receipt value and
+ * valueUnratedReceipts values it later at the same day's fixing; a made-up
+ * rate would put a wrong figure in the books.
  */
 export async function valueAtReceipt(
   amountUsdc: number,
@@ -279,6 +291,7 @@ function holdingOnArrival(user: User, deposit: CryptoDeposit): Pick<CryptoDeposi
 export async function settleOnArrival(deposit: CryptoDeposit): Promise<CryptoDeposit> {
   return store.tx(async () => {
     if (deposit.settledAt) return deposit;
+    if (!deposit.userId) return await settleCompanyArrival(deposit);
     // The owner's row is the lock every writer of a deposit's money takes:
     // a link made while this settles is seen here, or sees this.
     const user = await store.lockUser(deposit.userId);
@@ -299,6 +312,20 @@ export async function settleOnArrival(deposit: CryptoDeposit): Promise<CryptoDep
   });
 }
 
+
+/**
+ * Money that landed on a company's own Safe. No pay link or invoice names it
+ * (both are a person's), and nothing here converts it: the books' line is the
+ * whole of it. EURe is the settlement currency; USDC stays held.
+ */
+async function settleCompanyArrival(deposit: CryptoDeposit): Promise<CryptoDeposit> {
+  if (!deposit.accountId) throw new Error(`crypto deposit ${deposit.id} names neither a user nor an account`);
+  const settled = await store.settleCryptoDeposit(deposit.id, (row) =>
+    row.token === "USDC"
+      ? { holding: "held", creditedUsdc: row.amountUsdc ?? 0, reason: "held in the company's Safe" }
+      : { holding: "none", reason: undefined });
+  return settled ?? (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id) ?? deposit;
+}
 
 /**
  * USDC a swap took from the Safe, read from the swap's own Transfer logs.
@@ -557,7 +584,7 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
       });
       continue;
     }
-    const user = await store.findUser(d.userId);
+    const user = d.userId ? await store.findUser(d.userId) : undefined;
     if (!user) continue;
     /**
      * The swap's own EURe logs, read before the step is rewritten. A swap
@@ -818,7 +845,7 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
     // The forwarder's second hop: page money already recorded when it
     // arrived at the deposit address, now landing on the owner's Safe.
     // Recording it again would double-count one payment.
-    const ownPage = match.user.paymentPage?.depositAddress?.toLowerCase();
+    const ownPage = match.user?.paymentPage?.depositAddress?.toLowerCase();
     if (match.source === "safe" && ownPage && ownPage !== to && from === ownPage) return { kind: "skip" };
     const idx = log.logIndex as unknown;
     if (typeof idx !== "number" || !Number.isSafeInteger(idx) || idx < 0 || !log.transactionHash) return { kind: "incomplete" };
@@ -852,13 +879,13 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       if (c.kind !== "deposit") continue; // incomplete refused the window above
       const { match, to, from, value, txHash, logIndex } = c;
       if ((await store.findCryptoDeposit(CHAIN_ID, txHash, logIndex))) continue;
-      const user = match.user;
+      const owner = match.user ? { userId: match.user.id } : { accountId: match.account.id };
       // A conversion's EURe output, or a failed transfer's reverse-swap
       // refund, is the user's money changing form, not money in
       // (transfers/activity.ts lists the same rule). Another EURe
       // log in the same bundle is money in. Read now, not before this scan's
       // awaits: a conversion settled meanwhile has named its output.
-      if (token.token === "EURE" && conversionOutputs(await store.list("cryptoDeposits"), await store.list("transfers"))(txHash, logIndex, user.id)) continue;
+      if (token.token === "EURE" && conversionOutputs(await store.list("cryptoDeposits"), await store.list("transfers"))(txHash, logIndex, depositOwner(owner))) continue;
       const now = new Date().toISOString();
       /**
        * The acquisition value, stamped once at detection with the rate's
@@ -881,7 +908,7 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
       const depositId = randomUUID();
       const recorded = await store.addCryptoDeposit({
           id: depositId,
-          userId: user.id,
+          ...owner,
           chainId: CHAIN_ID,
           token: token.token,
           txHash,
@@ -934,6 +961,46 @@ async function scanCryptoDeposits(head: bigint): Promise<{ found: number; more: 
 }
 
 /**
+ * USDC recorded with no receipt value because no rate could be read at
+ * detection. The ECB fixing for the day it arrived does not change, so it is
+ * read now and stamped once, and the books get the receipt line they lacked.
+ * An invoice or pay link it already settled at €0 is rewritten in place under
+ * the same ref, in the same transaction: never a second payment.
+ *
+ * Only while nothing has been converted: a conversion of an unvalued deposit
+ * books its proceeds as the payment instead, and a receipt beside that would
+ * count the income twice. A row with no block time is left: its day would be
+ * a guess.
+ */
+export async function valueUnratedReceipts(): Promise<number> {
+  let n = 0;
+  // A day the feed could not answer is not asked again this pass.
+  const noRate = new Set<string>();
+  for (const d of [...await store.list("cryptoDeposits")]) {
+    if (d.token !== "USDC" || d.receipt || !d.arrivedAt || unvaluable(d) || noRate.has(d.arrivedAt.slice(0, 10))) continue;
+    const receipt = await valueAtReceipt(d.amountUsdc ?? usd.fromUnits(BigInt(d.amountUnits)), d.arrivedAt);
+    if (!receipt) {
+      noRate.add(d.arrivedAt.slice(0, 10));
+      continue;
+    }
+    const valued = await store.tx(async () => {
+      // The owner's row is the lock every writer of a deposit's money takes.
+      if (d.userId) await store.lockUser(d.userId);
+      const row = await store.patchCryptoDeposit(d.id, (r) => (r.receipt || unvaluable(r) ? null : { receipt, amountEur: receipt.amountEur }));
+      if (row?.settledAt) {
+        await recordInvoiceSettlement(row);
+        await noteDepositSettled(row);
+      }
+      return row;
+    });
+    if (valued) n++;
+  }
+  return n;
+}
+const unvaluable = (d: CryptoDeposit) =>
+  d.holding === "converted" || d.holding === "unconfirmed" || !!d.conversionIntent || !!d.partials?.length;
+
+/**
  * Settle deposits recorded but not yet settled: a crash between recording and
  * settlement, or rows from before settlement happened on arrival.
  *
@@ -958,6 +1025,11 @@ export async function sweepPendingCryptoDeposits(): Promise<number> {
     } catch (err: any) {
       console.error(`crypto-in: could not settle deposit ${d.id}: ${describeCause(err)}`);
     }
+  }
+  try {
+    n += await valueUnratedReceipts();
+  } catch (err: any) {
+    console.error(`crypto-in: could not value unrated receipts: ${describeCause(err)}`);
   }
   if (n) await writeStatementLines();
   return n;

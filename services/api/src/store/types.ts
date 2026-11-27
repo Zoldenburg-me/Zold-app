@@ -598,7 +598,10 @@ export interface PendingExecution {
 
 export interface CryptoDeposit {
   id: string;
-  userId: string;
+  /** Whose money it is: a person's Safe (`userId`) or a company's own Safe
+   *  (`accountId`, bookkeeping/money-in.ts). Exactly one is set. */
+  userId?: string;
+  accountId?: string;
   chainId: number;
   token: "EURE" | "USDC";
   txHash: string;
