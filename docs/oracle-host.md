@@ -87,7 +87,8 @@ the host:
   `/api/health` needs it, so the deploy copies it into every release.
 - The Cloudflare tunnel token for `cloudflared service install`.
 - For drills: an OCI user with a read-only credential (read and list) on the
-  pgBackRest and dump buckets.
+  pgBackRest and dump buckets, and an R2 Object Read only token for the
+  buckets on R2.
 
 ## Provisioning (S7b)
 
@@ -191,8 +192,11 @@ hours of the decision to rebuild, losing at most the last minute of writes
 while archiving keeps up. Mainnet first, testnet the same way after.
 
 1. New Ampere A1 instance, same image, same or second EU region; one block
-   volume per cluster mounted on `/srv/pg/<dep>`. The old instance, if it
-   returns, stays stopped.
+   volume per cluster mounted on `/srv/pg/<dep>`. A tenancy limited to one
+   region has no second OCI region to launch in while its home region is
+   down: then any Ubuntu aarch64 host elsewhere (provision needs only that),
+   restored from `repo2` on R2. The old instance, if it returns, stays
+   stopped.
 2. Restore `/etc/zold-host/host.env` from the owner's copy. If a region is
    gone, set `<DEP>_REPOS` to the reachable repository only.
 3. `sudo scripts/oracle-host/provision.sh <dep> --rebuild`: everything up to
@@ -239,8 +243,10 @@ files).
 1. On the live host, per database: open a `REPEATABLE READ` transaction
    whose first statement is `SELECT pg_current_wal_lsn()`, then run
    `table-check.sql` in it. Keep the LSN and the lines.
-2. On the drill instance, with a `host.env` whose S3 key is the read-only
-   one: rebuild steps 1-4 with `--type=lsn
+2. On the drill instance, with a `host.env` whose S3 keys are all the
+   read-only ones: the shared `<DEP>_S3_KEY`/`_SECRET` and every
+   `<DEP>_REPO<n>_S3_KEY`/`_SECRET` (on R2, a read-only token), or a live
+   key stays in the drill's `pgbackrest.conf`: rebuild steps 1-4 with `--type=lsn
    --target=<Zold's database's LSN> --archive-mode=off`, and `pgbackrest stop`
    before Postgres starts (no `archive-push`, `backup` or `expire` there).
    Start Postgres; do not start the API (a restored mainnet API would run

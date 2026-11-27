@@ -160,7 +160,7 @@ function fakeHost(opts: { alertOk?: boolean } = {}) {
   shim(shims, "curl", `if [[ "$*" == */api/health* ]]; then
   [[ -f "${R}/api-running" && -f "${R}/srv/zold/mainnet/app/deployments.json" && "$*" == *127.0.0.1:$(cat "${R}/api-port")/* ]]; exit
 fi
-if [[ "$*" == *objectstorage* || "$*" == *r2.cloudflarestorage.com* ]]; then cat >/dev/null; echo "\${@: -1}" >"${R}/uploaded.url"; while [[ "$1" != -T ]]; do shift; done; cp "$2" "${R}/uploaded.tar"; exit 0; fi
+if [[ "$*" == *objectstorage* || "$*" == *r2.cloudflarestorage.com* ]]; then cat >"${R}/uploaded.cred"; echo "\${@: -1}" >"${R}/uploaded.url"; echo "$*" >"${R}/uploaded.args"; while [[ "$1" != -T ]]; do shift; done; cp "$2" "${R}/uploaded.tar"; exit 0; fi
 if [[ "$*" == *--proto* ]]; then
   cfg="$(cat)"
   if [[ "$cfg" == *https://alerts.ok/* ]]; then echo "\${@: -1}" >>"${R}/alerts.sent"; exit 0; fi
@@ -332,11 +332,13 @@ esac`);
     const ran = h.read("runuser.log").trim().split("\n").map((l) => l.split(" :: ")[1].split(" ")[0]);
     check("dump: as pg-mainnet only pg_dumpall, psql and pg_dump, which write no file", ran.every((c) => ["pg_dumpall", "psql", "pg_dump"].includes(c)) && /^pg-mainnet :: /.test(h.read("runuser.log")), ran.join(" "));
     check("dump: by default to OCI Object Storage in DUMP_REGION", /^https:\/\/ns\.compat\.objectstorage\.eu-frankfurt-1\.oraclecloud\.com\/dumps\/mainnet\/\d{8}T\d{6}Z\.tar$/.test(h.read("uploaded.url").trim()), h.read("uploaded.url"));
+    check("dump: signed for DUMP_REGION with the dump key, the key on stdin only", h.read("uploaded.args").includes("--aws-sigv4 aws:amz:eu-frankfurt-1:s3") && h.read("uploaded.cred").trim() === 'user = "k:mainnet-sentinel-dump"' && !h.read("uploaded.args").includes("sentinel"), h.read("uploaded.args"));
     const envFile = path.join(h.R, "etc/zold-host/host.env");
     const base = readFileSync(envFile, "utf8");
     writeFileSync(envFile, base + "MAINNET_DUMP_ENDPOINT=acct.r2.cloudflarestorage.com\nMAINNET_DUMP_REGION=auto\n");
     r = h.run("pgops.sh", "mainnet-dump");
     check("dump: DUMP_ENDPOINT sends it outside OCI (Cloudflare R2)", r.status === 0 && /^https:\/\/acct\.r2\.cloudflarestorage\.com\/dumps\/mainnet\//.test(h.read("uploaded.url").trim()), r.stderr + h.read("uploaded.url"));
+    check("dump: on R2 signed for region auto with the same dump key", h.read("uploaded.args").includes("--aws-sigv4 aws:amz:auto:s3") && h.read("uploaded.cred").trim() === 'user = "k:mainnet-sentinel-dump"', h.read("uploaded.args"));
     rmSync(path.join(h.R, "uploaded.url"));
     writeFileSync(envFile, base + "MAINNET_DUMP_ENDPOINT=https://acct.r2.cloudflarestorage.com\n");
     r = h.run("pgops.sh", "mainnet-dump");
