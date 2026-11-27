@@ -39,7 +39,7 @@ import { balanceAfterWrite, deliveredFromReceipt, tokenTransfers, TRANSFER_EVENT
 import { safeDebitBlocker } from "../orchestrator.js";
 import { walletBlocker } from "../domain/wallet-tier.js";
 import { midRates, referenceRate } from "../rates.js";
-import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
+import { attributeDepositToRequest, noteDepositSettled, settleLiveInvoice } from "../routes/payment-requests.js";
 import { buildCryptoSettlement, ownerInvoiceView, settlementRef, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
@@ -836,8 +836,9 @@ export async function recordInvoiceSettlement(deposit: CryptoDeposit): Promise<v
   if (!deposit.invoiceId || !(await store.findInvoice(deposit.invoiceId))) return;
   const s = buildCryptoSettlement(deposit);
   // Computed from the stored row; a converted deposit rewrites its own
-  // settlement under the same ref (withSettlement), never adds a second.
-  await store.settleInvoice(deposit.invoiceId, settlementRef(s), (row) => settlementUpdate(row, s), true);
+  // settlement under the same ref (withSettlement), never adds a second. A
+  // replaced invoice's money is its correction's.
+  await settleLiveInvoice(deposit.invoiceId, settlementRef(s), (row) => settlementUpdate(row, s), true);
 }
 
 

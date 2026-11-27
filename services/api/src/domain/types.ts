@@ -726,6 +726,9 @@ export type InvoiceState =
   | "PAYING"
   | "PAID"
   | "RECONCILED"
+  /** An issued outgoing invoice a correction took the place of
+   *  (`replacedBy`): kept in the records, never collected again. */
+  | "REPLACED"
   | "DELETED";
 
 export interface InvoiceLine {
@@ -1020,6 +1023,9 @@ export interface Invoice {
     language?: InvoiceLanguage;
     /** Compliance warnings accepted at issue, kept for the audit trail. */
     acceptedWarnings?: string[];
+    /** Set on a correction (§ 31 Abs. 5 UStDV): the invoice it replaces, by
+     *  the number and date printed on it. */
+    corrects?: { invoiceId: string; number: string; issueDate: string };
     /** Business or private customer, and goods or services, as declared. */
     recipientIsBusiness?: boolean;
     supplyKind?: "services" | "goods";
@@ -1047,6 +1053,8 @@ export interface Invoice {
       notVerified: string[];
     };
   };
+  /** Set with REPLACED: the correction that took this invoice's place. */
+  replacedBy?: { invoiceId: string; number: string; issueDate: string; at: string; byMemberId: string };
   /** On-chain payments that settled this invoice. Appended, never replaced —
    *  an invoice can legitimately be paid more than once. */
   settlements?: InvoiceSettlement[];

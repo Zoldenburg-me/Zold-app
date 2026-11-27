@@ -32,6 +32,7 @@ import type { PaymentRequest } from "../payment-requests.js";
 import { textCarriesCode } from "../payment-requests.js";
 import { paymentMemo } from "../sepa.js";
 import { dayOf } from "../domain/income-invoices.js";
+import { liveInvoice } from "../domain/invoices.js";
 import { sliceChars } from "../store/text.js";
 
 export interface StatementInputs {
@@ -121,9 +122,13 @@ function toEntry(inp: StatementInputs, d: LineDraft, now: string): LedgerEntry {
 }
 
 /** The invoice a record settles, by settlement ref or by payment link. */
+/** The invoice a payment settles, read through any correction that replaced
+ *  it (domain/invoices.ts liveInvoice): a pair counts once, as the correction. */
 function invoiceByRef(invoices: Invoice[], ref: string): Invoice | undefined {
-  return invoices.find((i) => (i.settlements ?? []).some((s) => (s.ref ?? "") === ref));
+  return liveInvoice(invoices, invoices.find((i) => (i.settlements ?? []).some((s) => (s.ref ?? "") === ref)));
 }
+const invoiceById = (invoices: Invoice[], id: string | undefined) =>
+  id ? liveInvoice(invoices, invoices.find((i) => i.id === id)) : undefined;
 const invoiceNumber = (i?: Invoice) => i?.issued?.number ?? i?.supplier?.invoiceNumber;
 
 /** What the accountant should match on, in order of how directly it names
@@ -154,7 +159,7 @@ function sepaInLines(inp: StatementInputs): LineDraft[] {
     const mine = o.accountId ? o.accountId === inp.accountId : !!inp.userId && o.userId === inp.userId;
     if (!mine || !(o.amountEur > 0)) continue;
     const req = requestFor(inp, undefined, o.memo);
-    const inv = invoiceByRef(inp.invoices, `monerium:${o.orderId}`) ?? (req?.invoiceId ? inp.invoices.find((i) => i.id === req.invoiceId) : undefined);
+    const inv = invoiceByRef(inp.invoices, `monerium:${o.orderId}`) ?? invoiceById(inp.invoices, req?.invoiceId);
     // The chain's view of the same money: the mint into the Safe.
     // The nearest unclaimed mint of the same amount within three days.
     const at = Date.parse(o.processedAt);
@@ -197,7 +202,7 @@ function sepaOutLines(inp: StatementInputs): LineDraft[] {
   for (const t of inp.transfers) {
     if (t.userId !== inp.userId || t.rail !== "sepa") continue;
     const hashes = t.txs.map((x) => x.hash).filter((h) => /^0x[0-9a-fA-F]{64}$/.test(h));
-    const paidInvoice = inp.invoices.find((i) => i.payment?.transferId === t.id);
+    const paidInvoice = liveInvoice(inp.invoices, inp.invoices.find((i) => i.payment?.transferId === t.id));
     const req = inp.paymentRequests.find((r) => r.payments.some((p) => p.transferId === t.id));
     if (t.state === "PAID" || t.state === "PAYOUT_SUBMITTED") {
       if (!SEPA_LEFT.has(t.state)) continue;
@@ -371,7 +376,7 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
   for (const d of inp.deposits) {
     if (!ownDeposit(inp, d) || d.token !== "USDC" || !d.settledAt) continue;
     const req = requestFor(inp, d.paymentRequestId);
-    const inv = d.invoiceId ? inp.invoices.find((i) => i.id === d.invoiceId) : undefined;
+    const inv = invoiceById(inp.invoices, d.invoiceId);
     const receivedAt = d.receipt?.blockTimestamp ?? d.detectedAt;
     const reference = referenceFor([req?.externalInvoiceNumber, invoiceNumber(inv), req ? `Pay link ${req.code}` : undefined], `Deposit ${d.txHash.slice(0, 10)}`);
     const baseLinks = {
@@ -524,7 +529,7 @@ function cryptoOutLines(inp: StatementInputs): LineDraft[] {
     // SENT only: lines are never deleted, and a SUBMITTED send may still fail.
     // A company send (safeOpId) is the account's; its userId only says who queued it.
     .filter((c) => (c.safeOpId ? !inp.userId && c.orgId === inp.orgId : !!inp.userId && c.userId === inp.userId) && c.state === "SENT")
-    .map((c) => ({ c, paid: inp.invoices.find((i) => i.payment?.cryptoSendId === c.id) }))
+    .map((c) => ({ c, paid: liveInvoice(inp.invoices, inp.invoices.find((i) => i.payment?.cryptoSendId === c.id)) }))
     .map(({ c, paid }) => ({
       event: "crypto_out" as const,
       key: `cryptosend:${c.id}`,

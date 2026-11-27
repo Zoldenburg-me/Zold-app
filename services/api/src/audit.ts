@@ -56,6 +56,8 @@ export type AuditKind =
   | "org.payment_review_changed"
   /** The payout IBAN printed on invoices changed: last four characters only. */
   | "org.invoice_iban_changed"
+  /** An issued invoice was replaced by a correction: both invoice ids. */
+  | "org.invoice_corrected"
   /** An operator took a transfer out of MANUAL_REVIEW: the state chosen, the
    *  note, and which operator (a hash of the token). */
   | "operator.transfer_review_resolved"

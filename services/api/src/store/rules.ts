@@ -435,6 +435,9 @@ export function acceptInviteOnRow(m: Member, tokenHash: string, userId: string, 
  * or, with `replace`, rewritten under its ref (a converted deposit).
  */
 export function settlementOnRow(i: Invoice, ref: string, update: (i: Invoice) => Partial<Invoice>, replace = false): Partial<Invoice> | null {
+  // Replaced while the caller waited for the lock: the money is the
+  // correction's, and settleLiveInvoice puts it there.
+  if (i.state === "REPLACED") return null;
   if (!replace && (i.settlements ?? []).some((s) => settlementRef(s) === ref)) return null;
   return update(i);
 }
