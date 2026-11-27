@@ -1,5 +1,5 @@
 import { lineNetCents, formTotalCents, formatCents } from "/invoice-totals.js";
-import { strokePath } from "/invoice-sign.js";
+import { canSign, strokePath } from "/invoice-sign.js";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -100,8 +100,7 @@ function renderIssued(inv) {
   const settled = inv.state === "PAID" || inv.state === "RECONCILED";
   // The issuer reading their own invoice is not the one to pay it.
   const pay = !settled && !own && inv.payPath ? inv.payPath : "";
-  // Signing is the recipient's own mark on their copy: it needs no Pay link.
-  const sign = !settled && !own;
+  const sign = canSign(inv, own);
   const show = d.display ?? {};
   const bilingual = show.bilingual;
   const lab = (k) => (bilingual && L.de[k] !== L.en[k] ? `${L.de[k]} / ${L.en[k]}` : t[k]);
