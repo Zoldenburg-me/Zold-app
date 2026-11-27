@@ -26,8 +26,8 @@ jobs:
         run: |
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y -q postgresql-17 postgresql-client-17 pgbackrest
-          # The runner's postgresql-common does not create a main cluster on install.
-          pg_lsclusters -h | grep -q '^17 main' || sudo pg_createcluster 17 main
+          # The runner creates no 17 main cluster on install, and another cluster holds 5432 in its config.
+          pg_lsclusters -h | grep -q '^17 main' || sudo pg_createcluster --port 5432 17 main
           sudo pg_ctlcluster 17 main start
           sudo -u postgres createuser --superuser "$USER"
       - name: age, the pinned linux-arm64 build
