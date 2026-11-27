@@ -357,8 +357,9 @@ Say this plainly rather than letting the surface imply otherwise:
   foreign key is in the schema and no real duplicate is known. There is no
   Oracle host, no cluster, no pgBackRest backup and no restore drill: the
   provisioning script, units and runbook (`scripts/oracle-host/`,
-  `docs/oracle-host.md`) have run only against a local Postgres 17 and on
-  that runner.
+  `docs/oracle-host.md`) have never run as a whole: their tests render the
+  config and run the SQL on a throwaway cluster (locally and on that runner),
+  with `systemctl` and the host stubbed.
 - Timeout values everywhere were chosen, not measured.
 
 **PARKED, and it gates one customer**: merchant-book privacy. One Safe per

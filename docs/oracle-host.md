@@ -8,7 +8,9 @@ mainnet's cluster. The scripts are in `scripts/oracle-host/`.
 **None of this has run on the host.** The scripts and SQL have run only
 against a local Postgres 17 and a throwaway cluster (`npm run check:pg`), and
 on GitHub's linux-arm64 runner (the manual `oracle-host` workflow: the
-toolchain check on `production`, `npm run check`, then `check:pg`).
+toolchain check on `production`, `npm run check`, then `check:pg`). Those
+tests stub `systemctl` and the host, so no unit, timer or runbook step has
+run.
 Everything marked S7b below needs the owner's host and account.
 
 ## Files
