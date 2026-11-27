@@ -13,6 +13,8 @@ import { isCompanyLogin, ownSafeHere, readGuardians, recoveryStatus } from "./ac
 export const $ = (s) => document.querySelector(s);
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+/** A balance figure (already escaped HTML) that hides while <html> has .zb-bal-hidden (home.js). */
+export const masked = (html) => `<span class="zb-bal-val">${html}</span><span class="zb-bal-mask" role="img" aria-label="Balance hidden">••••••</span>`;
 
 /** A country picker over every country (window.Z.countries). `name` stays
  *  "country" so the browser's address autofill fills it. */
@@ -316,7 +318,7 @@ export async function readRecovery() {
   let r;
   try {
     const [c, z] = await readGuardians(me.id, api, readHealth);
-    r = recoveryStatus(c, z);
+    r = recoveryStatus(c, z, (me.passkeySafe?.socialGuardians || []).filter((x) => x.status === "active").map((x) => x.address));
   } catch {
     // An answer of an unexpected shape is a check that failed, never none.
     r = { status: "unknown" };

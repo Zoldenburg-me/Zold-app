@@ -67,7 +67,8 @@ export function createInvoiceRoutes(deps: OrgRoutes): express.Router {
         .map((i) => ({ ...ownerInvoiceView(i), overdue: isOverdue(i) })),
       // Whether "Payment link" on an issued invoice would pass for this
       // caller, so the UI offers it only where the API would accept it.
-      payLink: await payLinkOffer(ctx),
+      // The invoice screen's Pay button: an invoice link, which needs the account connected.
+      payLink: await payLinkOffer(ctx, true),
     });
   });
 

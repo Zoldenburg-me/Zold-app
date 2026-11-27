@@ -161,6 +161,50 @@ await check("a company whose euro account is not open is told that, not that the
   assert.equal(r.body.code, "ACCOUNT_NOT_OPEN");
   assert.doesNotMatch(r.body.error, /not yours/);
 });
+await check("the company login, in its only business with no account connected yet, makes a crypto-only link into its own Safe", async () => {
+  const SOLO = `0x${"dd".repeat(20)}`;
+  await store.addUser({
+    id: "u_solo", name: "Mia Roth", country: "DE", kycStatus: "approved", accountType: "company", address: SOLO, iban: IBAN,
+    passkeySafe: { status: "active", address: SOLO }, paymentPage: { handle: "roth", depositAddress: SOLO }, createdAt: now,
+  } as any);
+  await store.addOrganisation(businessOrg("org_solo", "Roth"));
+  await store.addMember(member("m_solo", "org_solo", "u_solo", "owner"));
+  await store.addMember(member("m_solo_admin", "org_solo", "u_admin", "admin"));
+  const offer = (await call("GET", "/api/orgs/org_solo/payment-requests", undefined, "u_solo")).body.payLink;
+  assert.equal(offer.allowed, true, JSON.stringify(offer));
+  // The login's IBAN is never published on a link the company's account has not confirmed.
+  const bank = await call("POST", "/api/orgs/org_solo/payment-requests", { amountEur: 50, methods: ["bank"] }, "u_solo");
+  assert.equal(bank.status >= 400 && bank.status < 500, true, JSON.stringify(bank.body));
+  const r = await call("POST", "/api/orgs/org_solo/payment-requests", { amountEur: 50 }, "u_solo");
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const link = (await store.list("paymentRequests")).find((p: any) => p.orgId === "org_solo");
+  assert.deepEqual(link?.methods, ["crypto"]);
+  assert.equal(link?.userId, "u_solo", "paid into the login's own Safe");
+  // An invoice is never collected into an account that isn't connected.
+  const inv = await call("POST", "/api/orgs/org_solo/payment-requests", { amountEur: 50, invoiceId: "inv_x" }, "u_solo");
+  assert.notEqual(inv.status, 201);
+  // Another member gets no such link: only the login's own Safe is the company's.
+  assert.notEqual((await call("POST", "/api/orgs/org_solo/payment-requests", { amountEur: 50 }, "u_admin")).status, 201);
+  if (link) await store.updatePaymentRequest(link.id, { state: "CANCELLED" } as any);
+  // The invoice screen offers no Pay link the invoice route would refuse.
+  const invOffer = (await call("GET", "/api/orgs/org_solo/invoices", undefined, "u_solo")).body.payLink;
+  assert.equal(invOffer?.allowed, false, JSON.stringify(invOffer));
+  // A page whose deposit address is not the Safe never takes the company's money.
+  await store.updateUser("u_solo", { paymentPage: { handle: "roth", depositAddress: `0x${"ee".repeat(20)}` } } as any);
+  assert.equal((await call("GET", "/api/orgs/org_solo/payment-requests", undefined, "u_solo")).body.payLink.allowed, false);
+});
+await check("a company login in more than one business is not taken for the owner of an unconnected one", async () => {
+  const u = (await store.findUser("u_co"))!;
+  await store.updateUser("u_co", { passkeySafe: { status: "active", address: SAFE } } as any);
+  try {
+    const offer = (await call("GET", "/api/orgs/org_new/payment-requests")).body.payLink;
+    assert.equal(offer.allowed, false);
+    assert.equal(offer.code, "ACCOUNT_NOT_OPEN");
+    assert.notEqual((await call("POST", "/api/orgs/org_new/payment-requests", { amountEur: 50 })).status, 201);
+  } finally {
+    await store.updateUser("u_co", { passkeySafe: u.passkeySafe } as any);
+  }
+});
 await check("an admin's link waits for the company page: never under the account holder's personal page", async () => {
   const list = await call("GET", "/api/orgs/org_co/payment-requests", undefined, "u_admin");
   assert.equal(list.body.payLink.allowed, false);

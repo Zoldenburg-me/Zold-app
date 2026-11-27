@@ -20,8 +20,14 @@ function card(id, title, body, action = "") {
   return `<section class="z-card zb-pad zb-stack" style="gap:14px" aria-labelledby="${id}">
     <div class="zb-side-card__head"><h2 id="${id}">${esc(title)}</h2>${action}</div>${body}</section>`;
 }
-const rows = (list) => `<dl class="zb-set-rows">${list.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
-const addr = (a) => `<span class="z-mono zb-access__addr">${esc(a)}</span>`;
+/* An address shortened, the whole of it in the tooltip and on the copy button. */
+const short = (a) => (String(a).length > 14 ? `${String(a).slice(0, 6)}…${String(a).slice(-4)}` : String(a));
+const addrChip = (a) => `<span class="zb-acc-addr"><span class="z-mono" title="${esc(a)}" translate="no">${esc(short(a))}</span><button type="button" class="zb-acc-copy" data-act="copy-text" data-text="${esc(a)}" data-said="Address copied" aria-label="Copy the address ${esc(a)}">${Z.icon("content_copy")}</button></span>`;
+/* One named thing on the account: an icon, what it is, what it means, and its state. `title`, `sub` and `right` are HTML. */
+const item = ({ icon, tone = "n", title, sub = "", right = "" }) => `<li class="zb-acc-item">${Z.iconTile({ icon, tone })}
+  <span class="z-row__main"><span class="zb-acc-item__title">${title}</span>${sub ? `<span class="z-row__sub">${sub}</span>` : ""}</span>${right ? `<span class="zb-acc-item__right">${right}</span>` : ""}</li>`;
+const items = (list) => `<ul class="zb-acc-items">${list.join("")}</ul>`;
+const safeLink = (url, label = "Open in Safe{Wallet}") => (url ? `<a class="z-btn z-btn--secondary z-btn--sm" href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}${Z.icon("open_in_new")}</a>` : "");
 
 /* This browser's payment key (device.js), the way the app's Security screen says it. */
 async function deviceKeyRow(me) {
@@ -40,23 +46,30 @@ async function deviceKeyRow(me) {
 
 function signersCard(a, keyRow) {
   const change = appBtn("Change in the app", APP_LINKS.signers);
+  const title = "Who signs for the account";
   if (!a.signers) {
-    return card("acc-sign", "Who can sign for the account", `<p class="zb-hint">Couldn’t read who can sign for the account (${esc(a.signersError.replace(/[.\s]+$/, ""))}). Open Access again to retry.</p>`, change);
+    return card("acc-sign", title, `<p class="zb-hint">Couldn’t read who signs for the account (${esc(a.signersError.replace(/[.\s]+$/, ""))}). Open Access again to retry.</p>`, change);
   }
   const s = a.signers;
-  const list = [
-    ["Account", addr(s.safeAddress)],
-    ["This sign-in", s.passkeyIsOwner ? "Signs for the account" : "Doesn’t sign for the account"],
-    [s.otherOwners.length > 1 ? "Other signers" : "Backup key", s.otherOwners.length ? s.otherOwners.map(addr).join("<br>") : "None"],
-    ["Signatures needed", esc(s.needed)],
-    ["Payment key", keyRow],
-  ];
+  const pass = esc(Z.passkeyName());
+  const mine = s.owners.find((o) => o.kind === "passkey");
+  const others = s.owners.filter((o) => o.kind !== "passkey");
   const why = !s.passkeyIsOwner
     ? "This sign-in no longer signs for the account, so it can’t send anything."
     : `It needs ${esc(s.needed)} signatures, and Zold never collects another signer’s.`;
   const locked = s.zoldCanSend ? "" : `<div class="banner warn">${Z.icon("lock")}<span><b>Zold can’t send from this account.</b> ${why} Send from Safe{Wallet} instead.</span></div>`;
-  const safe = s.safeAppUrl ? `<p class="zb-hint"><a href="${esc(s.safeAppUrl)}" target="_blank" rel="noopener">Open the account in Safe{Wallet}</a></p>` : "";
-  return card("acc-sign", "Who can sign for the account", `${locked}${rows(list)}${safe}`, change);
+  const list = [
+    item({ icon: "account_balance", title: "Company Zold account", sub: `The account itself. Money sits here; the keys below sign for it. ${addrChip(s.safeAddress)}`, right: safeLink(s.safeAppUrl) }),
+    mine
+      ? item({ icon: "fingerprint", tone: "m", title: `Your ${pass}`, sub: `This sign-in, on your device. It approves every payment. ${addrChip(mine.address)}`, right: Z.tag("Signs", "mint") })
+      : item({ icon: "fingerprint", tone: "a", title: `Your ${pass}`, sub: "This sign-in no longer signs for the account.", right: Z.tag("Not a signer", "amber") }),
+    ...(others.length
+      ? others.map((o, i) => item({ icon: "key", tone: "m", title: others.length > 1 ? `Other signer ${i + 1}` : "Backup key", sub: `A key added in Safe{Wallet}. ${addrChip(o.address)}`, right: Z.tag("Signs", "mint") }))
+      : [item({ icon: "key", tone: "a", title: "No backup key", sub: `A second key you keep somewhere safe, so the account isn’t lost with this ${pass}.`, right: appBtn("Add", APP_LINKS.signers) })]),
+    item({ icon: "devices", title: "Payment key in this browser", sub: keyRow }),
+  ];
+  const head = `<div class="zb-actions" style="margin-top:0">${Z.tag(`${s.needed} to sign`)}${change}</div>`;
+  return card("acc-sign", title, `${locked}${items(list)}`, head);
 }
 
 /* A company org's own Safe, read from chain on every visit. */
@@ -72,19 +85,19 @@ function orgSignersCard(s) {
     return card("acc-sign", title, `<div class="banner warn">${Z.icon("help")}<span><b>Couldn’t check who can sign.</b> ${esc(s.error.replace(/[.\s]+$/, ""))}. This is not the same as no one.</span></div>`,
       `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="access-retry">Try again</button>`);
   }
-  const owner = (o) => [o.memberId ? o.name || "A member" : "Unknown signer", `${addr(o.address)}${o.note ? `<br>${esc(OWNER_NOTE[o.note] || o.note)}` : ""}`];
-  const waiting = s.members.filter((m) => !m.onChain).map((m) => [m.name || "An owner", m.passkey ? "Not a signer yet" : "No passkey yet"]);
-  const outside = s.unknown.length
-    ? `<div class="banner warn">${Z.icon("warning")}<span><b>A signer Zold didn’t add is on this account.</b> It signs like any other. If no one at the company added it, remove it in Safe{Wallet}.</span></div>`
-    : "";
-  return card("acc-sign", title, `${outside}${rows([["Account", addr(s.safeAddress)], ["Signatures needed", esc(s.needed)], ...s.owners.map(owner), ...waiting])}`);
+  const owner = (o) => o.memberId
+    ? item({ icon: "fingerprint", tone: o.note ? "a" : "m", title: esc(o.name || "A member"), sub: `${o.note ? `${esc(OWNER_NOTE[o.note] || o.note)}. ` : "Signs with their passkey. "}${addrChip(o.address)}`, right: Z.tag("Signs", o.note ? "amber" : "mint") })
+    : item({ icon: "warning", tone: "a", title: "Unknown signer", sub: `Not added in Zold, and it signs like any other. If no one at the company added it, remove it in Safe{Wallet}. ${addrChip(o.address)}`, right: Z.tag("Signs", "amber") });
+  const waiting = s.members.filter((m) => !m.onChain).map((m) => item({ icon: "person", title: esc(m.name || "An owner"), sub: m.passkey ? "Not a signer yet" : "No passkey yet", right: Z.tag("Waiting") }));
+  const account = item({ icon: "account_balance", title: "Company account", sub: `The company’s own Safe. ${addrChip(s.safeAddress)}` });
+  return card("acc-sign", title, items([account, ...s.owners.map(owner), ...waiting]), Z.tag(`${s.needed} to sign`));
 }
 
 /* A company org's own Safe's recovery, read from chain on every visit. */
 function orgRecoveryCard(r, yours) {
   const lines = (ls) => ls.map((l) => `<p>${esc(l)}</p>`).join("");
   const others = r.otherGuardians?.length
-    ? `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery helper Zold didn’t set up is on the company’s Safe.</b> It can start a recovery that would replace every signer. If no one at the company added it, remove it in Safe{Wallet}.</span></div>${rows(r.otherGuardians.map((a) => ["Not set up in Zold", addr(a)]))}`
+    ? items(r.otherGuardians.map((a) => item({ icon: "warning", tone: "a", title: "Unknown recovery address", sub: `Not added in Zold. It can start a recovery that replaces every signer of the company’s Safe. If no one at the company added it, remove it in Safe{Wallet}. ${addrChip(a)}` })))
     : "";
   if (r.status === "unknown") {
     return card("acc-rec", "Recovery", `<div class="banner warn">${Z.icon("help")}<span><b>Couldn’t check recovery.</b> ${esc(r.error.replace(/[.\s]+$/, ""))}. This is not the same as none.</span></div>`,
@@ -104,18 +117,19 @@ function orgRecoveryCard(r, yours) {
   return card("acc-rec", "Recovery", `${others}${lines(ORG_RECOVERY)}${queued}`, setUp);
 }
 
-const guardianRow = (g) => {
-  if (g.kind === "zoldenburg") return ["Zoldenburg UG", "Checks the person against Monerium’s identity check, and approves from a hardware wallet. Zold’s servers never hold that key."];
-  if (g.kind === "codes") return ["Email or phone codes", esc(g.channels.map((c) => `${c.channel === "sms" ? "Phone" : "Email"} ${c.target}`).join(", ") || "Codes sent to the registered contacts")];
-  return ["Not set up in Zold", addr(g.address)];
+const guardianItem = (g, safeUrl) => {
+  if (g.kind === "zoldenburg") return item({ icon: "verified_user", tone: "m", title: "Zoldenburg UG", sub: "Checks the person against Monerium’s identity check, and approves from a hardware wallet. Zold’s servers never hold that key.", right: Z.tag("On") });
+  if (g.kind === "social") return item({ icon: "account_circle", tone: "m", title: "Your Google or Apple login", sub: `Sign in with it to move the account to a new ${esc(Z.passkeyName())}. ${addrChip(g.address)}`, right: Z.tag("On") });
+  if (g.kind === "codes") return item({ icon: "sms", tone: "m", title: "Email or phone codes", sub: esc(g.channels.map((c) => `${c.channel === "sms" ? "Phone" : "Email"} ${c.target}`).join(", ") || "Codes sent to the registered contacts"), right: Z.tag("On") });
+  return item({
+    icon: "warning", tone: "a", title: "Unknown recovery address",
+    sub: `Not added in Zold. It could start a recovery that replaces your ${esc(Z.passkeyName())}, and you could only stop it during the waiting period. If no one at the company added it, remove it. ${addrChip(g.address)}`,
+    right: safeLink(safeUrl, "Remove in Safe{Wallet}"),
+  });
 };
-const guardianRows = (guardians) => rows(guardians.map(guardianRow));
-/* A guardian Zold did not set up can start a recovery like any other. */
-const strangers = (guardians) => guardians.some((g) => g.kind === "other")
-  ? `<div class="banner warn">${Z.icon("warning")}<span><b>A recovery helper Zold didn’t set up is on this account.</b> It can start a recovery that would replace this sign-in. If no one at the company added it, remove it in Safe{Wallet}.</span></div>`
-  : "";
+const guardianItems = (guardians, safeUrl) => items(guardians.map((g) => guardianItem(g, safeUrl)));
 
-function recoveryCard(r) {
+function recoveryCard(r, safeUrl) {
   const setUp = appBtn("Set up recovery", APP_LINKS.recovery, "primary");
   const manage = appBtn("Manage in the app", APP_LINKS.recovery);
   if (r.status === "pending") {
@@ -124,7 +138,7 @@ function recoveryCard(r) {
       appBtn("Check it", APP_LINKS.alert, "primary"));
   }
   if (r.status === "unknown") {
-    const read = r.guardians.length ? `${strangers(r.guardians)}<p class="zb-hint">Found on the account:</p>${guardianRows(r.guardians)}` : "";
+    const read = r.guardians.length ? `<p class="zb-hint">Found on the account:</p>${guardianItems(r.guardians, safeUrl)}` : "";
     return card("acc-rec", "Recovery", `<div class="banner warn">${Z.icon("help")}<span><b>Couldn’t check recovery.</b> Zold couldn’t read every recovery helper, so it can’t say whether a recovery is under way. This is not the same as none.</span></div>${read}`,
       `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="access-retry">Try again</button>`);
   }
@@ -137,7 +151,7 @@ function recoveryCard(r) {
     const declined = r.declined ? `<p class="zb-hint">This sign-in chose not to add a recovery helper${r.declinedAt ? ` on ${esc(fullDate(new Date(r.declinedAt)))}` : ""}. You can add one at any time.</p>` : "";
     return card("acc-rec", "Recovery", `<div class="banner warn">${Z.icon("warning")}<span><b>No one can recover this account.</b> ${loss}</span></div>${declined}`, setUp);
   }
-  return card("acc-rec", "Recovery", `${strangers(r.guardians)}<p class="zb-hint">If the sign-in key is lost, a recovery helper can move the account to a new one, after a waiting period in which this sign-in can stop it.</p>${guardianRows(r.guardians)}`, manage);
+  return card("acc-rec", "Recovery", `<p class="zb-hint">If your ${esc(Z.passkeyName())} is lost, a recovery helper can move the account to a new one, after a waiting period in which this sign-in can stop it.</p>${guardianItems(r.guardians, safeUrl)}`, manage);
 }
 
 /* What each role may do with a payment, said from roleCan, the table the
@@ -155,32 +169,44 @@ function roleSentence(role) {
 
 /* Second approval is Zold's rule, checked by Zold's API, not by the Safe,
    so the words never claim more. */
+/* What each role may do, as a table: one column per verb, from roleCan. */
+function roleMatrix() {
+  const vs = verbs();
+  const mark = (yes) => (yes ? `${Z.icon("check", "zb-acc-yes")}<span class="z-sr">Yes</span>` : `<span class="zb-acc-no" aria-hidden="true">–</span><span class="z-sr">No</span>`);
+  return `<table class="zb-acc-matrix"><caption class="z-sr">What each role can do with a payment</caption>
+    <thead><tr><th scope="col">Role</th>${vs.map(([, , verb]) => `<th scope="col">${esc(verb.charAt(0).toUpperCase() + verb.slice(1))}</th>`).join("")}</tr></thead>
+    <tbody>${Object.keys(ROLE_WORD).map((r) => `<tr><th scope="row">${esc(ROLE_WORD[r])}</th>${vs.map(([k]) => `<td>${mark(roleCan(r, k))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
 function approvalsCard(members) {
   const on = reviewOn();
   const offered = cap("transfers.approvals").allowed;
   const pr = org.paymentReview || {};
   const v = approvalView(members, (r) => roleCan(r, "approve"));
   const second = on
-    ? `<b>On.</b> A payment drafted in Zold Business isn’t sent until someone other than its drafter approves it, whatever their role. Editing someone’s draft makes you its drafter. This is a Zold rule: Zold checks it, the account on chain does not.`
+    ? "A payment isn’t sent until someone other than its drafter approves it, whatever their role. Editing someone’s draft makes you its drafter. Zold checks this rule; the account on chain does not."
     : offered
-      ? `<b>Off.</b> A payment is saved, then sent with the sender’s ${esc(Z.passkeyName())}, without a second approval.`
-      : "A payment is saved, then sent with the sender’s passkey. A second approval is part of a business account.";
+      ? `Payments are sent with the sender’s ${Z.passkeyName()}, without a second approval.`
+      : "Payments are sent with the sender’s passkey. A second approval is part of a business account.";
   const notes = [
     pr.source === "owner" && pr.changedAt ? `${on ? "Turned on" : "Turned off"} by an owner on ${day(pr.changedAt)}.` : "",
     !on && pr.source === "owner" ? "Payments already waiting for review still wait until someone approves them." : "",
   ].filter(Boolean).map((t) => `<p class="zb-hint">${esc(t)}</p>`).join("");
-  const who = (m) => `${esc(m.id === org.memberId ? "You" : m.name || m.email || "A member")} (${esc(ROLE_WORD[m.role] || m.role)})`;
-  const list = [
-    ["Second approval", second],
-    ["Can approve", !v ? "Couldn’t read the members. Open Access again to retry." : v.approvers.length ? v.approvers.map(who).join("<br>") : "No one"],
-    ["Owners", !v ? "" : `${v.owners} active. An organisation always keeps at least one owner.`],
-    ...Object.keys(ROLE_WORD).map((r) => [ROLE_WORD[r], esc(roleSentence(r))]),
-  ].filter(([, x]) => x);
+  const name = (m) => (m.id === org.memberId ? "You" : m.name || m.email || "A member");
+  const person = (m) => `<li class="zb-acc-person">${Z.avatar({ name: m.name || m.email || "?" })}<span><b>${esc(name(m))}</b><small>${esc(ROLE_WORD[m.role] || m.role)}</small></span></li>`;
+  const approvers = !v ? `<p class="zb-hint">Couldn’t read the members. Open Access again to retry.</p>`
+    : v.approvers.length ? `<ul class="zb-acc-people">${v.approvers.map(person).join("")}</ul>` : `<p class="zb-hint">No one</p>`;
   const toggle = org.role !== "owner" ? ""
-    : on ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-off">Turn second approval off</button>`
-      : offered ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-on">Turn second approval on</button>` : "";
+    : on ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-off">Turn off</button>`
+      : offered ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="review-on">Turn on</button>` : "";
   const membersLink = cap("members.manage").allowed ? `<a class="z-btn z-btn--secondary z-btn--sm" href="?view=members" data-view-link="members">Members</a>` : "";
-  return card("acc-pay", "Who approves payments", `${rows(list)}${notes}`, `<div class="zb-actions" style="margin-top:0">${toggle}${membersLink}</div>`);
+  const body = `<div class="zb-acc-switch">${Z.iconTile({ icon: on ? "group" : "person", tone: on ? "m" : "n" })}
+      <div class="z-row__main"><span class="zb-acc-item__title">Second approval ${Z.tag(on ? "On" : "Off")}</span><span class="z-row__sub">${esc(second)}</span></div>${toggle}</div>
+    ${notes}
+    <h3 class="zb-acc-sub">Can approve</h3>${approvers}
+    ${v ? `<p class="zb-hint">${v.owners} active owner${v.owners === 1 ? "" : "s"}. An organisation always keeps at least one owner.</p>` : ""}
+    <h3 class="zb-acc-sub">What each role can do</h3>${roleMatrix()}`;
+  return card("acc-pay", "Who approves payments", body, membersLink);
 }
 
 META.access = () => ({
@@ -220,5 +246,5 @@ RENDER.access = async () => {
   }
   const [a, keyRow] = await Promise.all([loadAccess(me, api, readHealth), deviceKeyRow(me)]);
   if (a.noSafe) return stack([pay, card("acc-none", "No account yet", `<p class="zb-hint">This sign-in’s account isn’t set up yet, so there are no signers or recovery helpers to show. Finish setting it up in the app.</p>`, appBtn("Open the app", "/app"))]);
-  return { html: stack([pay, signersCard(a, keyRow), recoveryCard(a.recovery)]), bind: retry };
+  return { html: stack([pay, signersCard(a, keyRow), recoveryCard(a.recovery, a.signers?.safeAppUrl)]), bind: retry };
 };

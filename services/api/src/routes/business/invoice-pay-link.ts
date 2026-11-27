@@ -151,6 +151,7 @@ export async function linkMethods(org: Organisation, payee: User, caller: User):
 /** linkMethods for either payee: a company's own account takes bank transfer only. */
 export async function linkMethodsFor(org: Organisation, found: LinkPayee, caller: User): Promise<PaymentMethod[]> {
   if ("account" in found) return ["bank"];
+  if (found.cryptoOnly) return availableMethods(linkSubject(found)).filter((m) => m.available).map((m) => m.method);
   const { payee } = found;
   const own = payee.id === caller.id;
   // On behalf, the IBAN a link publishes (payee.iban) must be the company
@@ -164,16 +165,31 @@ export async function linkMethodsFor(org: Organisation, found: LinkPayee, caller
 
 export type PayLinkBlock = { code: "ACCOUNT_NOT_OPEN" | "NOT_THE_PAYEE" | "NO_PAGE" | "NO_COMPANY_PAGE" | "NO_METHOD"; reason: string };
 
-/** Where a link made here pays: a member's Safe, or the company's own account. */
-export type LinkPayee = { payee: User } | { account: Account };
+/** Where a link made here pays: a member's Safe, or the company's own account.
+ *  `cryptoOnly`: the company login's Safe before its euro account is connected
+ *  (ownCompanyBeforeAccount), so no IBAN of the login's is ever published. */
+export type LinkPayee = { payee: User; cryptoOnly?: true } | { account: Account };
 
-export async function payLinkBlocker(org: Organisation, user: User): Promise<PayLinkBlock | undefined> {
-  const r = await payLinkPayee(org, user);
+export async function payLinkBlocker(org: Organisation, user: User, forInvoice = false): Promise<PayLinkBlock | undefined> {
+  const r = await payLinkPayee(org, user, forInvoice);
   return "code" in r ? r : undefined;
 }
 
+/** The company login in the company it IS: an active owner of its only
+ *  business (as routes/orgs.ts firstCompanyOrg reads it), not company-entity.
+ *  A login in several businesses can't be told apart here, so none qualifies. */
+async function ownCompanyBeforeAccount(org: Organisation, user: User): Promise<boolean> {
+  if (user.accountType !== "company" || org.type !== "business" || orgEntity(org) === "company") return false;
+  if (user.passkeySafe?.status !== "active") return false;
+  // The link pays the page's deposit address: only when that is the Safe itself.
+  if (String(user.paymentPage?.depositAddress ?? "").toLowerCase() !== user.passkeySafe.address.toLowerCase()) return false;
+  const businesses = (await store.organisationsForUser(user.id)).filter(({ org: o }) => o.type === "business");
+  if (businesses.length !== 1 || businesses[0].org.id !== org.id) return false;
+  return (await store.membersOf(org.id)).some((m) => m.userId === user.id && m.status === "active" && m.role === "owner");
+}
+
 /** The payee a link made here pays into, or why there is none. */
-export async function payLinkPayee(org: Organisation, user: User): Promise<LinkPayee | PayLinkBlock> {
+export async function payLinkPayee(org: Organisation, user: User, forInvoice = false): Promise<LinkPayee | PayLinkBlock> {
   const backed = (await store.accountsOf(org.id)).some((a) => a.backingUserId);
   // A company on its own Safe: its account, never a member's.
   if (orgEntity(org) === "company" && !backed) {
@@ -192,13 +208,17 @@ export async function payLinkPayee(org: Organisation, user: User): Promise<LinkP
     }
     return { account };
   }
-  if (org.type !== "personal" && !backed) {
+  // A company login in its own company before any account is connected: its
+  // Safe is the company's, so a link may pay into it (crypto only, no IBAN yet).
+  // Not an invoice's: collecting one needs the account connected (assertInvoiceCollectable).
+  if (org.type !== "personal" && !backed && (forInvoice || !(await ownCompanyBeforeAccount(org, user)))) {
     return {
       code: "ACCOUNT_NOT_OPEN",
       reason: `Nothing is connected to ${org.name}’s euro account yet, so a payment link has nowhere to pay into. Connect the company’s IBAN, or your wallet, on Accounts.`,
     };
   }
-  const payee = await linkPayee(org, user);
+  const cryptoOnly = org.type !== "personal" && !backed;
+  const payee = cryptoOnly ? user : await linkPayee(org, user);
   if (!payee) {
     return {
       code: "NOT_THE_PAYEE",
@@ -219,7 +239,7 @@ export async function payLinkPayee(org: Organisation, user: User): Promise<LinkP
           : `A link you make for ${org.name} opens under its company payment page, which isn’t set up yet. Owners and admins set it up under Get paid.`,
     };
   }
-  if (!(await linkMethods(org, payee, user)).length) {
+  if (!(await linkMethodsFor(org, cryptoOnly ? { payee, cryptoOnly } : { payee }, user)).length) {
     return {
       code: "NO_METHOD",
       reason: own
@@ -227,15 +247,15 @@ export async function payLinkPayee(org: Organisation, user: User): Promise<LinkP
         : `A link you make for ${org.name} is paid by bank transfer, and its account has no active IBAN yet.`,
     };
   }
-  return { payee };
+  return cryptoOnly ? { payee, cryptoOnly } : { payee };
 }
 
 /** Whether this caller may make a payment link here, for the UI: it offers
  *  the control only where the API would accept it. */
-export async function payLinkOffer(ctx: OrgContext): Promise<{ allowed: boolean; reason?: string; code?: string }> {
+export async function payLinkOffer(ctx: OrgContext, forInvoice = false): Promise<{ allowed: boolean; reason?: string; code?: string }> {
   if (!roleCan(ctx.member.role, "invoices.manage")) return { allowed: false };
   const user = await store.findUser(ctx.userId);
-  const blocked = user ? (await payLinkBlocker(ctx.org, user)) : { reason: "Your session has no account behind it." };
+  const blocked = user ? (await payLinkBlocker(ctx.org, user, forInvoice)) : { reason: "Your session has no account behind it." };
   // The code lets the UI put the fix beside the reason (NO_PAGE: "Set up the page").
   return blocked ? { allowed: false, reason: blocked.reason, ...("code" in blocked ? { code: blocked.code } : {}) } : { allowed: true };
 }
@@ -263,7 +283,7 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   }
   const user = await store.findUser(ctx.userId);
   if (!user) return { ok: false, code: "NO_USER", reason: "Your session has no account behind it." };
-  const found = await payLinkPayee(ctx.org, user);
+  const found = await payLinkPayee(ctx.org, user, true);
   if ("code" in found) return { ok: false, ...found };
   const methods = await linkMethodsFor(ctx.org, found, user);
   const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, linkSubject(found));
@@ -273,7 +293,8 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
 
 /** What validateCreate judges methods against: the payee, or the company account's IBAN. */
 export function linkSubject(found: LinkPayee): Pick<User, "iban" | "paymentPage"> {
-  return "account" in found ? { iban: found.account.identifier.iban ?? "" } : found.payee;
+  if ("account" in found) return { iban: found.account.identifier.iban ?? "" };
+  return found.cryptoOnly ? { iban: "", paymentPage: found.payee.paymentPage } : found.payee;
 }
 
 /** Make the link into the payee's Safe, or the company's own account. */
