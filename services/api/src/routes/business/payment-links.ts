@@ -5,16 +5,17 @@
  * A link pays into the payee's own Safe, so for an organisation the payee is
  * the member whose Safe backs its account (`backingUserId`) and nobody else.
  * A link raised by any other member would route the organisation's customer
- * into that member's own account.
+ * into that member's own account. A company on its own Safe has no such
+ * member: its links pay into its account (`accountId`), by bank transfer.
  */
 import express from "express";
 import { store } from "../../store.js";
 import { wrap } from "../util.js";
 import { requireCapability, requirePermission } from "../org-context.js";
 import { PaymentRequestError, effectiveState, ownerPaymentRequest, validateCreate } from "../../payment-requests.js";
-import { baseUrlFor, createPaymentRequest } from "../payment-requests.js";
+import { baseUrlFor } from "../payment-requests.js";
 import type { OrgRoutes } from "./invoicing.js";
-import { linkMethods, openLinkFor, payLinkOffer, payLinkPayee, withInvoiceLinkLock } from "./invoice-pay-link.js";
+import { createLink, linkMethodsFor, linkSubject, openLinkFor, payLinkOffer, payLinkPayee, withInvoiceLinkLock } from "./invoice-pay-link.js";
 
 export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
@@ -40,9 +41,10 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
     const user = await store.findUser(ctx.userId);
     if (!user) return res.status(401).json({ error: "no such user" });
     const found = await payLinkPayee(ctx.org, user);
-    if (!("payee" in found)) return res.status(found.code === "NOT_THE_PAYEE" ? 403 : 409).json({ error: found.reason, code: found.code });
-    // The payee is the member whose Safe backs the account, which may not be the caller.
-    const { payee } = found;
+    if ("code" in found) return res.status(found.code === "NOT_THE_PAYEE" ? 403 : 409).json({ error: found.reason, code: found.code });
+    // The payee is the member whose Safe backs the account, which may not be
+    // the caller, or the company's own account.
+    const own = "payee" in found && found.payee.id === user.id;
     // An invoice has one open link: the one its Pay button already opens.
     // Returned as is, with `reused: true`: the amount and methods asked for
     // now are not applied to it.
@@ -52,14 +54,14 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
       if (open) return { status: 200, body: { ...ownerPaymentRequest(open, baseUrlFor(req)), reused: true } };
       // No methods named: every way this link may be paid (linkMethods). The
       // caller's own account is not the one being paid, so it does not decide.
-      const allowed = await linkMethods(ctx.org, payee, user);
+      const allowed = await linkMethodsFor(ctx.org, found, user);
       const named: unknown[] = Array.isArray(req.body?.methods) ? req.body.methods : allowed;
       // A malformed body is validateCreate's 400 first; a known method this link may not take is ours.
-      const input = validateCreate({ ...req.body, methods: named }, payee);
-      if (payee.id !== user.id && input.methods.some((m) => !allowed.includes(m))) {
+      const input = validateCreate({ ...req.body, methods: named }, linkSubject(found));
+      if (!own && input.methods.some((m) => !allowed.includes(m))) {
         throw new PaymentRequestError(`a link you make for ${ctx.org.name} is paid by bank transfer only, as its payment page is`, 409);
       }
-      const link = await createPaymentRequest(payee, input, { kind: "app" }, ctx.org.id, user.id);
+      const link = await createLink(found, user, input, ctx.org.id);
       return { status: 201, body: { ...ownerPaymentRequest(link, baseUrlFor(req)), reused: false } };
     };
     try {
