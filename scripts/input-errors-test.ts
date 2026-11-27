@@ -68,6 +68,7 @@ await check("a NUL or a lone surrogate anywhere in the body is a 400 BAD_TEXT; a
   // Nested far past the call stack, within the body limit: a 200, not a 500.
   const deep = "[".repeat(200_000) + "]".repeat(200_000);
   assert.equal(hasUnstorableText(JSON.parse(deep)), false);
+  assert.equal(hasUnstorableText(new Array(1_000_000).fill(0)), false, "a wide array does not overflow the argument list");
   assert.equal(hasUnstorableText(JSON.parse("[".repeat(200_000) + '"\\u0000"' + "]".repeat(200_000))), true);
 });
 await check("sliceChars never cuts an emoji in half", () => {

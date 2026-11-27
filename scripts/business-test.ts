@@ -408,6 +408,19 @@ check("bad rows are reported, never silently dropped", () => {
   assert.deepEqual(out.rejected.map((r) => r.row), [3, 4], "1-based row numbers past the header");
 });
 
+check("a CSV row with a NUL or half an emoji is rejected and reported; the others import", () => {
+  const csv = [
+    "Recipient Address,Token,Amount,Recipient Name,Notes",
+    "0x1111111111111111111111111111111111111111,USDC,1.00,Ann,ok \u{1F600}",
+    "0x1111111111111111111111111111111111111111,USDC,1.00,Bo\u0000b,",
+    "0x1111111111111111111111111111111111111111,USDC,1.00,Cy,half \ud83d",
+  ].join("\n");
+  const out = importCsv(csv, { recipientAddress: "Recipient Address", token: "Token", amount: "Amount", recipientName: "Recipient Name", notes: "Notes" });
+  assert.equal(out.lines.length, 1);
+  assert.deepEqual(out.rejected.map((r) => r.row), [3, 4]);
+  assert.match(out.rejected[0].reason, /NUL character or half of an emoji/);
+});
+
 check("quoted fields with commas survive", () => {
   const csv =
     'Recipient Address,Token,Amount,Recipient Name\n0x1111111111111111111111111111111111111111,USDC,100.00,"Acme, Inc."';

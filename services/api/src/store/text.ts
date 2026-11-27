@@ -14,7 +14,7 @@ export function hasUnstorableText(v: unknown): boolean {
     if (typeof x === "string") {
       if (UNSTORABLE.test(x)) return true;
     } else if (Array.isArray(x)) {
-      todo.push(...x);
+      for (const y of x) todo.push(y); // not push(...x): a wide array would overflow the argument list
     } else if (x !== null && typeof x === "object") {
       for (const [k, y] of Object.entries(x)) {
         if (UNSTORABLE.test(k)) return true;

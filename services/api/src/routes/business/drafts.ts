@@ -58,8 +58,7 @@ import type { Account } from "../../domain/types.js";
 import { orgEntity } from "../../domain/org-entity.js";
 import { publicSafeOp } from "./safe-ops.js";
 import { mapSeq } from "../../seq.js";
-import { hasUnstorableText, sliceChars } from "../../store/text.js";
-import { BAD_TEXT } from "../../http/body-text.js";
+import { sliceChars } from "../../store/text.js";
 
 /** A conditional draft write found the draft moved on since it was read. */
 const DRAFT_CHANGED = { error: "This draft changed while this request was being handled. Nothing was written; look at it again." };
@@ -866,8 +865,6 @@ export function createDraftRoutes(
     if (typeof req.body !== "string") {
       return res.status(415).json({ error: "Send the CSV as text (content-type text/csv), not JSON." });
     }
-    // Parsed here, after the global check: lines from it would be refused when saved.
-    if (hasUnstorableText(req.body)) return res.status(400).json(BAD_TEXT);
     try {
       const knownTags = new Set(
         (await store.ledgerOf(ctx.org.id)).flatMap((e) => e.tags),

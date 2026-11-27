@@ -18,7 +18,7 @@ import type {
 } from "./types.js";
 import { redactedMessage } from "../http/log-cause.js";
 import { fromCents, toCents } from "./invoicing.js";
-import { sliceChars } from "../store/text.js";
+import { hasUnstorableText, sliceChars } from "../store/text.js";
 
 export class DraftError extends Error {}
 
@@ -335,6 +335,8 @@ export function importCsv(
   body.forEach((cells, i) => {
     const rowNo = i + 2; // 1-based, past the header
     try {
+      // The CSV is parsed here, not by express.json, so the body check never saw it.
+      if (hasUnstorableText(cells)) throw new DraftError("this row contains a NUL character or half of an emoji");
       const tags =
         idx.tags >= 0
           ? (cells[idx.tags] ?? "")
