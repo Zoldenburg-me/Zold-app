@@ -76,6 +76,13 @@ Say this plainly rather than letting the surface imply otherwise:
   intent left by a crash only in `convert-crash-test`. Automatic
   conversion with "ask me" off has never run. The receipt and disposal
   statement lines have not been reviewed by a Steuerberater.
+- **Converting USDC on a company's own Safe has never run on a chain.**
+  `POST /orgs/:orgId/crypto-deposits/:id/convert` queues the swap on the org
+  Safe queue and the owners sign it there; there is no auto-convert.
+  `org-crypto-in:test` plays the queue, the venue and the chain: no company
+  swap has been quoted by a venue, relayed, or measured from its logs, and
+  the settle after relay is the person's code (`settleUnconfirmedConversions`),
+  run for a company only up to "no receipt yet".
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,
   CCTP has never executed live, and the anchor-attribution half of the Stellar
   payout has never run — only the on-ledger payment half is proven (tx
@@ -139,8 +146,9 @@ Say this plainly rather than letting the surface imply otherwise:
   refused (collecting several owners' message signatures is not built).
   It needs the `profile` and `chain` fields on GET /ibans items, which are
   unverified against the real server (without `profile` it waits, failing
-  closed). An issued IBAN is re-read only when someone presses **Check
-  again**: there is no poller. Deposits are listed live from Monerium and
+  closed). An issued or moved IBAN is re-read on **Check again** and by the
+  Monerium poller, at most once per `MONERIUM_IBAN_CHECK_MS` per company
+  (as a person's is). Deposits are listed live from Monerium and
   booked nowhere.
 - **No crypto has been booked from a company's own Safe.** The scanner
   watches a company Safe that is the account's alone and books EURe and USDC
@@ -366,12 +374,15 @@ Say this plainly rather than letting the surface imply otherwise:
 - **The Postgres store has never held a deployment's data.** Both leases
   run the JSON store. The Postgres backend, its migrations and the
   `pg-import` / `pg-export` round trip have run only on fixtures, on PGlite
-  and on a local Postgres 17 (`npm run check:pg`). The pre-import report has
+  on a local Postgres 17 and on GitHub's linux-arm64 runner (`npm run
+  check:pg`, the manual `oracle-host` workflow). The pre-import report has
   not been run on a copy of the testnet or the mainnet db.json, so no
   foreign key is in the schema and no real duplicate is known. There is no
   Oracle host, no cluster, no pgBackRest backup and no restore drill: the
   provisioning script, units and runbook (`scripts/oracle-host/`,
-  `docs/oracle-host.md`) have run only against a local Postgres 17.
+  `docs/oracle-host.md`) have never run as a whole: their tests render the
+  config and run the SQL on a throwaway cluster (locally and on that runner),
+  with `systemctl` and the host stubbed.
 - Timeout values everywhere were chosen, not measured.
 
 **PARKED, and it gates one customer**: merchant-book privacy. One Safe per

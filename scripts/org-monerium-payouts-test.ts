@@ -34,7 +34,7 @@
  */
 import "./_test-env.js";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -94,7 +94,7 @@ for (const p of ["anna", "otto", "adam", "pia"] as const) {
   await store.addMember({ id: `m_${p}`, orgId: "org_co", userId: `u_${p}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
 }
 await store.addMember({ id: "m_st", orgId: "org_st", userId: "u_anna", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
-await store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: hex(keys.anna.jwk.x!), y: hex(keys.anna.jwk.y!) }], createdAt: now } as any);
+await store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: hex(keys.anna.jwk.x!), y: hex(keys.anna.jwk.y!) }], createdAt: "2026-01-01T00:00:00.000Z" } as any); // planned before any payout below: the books start there
 await store.addAccount({
   id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: null,
   identifier: { iban: IBAN }, address: SAFE,
@@ -573,6 +573,31 @@ try {
     const line = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === `org-payout:${p.id}`);
     assert.ok(line, "an account with only a payout is still swept");
     assert.equal(line!.statement!.valueDate, "2026-10-31", "the day Monerium processed it, not the day Zold read it");
+  });
+
+  await check("a pending payout is still settled and booked after Monerium moves the IBAN away", async () => {
+    await reset();
+    mon.placeAnswer = { id: "ord_away", meta: { state: "pending" } };
+    assert.equal((await pay({ amountEur: 250 })).status, 200);
+    // The poller took the IBAN off: gated, the move recorded on the account.
+    const acc = (await store.findAccount("acc_co"))!;
+    await store.updateAccount("acc_co", { status: "gated", identifier: { ...acc.identifier, iban: undefined }, moneriumIban: { safeAddress: SAFE, profileId: PROFILE, movedAwayAt: now } } as any);
+    mon.orders = { ord_away: { id: "ord_away", meta: { state: "processed", processedAt: "2026-11-20T10:00:00Z" } } };
+    assert.equal((await call("GET", "/org_co/monerium/payouts", "u_adam")).status, 200);
+    const p = (await payouts())[0];
+    assert.equal(p.state, "sent");
+    const { writeStatementLines } = await import("../services/api/src/bookkeeping/writer.js");
+    await writeStatementLines();
+    const line = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === `org-payout:${p.id}`);
+    assert.equal(line?.statement!.amountCents, -25000, "the debit is booked");
+    // Settings keeps asking for the list while the IBAN is away, and offers no send.
+    const settings = readFileSync(path.join(ROOT, "services/api/public/business/settings.js"), "utf8");
+    assert.match(settings, /companyIban\?\.state === "moved"\)\);\n  let payouts = withPayouts/);
+    assert.match(settings, /issued \|\| moved \? payoutsHtml\(payouts, payoutsOn, keys\?\.status === "connected", issued\)/);
+    assert.match(settings, /el\.outerHTML = payoutsHtml\(p, payoutsOn, keys\?\.status === "connected", issued\)/, "the list filled in later offers no send either");
+    assert.doesNotMatch(settings, /payoutsHtml\([^)]*"connected"\)/, "every call says whether the IBAN is here");
+    assert.match(settings, /on && keysOk && ibanHere && roleCan/, "no Pay a bank account while it is away");
+    assert.match(settings, /!ibanHere \? `[^`]*IBAN was moved to another address[^`]*no longer reach this account/, "the moved-away note in its place");
   });
 
   await check("a payout being answered by Monerium is not counted twice against the next one", async () => {

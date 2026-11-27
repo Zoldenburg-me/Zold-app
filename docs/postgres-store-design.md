@@ -757,9 +757,11 @@ With history rows and no such file, the export refuses.
 API and the data move together, from the Akash lease to the Oracle host
 (§7), testnet (zoldhq.com) first, then app.zoldhq.com:
 
-1. On the Oracle host: the Postgres 17 suite (`check:pg`) passes against the
-   target cluster, `npm run preflight` passes, and a restore drill (§7) has
-   been done once.
+1. The Postgres 17 suite (`check:pg`) passes on the release's commit
+   against a scratch Postgres 17, such as the `oracle-host` workflow's; the
+   target cluster's `pg_hba` rejects the suite's temporary roles and
+   databases. On the Oracle host `npm run preflight` passes, and a restore
+   drill (§7) has been done once.
 2. Drain: no transfer, crypto send or safe op in a non-final state, and the
    #167 condition (no no-reference SEPA transfer waiting).
 3. Stop writes: stop the API on the lease (it is the only writer).
@@ -1033,7 +1035,7 @@ lost boot volume is a full outage of both deployments. S7 writes this as a
 section of the runbook and as a provisioning script, `scripts/oracle-host/`,
 that the drill runs.
 
-**Proposed target, for the owner to accept (§9):** service back within
+**Target (the owner's):** service back within
 **4 hours** of the decision to rebuild (RTO), losing at most the writes of
 the last minute before the host died (RPO, `archive_timeout`, while
 archiving keeps up, §7). Testnet follows mainnet, within a further 4 hours.
@@ -1248,7 +1250,7 @@ stays the default until the cut-over.
 | S5 | Importer, export, verify and the pre-import report (§6); migration `0008`: `cap_holds` refuses `'Infinity'`, the deposit key's `chain_id` and `tx_hash_lc` are `NOT NULL`. Tests on PGlite in `check` and on Postgres 17 in `check:pg`. Before S8: run the report against copies of the testnet and the mainnet `db.json` (`npm run pg-import -- report <copy>`) and record the counts per rule on the board: a blocking finding there refuses the import, and an orphan decides whether its foreign key goes in (§1.2) | — |
 | S6 | Docs: AGENTS.md (where the code lives, secrets and storage), `docs/running-locally.md` (local Postgres, `check:pg`), technical-architecture §18.1, `docs/roadmap.md`, `docs/status.md` | — |
 | S7a | The Oracle host's repository parts (§7, §7.1, §7.2): `scripts/oracle-host/` (provisioning script, idempotent, with `--rebuild` for a new host; the database step and its checks; the table check; the hub watchdog; the cluster jobs: archiver, disk and hub-size alerts with the hub write stop, the daily dump with its check files, pgBackRest backups; the deploy pull loop; the aarch64 toolchain check; systemd units and timers; `host.env.example`), the deploy's migration command (`npm run db:migrate`, kept on `production`), the linux-arm64 `age` pin, a manual arm64 workflow (`oracle-host.yml`, no secret), the runbook `docs/oracle-host.md` (deploy and fix forward, cut-over, host loss, restore drill, hub-only restore, write stop). Each cluster is made with `pg_createcluster --encoding=UTF8` and a UTF-8 locale (the email key's `\u` escapes and `lower()` depend on them, `0003`). Tests: `npm run check` (every script parses, the rendered config, the units' hardening) and `check:pg` (the SQL on Postgres 17 under per-run names, and a throwaway cluster on the rendered `pg_hba`/`pg_ident`) | — |
-| S7b | On the host, from S7a's scripts: provisioning both clusters, the toolchain check, `pgbackrest check` with both repositories, the one-repository-down test (block `repo2`, watch `pg_wal` and `pg_stat_archiver`, write the result in §7), the alerts firing once each, a dump object refused overwrite and delete by its credential, the first restore drill onto a new instance and the first testnet rebuild, both timed against the recovery-time target, and the console check for an idle-reclamation notice | the OCI account, buckets, keys and passphrases (`host.env`); recovery-time target accepted; host access |
+| S7b | On the host, from S7a's scripts: provisioning both clusters, the toolchain check, `pgbackrest check` with both repositories, the one-repository-down test (block `repo2`, watch `pg_wal` and `pg_stat_archiver`, write the result in §7), the alerts firing once each, a dump object refused overwrite and delete by its credential, the first restore drill onto a new instance and the first testnet rebuild, both timed against the recovery-time target, and the console check for an idle-reclamation notice | the OCI account, buckets, keys and passphrases (`host.env`); host access |
 | S8 | Cut-over (§6): testnet, then app.zoldhq.com. `STORE_BACKEND=postgres` becomes the default; the JSON backend stays one release as the rollback path, then goes | the owner picks the time |
 | S9 | Hub on Postgres (§7.2), in Agentic-payment-protocol: `packages/hosted` ported from SQLite to the `hub` database S7 created, an import of the existing `hub.db` with a verify (row counts and hashes per table, as §6, and the isolation: `hub_app` cannot connect to Zold's database, cannot take an advisory lock in it, and holds no privilege outside `hub`; the same three checks run in the drill). Needs S7, not S8 | — |
 
@@ -1259,10 +1261,9 @@ S9 comes after S7 and can land before S8, so the §7.2 limits meet real hub load
 
 ## 9. Owner questions
 
-1. **Recovery target:** accept or change the proposed 4 hours to restore
-   service and one minute of lost writes after losing the host (§7.1).
-   And: lock the dump bucket's retention rule once S7 has run it for a
-   while? Locked, not even Oracle can shorten it; unlocked, an OCI
-   administrator account can delete the rule (§7).
-2. **Cut-over:** the owner's call, once S7 is done (§6). Nothing to answer
-   now.
+1. **Dump retention lock:** lock the dump bucket's retention rule once S7
+   has run it for a while? Locked, not even Oracle can shorten it; unlocked,
+   an OCI administrator account can delete the rule (§7).
+2. **Cut-over time:** the owner's call, once S7 is done (§6). Both
+   deployments move by import (§6), keeping their accounts, Safes and IBANs;
+   neither starts fresh.

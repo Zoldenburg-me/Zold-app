@@ -68,6 +68,8 @@ process.env.MONERIUM_CHAIN = "base";
 process.env.MONERIUM_MAX_RPS = "100000"; // the read limiter is not under test here
 
 const orders = new Map<string, any>();
+/** Orders only a company's own keys ("co-client") list: its own profile. */
+const coOrders = new Map<string, any>();
 /** While set, /auth/token answers this status with an OAuth error body. */
 let tokenFault = 0;
 const TOKEN_BODY = { error: "invalid_client", error_description: "client app-client unknown" };
@@ -124,7 +126,7 @@ const monerium = createServer((req, res) => {
       }
       tokenFault
         ? send(tokenFault, TOKEN_BODY)
-        : send(200, { access_token: "tok-app", token_type: "Bearer", expires_in: 3600 });
+        : send(200, { access_token: form.get("client_id") === "co-client" ? "tok-co" : "tok-app", token_type: "Bearer", expires_in: 3600 });
     });
     return;
   }
@@ -133,7 +135,7 @@ const monerium = createServer((req, res) => {
   if (url.pathname === "/tokens") {
     return send(200, [{ kind: "evm", currency: "eur", symbol: "EURe", chain: "base", chainId: 84532, decimals: 18, address: "0x00000000000000000000000000000000000000e0" }]);
   }
-  if (url.pathname === "/orders") return send(200, { orders: [...orders.values()] });
+  if (url.pathname === "/orders") return send(200, { orders: [...(bearer === "tok-co" ? coOrders : orders).values()] });
   if (url.pathname === "/ibans") return send(200, { ibans: [] });
   const m = url.pathname.match(/^\/orders\/([^/]+)$/);
   if (m) {
@@ -167,6 +169,7 @@ const { SECURITY } = await import("../services/api/src/config.js");
 const { payoutEvidence } = await import("../services/api/src/transfers/review-evidence.js");
 const { paymentMemo } = await import("../services/api/src/sepa.js");
 const { moneriumText } = await import("../services/api/src/adapters/monerium-client.js");
+const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -340,13 +343,20 @@ await check("USDC that arrived while no rate could be read is valued later at it
     issued: { number: "RE-UNRATED", issueDate: at.slice(0, 10), netCents: 10000, vatCents: 0, grossCents: 10000, currency: "EUR" },
   } as any);
   const inv = await store.addCryptoDeposit(row("co-unrated-inv", 918, { invoiceId: "inv_co_unrated" }) as any);
+  // A person's pay-link payment, matched and settled with no euro value yet.
+  await store.addPaymentRequest({
+    id: "pr_unrated", code: "UNRATEDCODE2345", userId: "u_owner", orgId: "org_owner", handle: "owner", amountEur: 100, currency: "EUR", methods: ["crypto"], state: "PAID",
+    cryptoQuotes: [], source: { kind: "app" }, expiresAt: at, createdAt: at, updatedAt: at,
+    payments: [{ id: "pay_unrated", method: "crypto", ref: "u-unrated-link", depositId: "u-unrated-link", amountEur: 100, amountUsdc: 110, kind: "full", settledAsset: "USDC", at }],
+  } as any);
+  await store.addCryptoDeposit(row("u-unrated-link", 919, { accountId: undefined, userId: "u_owner", paymentAddress: addr("a"), paymentRequestId: "pr_unrated" }) as any);
   const { recordInvoiceSettlement } = await import("../services/api/src/adapters/crypto-deposits.js");
   await recordInvoiceSettlement(inv);
   assert.equal((await store.findInvoice("inv_co_unrated"))!.state, "SUBMITTED", "a €0 payment leaves it open");
   const before = process.env.TRANSF_RATES_FIXED;
   process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, KES: 147.53 });
   try {
-    assert.equal(await valueUnratedReceipts(), 2);
+    assert.equal(await valueUnratedReceipts(), 3);
     assert.equal(await valueUnratedReceipts(), 0, "stamped once");
   } finally {
     if (before === undefined) delete process.env.TRANSF_RATES_FIXED; else process.env.TRANSF_RATES_FIXED = before;
@@ -363,6 +373,8 @@ await check("USDC that arrived while no rate could be read is valued later at it
   const paidInv = (await store.findInvoice("inv_co_unrated"))!;
   assert.equal(paidInv.state, "PAID", "the valued payment covers the invoice");
   assert.deepEqual(paidInv.settlements!.map((s) => [s.ref, s.amountEur]), [["deposit:co-unrated-inv", 100]], "rewritten in place, not a second payment");
+  const link = (await store.findPaymentRequest("pr_unrated"))!;
+  assert.deepEqual(link.payments.map((p) => [p.id, p.settledEur]), [["pay_unrated", 100]], "the pay link's payment now holds its euro value, once");
   await writeStatementLines();
   const line = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "deposit:co-unrated:held");
   assert.equal(line?.statement?.amountCents, 10000, "the books get the receipt they lacked");
@@ -392,6 +404,63 @@ await check("USDC that arrived while no rate could be read is valued later at it
   assert.equal(kept.accountCodeAuto, false);
 });
 
+await check("an invoice is paid when its payments, in the order they arrived, first cover it: a receipt valued late does not backdate it", async () => {
+  const { settlementUpdate } = await import("../services/api/src/domain/invoices.js");
+  const invoice: any = { direction: "outgoing", state: "SUBMITTED", issued: { grossCents: 10000 },
+    settlements: [{ ref: "bank:tue", method: "bank", amountEur: 40, at: "2026-10-13T09:00:00.000Z" }, { ref: "deposit:mon", method: "crypto", amountEur: 0, at: "2026-10-12T09:00:00.000Z" }] };
+  const u = settlementUpdate(invoice, { ref: "deposit:mon", method: "crypto", amountEur: 60, at: "2026-10-12T09:00:00.000Z" } as any);
+  assert.equal(u.state, "PAID");
+  assert.equal(u.payment!.paidAt, "2026-10-13T09:00:00.000Z", "covered on Tuesday, when the second payment arrived");
+  assert.equal(settlementUpdate({ ...invoice, settlements: [] }, { ref: "deposit:mon", method: "crypto", amountEur: 60, at: "2026-10-12T09:00:00.000Z" } as any).state, undefined, "€60 of €100 leaves it open");
+  // Bank credits, the usual path: paid at the credit that completes it.
+  const bank = (ref: string, amountEur: number, at: string) => ({ ref, method: "bank", amountEur, at }) as any;
+  const open: any = { ...invoice, settlements: [] };
+  assert.equal(settlementUpdate(open, bank("monerium:full", 100, "2026-10-14T08:00:00.000Z")).payment!.paidAt, "2026-10-14T08:00:00.000Z", "one full credit");
+  const first = settlementUpdate(open, bank("monerium:a", 40, "2026-10-14T08:00:00.000Z"));
+  assert.equal(first.state, undefined, "€40 of €100 leaves it open");
+  const second = settlementUpdate({ ...open, settlements: first.settlements }, bank("monerium:b", 60, "2026-10-15T08:00:00.000Z"));
+  assert.equal(second.payment!.paidAt, "2026-10-15T08:00:00.000Z", "two credits: paid when the second completed it");
+  // A credit recorded late but dated earlier than the one before it: paid when the two first covered it.
+  const late = settlementUpdate({ ...open, settlements: [bank("monerium:c", 60, "2026-10-16T08:00:00.000Z")] }, bank("monerium:d", 40, "2026-10-14T08:00:00.000Z"));
+  assert.equal(late.payment!.paidAt, "2026-10-16T08:00:00.000Z");
+  // Closed first, then an earlier receipt is valued: the paid date moves back to when the payments first covered it.
+  const mon0 = { ref: "deposit:mon", method: "crypto", amountEur: 0, at: "2026-10-12T09:00:00.000Z" } as any;
+  const wed = settlementUpdate({ ...open, settlements: [mon0] }, bank("monerium:wed", 70, "2026-10-14T09:00:00.000Z"));
+  const tue = settlementUpdate({ ...open, settlements: wed.settlements }, bank("monerium:tue", 40, "2026-10-13T09:00:00.000Z"));
+  assert.equal(tue.state, "PAID");
+  assert.equal(tue.payment!.paidAt, "2026-10-14T09:00:00.000Z", "€0 + €40 + €70: covered on Wednesday");
+  const paidInvoice: any = { ...open, state: "PAID", settlements: tue.settlements, payment: tue.payment };
+  const valued = settlementUpdate(paidInvoice, { ...mon0, amountEur: 60 });
+  assert.equal(valued.state, undefined, "the state is left as it is");
+  assert.equal(valued.payment!.paidAt, "2026-10-13T09:00:00.000Z", "€60 + €40 covered it on Tuesday");
+  assert.equal(settlementUpdate(paidInvoice, bank("monerium:extra", 60, "2026-10-12T00:00:00.000Z")).payment, undefined, "a new payment on a PAID invoice changes no date, though it would cover it on Tuesday");
+});
+
+await check("an EURe settlement is dated when the money landed on chain, not when the scanner saw it", async () => {
+  const { buildCryptoSettlement } = await import("../services/api/src/domain/invoices.js");
+  const s = buildCryptoSettlement({ id: "d-e", token: "EURE", txHash: `0x${"1".repeat(64)}`, amountEur: 60, creditedEur: 60, holding: "none", txs: [],
+    arrivedAt: "2026-10-12T23:59:40.000Z", detectedAt: "2026-10-13T00:00:10.000Z" } as any);
+  assert.equal(s.at, "2026-10-12T23:59:40.000Z");
+});
+
+await check("a stored credit that loses its mint to an earlier credit no longer carries the mint's hash", async () => {
+  const H = (k: number) => `0x${k.toString(16).padStart(64, "0")}`;
+  const at = "2026-10-20T15:00:10.000Z";
+  await store.recordMoneriumIssue({ orderId: "ord-mint-b", accountId: "acc_co", amountEur: 77, processedAt: "2026-10-20T15:00:00.000Z", recordedAt: at });
+  await store.addCryptoDeposit({ id: "co-mint", accountId: "acc_co", chainId: 31337, token: "EURE", txHash: H(931), logIndex: 0, from: `0x${"0".repeat(40)}`,
+    amountUnits: "77000000000000000000", amountEur: 77, creditedEur: 77, settlementAsset: "EURE", holding: "none", settledAt: at, arrivedAt: at, txs: [], detectedAt: at, updatedAt: at } as any);
+  await writeStatementLines();
+  const lineB = async () => (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "monerium:issue:ord-mint-b")!;
+  assert.equal((await lineB()).txHash, H(931));
+  // An earlier equal credit is recorded late: processed first, it takes the one mint.
+  await store.recordMoneriumIssue({ orderId: "ord-mint-a", accountId: "acc_co", amountEur: 77, processedAt: "2026-10-20T14:59:00.000Z", recordedAt: at });
+  await writeStatementLines();
+  const b = await lineB();
+  assert.equal(b.txHash, undefined, "the stored row, which the CSV export reads");
+  assert.deepEqual(b.statement!.links.txHashes, []);
+  assert.equal((await store.ledgerOf("org_co")).find((e) => e.statement?.key === "monerium:issue:ord-mint-a")!.txHash, H(931));
+});
+
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {
   const id = issue(addr("a"));
   assert.equal(await mirrorOrderById(id), "recorded");
@@ -411,6 +480,241 @@ await check("a SEPA credit to a sole trader's Safe is booked under the user, on 
   await Promise.all([writeStatementLines(), writeStatementLines()]);
   assert.equal((await store.ledgerOf("org_st")).filter((e) => e.statement?.links.orderId === id).length, 1, "one line, whichever sweep wrote it");
   assert.equal(await lineOf("org_st_personal", id), undefined);
+});
+
+console.log("\nA company's own Monerium keys");
+
+await check("a SEPA credit seen only on the company's own keys gets its issue record, a sepa_in line with the bank facts, and the reconciler lists it", async () => {
+  await store.updateOrganisation("org_co", { monerium: {
+    clientId: "co-client", clientSecretEnc: SECRETS.orgMoneriumApiSecret.seal("org_co", "co-secret-placeholder"),
+    profile: { id: "prof-co", state: "approved" }, connectedAt: now, checkedAt: now, connectedByMemberId: "m_co",
+  } } as any);
+  const id = issue(COMPANY_SAFE);
+  coOrders.set(id, orders.get(id));
+  orders.delete(id); // the app's keys never list it
+  // The company's keys listing an order for someone else's Safe: not the company's to feed.
+  const foreign = issue(addr("a"));
+  coOrders.set(foreign, orders.get(foreign));
+  orders.delete(foreign);
+  await pollDepositsOnce();
+  const r = (await recordOf(id))!;
+  assert.equal(r?.accountId, "acc_co", "booked to the company's account");
+  const line = await lineOf("org_co", id);
+  assert.equal(line?.statement?.event, "sepa_in");
+  assert.equal(line?.statement?.counterparty?.name, "Kunde GmbH");
+  assert.equal(await store.isOrderProcessed(foreign), false, "an order for another Safe on the company's keys books nothing");
+  assert.equal(await recordOf(foreign), undefined);
+  // The reconciler sees the same order: no PHANTOM for it, and the foreign one is not reported as missed.
+  const report = await reconcile();
+  assert.ok(!report.findings.some((f) => f.orderId === id || f.orderId === foreign), JSON.stringify(report.findings.filter((f) => f.orderId === id || f.orderId === foreign)));
+  await pollDepositsOnce(); // the poll re-sees it: still one record, one line
+  assert.equal((await store.list("moneriumIssueOrders")).filter((o) => o.orderId === id).length, 1);
+  assert.equal((await store.ledgerOf("org_co")).filter((e) => e.statement?.links.orderId === id).length, 1);
+});
+
+await check("a company deposit the poller never recorded is reported UNMIRRORED by the reconciler", async () => {
+  const id = issue(COMPANY_SAFE);
+  coOrders.set(id, orders.get(id));
+  orders.delete(id);
+  const report = await reconcile();
+  assert.ok(report.findings.some((f) => f.kind === "UNMIRRORED" && f.orderId === id), JSON.stringify(report.findings));
+  await pollDepositsOnce();
+  assert.equal((await recordOf(id))?.accountId, "acc_co");
+});
+
+await check("a company's keys that fail are skipped; the other sources are still read", async () => {
+  const { companyIssueOrders } = await import("../services/api/src/adapters/monerium-sandbox.js");
+  const warned: string[] = [];
+  const realWarn = console.warn;
+  console.warn = (m: string) => warned.push(String(m));
+  try {
+    assert.deepEqual(await companyIssueOrders(() => ({ orders: async () => { throw new Error("401"); } })), []);
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.ok(warned.some((w) => w.includes("org_co")), warned.join(" | "));
+});
+
+await check("a company credit the scanner saw as a mint and the poller as an issue order is one sepa_in line, no eure_in", async () => {
+  const { settleOnArrival } = await import("../services/api/src/adapters/crypto-deposits.js");
+  const id = issue(COMPANY_SAFE, "33.00");
+  coOrders.set(id, orders.get(id));
+  orders.delete(id);
+  const mint = await store.addCryptoDeposit({
+    id: "co-mint-poll", accountId: "acc_co", chainId: 31337, token: "EURE", txHash: `0x${"9b".repeat(32)}`, logIndex: 0,
+    from: `0x${"0".repeat(40)}`, amountUnits: "33000000000000000000", amountEur: 33, creditedEur: 33, settlementAsset: "EURE",
+    paymentAddress: COMPANY_SAFE, holding: "awaiting_approval", txs: [], arrivedAt: now, detectedAt: now, updatedAt: now,
+  } as any);
+  await settleOnArrival(mint);
+  await pollDepositsOnce();
+  const lines = (await store.ledgerOf("org_co")).filter((e) => e.statement?.links.orderId === id || e.statement?.links.depositId === "co-mint-poll");
+  assert.deepEqual(lines.map((e) => e.statement!.event), ["sepa_in"], JSON.stringify(lines.map((e) => e.statement)));
+  assert.equal(lines[0].statement!.amountCents, 3300);
+});
+
+await check("a company invoice paid by bank with its number is settled when the credit lands on the company's Safe", async () => {
+  const invoiceId = "inv_co_bank";
+  await store.addInvoice({
+    id: invoiceId, orgId: "org_co", direction: "outgoing", state: "SUBMITTED", linkTokenHash: "0".repeat(32),
+    lines: [{ description: "Work", quantity: "1", unitPrice: "12.50", amount: "12.50" }],
+    currency: "EUR", total: "12.50", createdByMemberId: "m_co", createdAt: now, updatedAt: now,
+    issued: {
+      number: "CO-2026-0042", issueDate: now.slice(0, 10), issuer: { name: "org_co" }, recipient: { name: "Kunde GmbH" },
+      vatTreatment: { kind: "exempt", reason: "kleinunternehmer" }, netCents: 1250, vatCents: 0, grossCents: 1250,
+      buckets: [{ rate: 0, netCents: 1250, vatCents: 0 }], currency: "EUR",
+    },
+  } as any);
+  // The same number paid to the owner's personal Safe is the owner's money: it settles nothing.
+  const personal = issue(addr("a"));
+  orders.get(personal).memo = "CO-2026-0042";
+  await pollDepositsOnce();
+  assert.equal((await store.findInvoice(invoiceId))!.state, "SUBMITTED");
+  const id = issue(COMPANY_SAFE);
+  coOrders.set(id, { ...orders.get(id), memo: "Rechnung CO-2026-0042" });
+  orders.delete(id);
+  await pollDepositsOnce();
+  const inv = (await store.findInvoice(invoiceId))!;
+  assert.equal(inv.state, "PAID", JSON.stringify(inv.settlements));
+  assert.equal(inv.settlements?.length, 1);
+  assert.equal((inv.settlements![0] as any).matchedOn, "invoice-number");
+  // A later number that reads alike ("CO/2026/0042"): the re-polled credit is
+  // already on the paid invoice and pays no second one.
+  await store.addInvoice({ ...(await store.findInvoice(invoiceId))!, id: "inv_co_alike", linkTokenHash: "1".repeat(32), state: "SUBMITTED", settlements: [], payment: undefined,
+    issued: { ...(await store.findInvoice(invoiceId))!.issued!, number: "CO/2026/0042" } } as any);
+  await pollDepositsOnce();
+  assert.equal((await store.findInvoice("inv_co_alike"))!.state, "SUBMITTED", "one bank order pays one invoice");
+  assert.equal(((await store.findInvoice("inv_co_alike"))!.settlements ?? []).length, 0);
+  // A new credit quoting that number names both: left for a person, the paid one is not the excuse to pick the other.
+  const again = issue(COMPANY_SAFE);
+  coOrders.set(again, { ...orders.get(again), memo: "CO/2026/0042" });
+  orders.delete(again);
+  await pollDepositsOnce();
+  assert.equal(((await store.findInvoice("inv_co_alike"))!.settlements ?? []).length, 0, "ambiguous over every issued number");
+  assert.equal((await store.findInvoice(invoiceId))!.settlements?.length, 1);
+});
+
+await check("a company pay link's code in a credit to the company Safe pays the link and its invoice, and no other invoice the memo names", async () => {
+  const invoice = (id: string, number: string, hash: string) => store.addInvoice({
+    id, orgId: "org_co", direction: "outgoing", state: "SUBMITTED", linkTokenHash: hash,
+    lines: [{ description: "Work", quantity: "1", unitPrice: "20.00", amount: "20.00" }],
+    currency: "EUR", total: "20.00", createdByMemberId: "m_co", createdAt: now, updatedAt: now,
+    issued: {
+      number, issueDate: now.slice(0, 10), issuer: { name: "org_co" }, recipient: { name: "Kunde GmbH" },
+      vatTreatment: { kind: "exempt", reason: "kleinunternehmer" }, netCents: 2000, vatCents: 0, grossCents: 2000,
+      buckets: [{ rate: 0, netCents: 2000, vatCents: 0 }], currency: "EUR",
+    },
+  } as any);
+  await invoice("inv_co_link", "CO-2026-0100", "2".repeat(32));
+  await invoice("inv_co_other", "CO-2026-0200", "3".repeat(32));
+  const code = "C0MPANYC0DE0001";
+  await store.addPaymentRequest({
+    id: "pr_co", code, userId: "u_owner", orgId: "org_co", accountId: "acc_co", handle: "org-co", amountEur: 20, currency: "EUR",
+    methods: ["bank"], state: "OPEN", invoiceId: "inv_co_link", cryptoQuotes: [], payments: [], source: { kind: "app" },
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now,
+  } as any);
+  // The same code paid into the creating member's own Safe is their money, not the company link's.
+  const personal = issue(addr("a"), "20.00");
+  orders.get(personal).memo = code;
+  await pollDepositsOnce();
+  assert.equal((await store.findPaymentRequest("pr_co"))!.state, "OPEN");
+  // Paid to the company: the memo carries the link code AND another invoice's number.
+  const id = issue(COMPANY_SAFE, "20.00");
+  coOrders.set(id, { ...orders.get(id), memo: `${code} CO-2026-0200` });
+  orders.delete(id);
+  await pollDepositsOnce();
+  await pollDepositsOnce(); // re-seen: the order is on the link's invoice, so it settles no other
+  const link = (await store.findPaymentRequest("pr_co"))!;
+  assert.equal(link.state, "PAID");
+  assert.deepEqual(link.payments.map((p) => p.orderId), [id]);
+  const paid = (await store.findInvoice("inv_co_link"))!;
+  assert.equal(paid.state, "PAID");
+  assert.deepEqual((paid.settlements ?? []).map((s: any) => s.matchedOn), ["payment-link"]);
+  assert.equal(((await store.findInvoice("inv_co_other"))!.settlements ?? []).length, 0, "one bank order pays one invoice");
+  assert.equal((await store.findInvoice("inv_co_other"))!.state, "SUBMITTED");
+});
+
+await check("a credit that pays a standalone company link pays no invoice its memo also names", async () => {
+  await store.addInvoice({
+    ...(await store.findInvoice("inv_co_other"))!, id: "inv_co_ctx", linkTokenHash: "4".repeat(32), state: "SUBMITTED", settlements: [], payment: undefined,
+    issued: { ...(await store.findInvoice("inv_co_other"))!.issued!, number: "CO-2026-0300" },
+  } as any);
+  const code = "C0MPANYC0DE0002";
+  await store.addPaymentRequest({
+    id: "pr_co_alone", code, userId: "u_owner", orgId: "org_co", accountId: "acc_co", handle: "org-co", amountEur: 20, currency: "EUR",
+    methods: ["bank"], state: "OPEN", cryptoQuotes: [], payments: [], source: { kind: "app" },
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now,
+  } as any);
+  const id = issue(COMPANY_SAFE, "20.00");
+  coOrders.set(id, { ...orders.get(id), memo: `${code} for CO-2026-0300` });
+  orders.delete(id);
+  await pollDepositsOnce();
+  await pollDepositsOnce();
+  assert.equal((await store.findPaymentRequest("pr_co_alone"))!.state, "PAID");
+  const ctx = (await store.findInvoice("inv_co_ctx"))!;
+  assert.equal(ctx.state, "SUBMITTED");
+  assert.equal((ctx.settlements ?? []).length, 0, "one transfer pays one request");
+});
+
+await check("a link raised for an invoice closes once bank credits pay the invoice, in either instalment order", async () => {
+  const base = (await store.findInvoice("inv_co_other"))!;
+  const mk = async (id: string, number: string, hash: string, code: string) => {
+    await store.addInvoice({
+      ...base, id, linkTokenHash: hash, state: "SUBMITTED", settlements: [], payment: undefined, total: "100.00",
+      lines: [{ description: "Work", quantity: "1", unitPrice: "100.00", amount: "100.00" }],
+      issued: { ...base.issued!, number, netCents: 10000, grossCents: 10000, buckets: [{ rate: 0, netCents: 10000, vatCents: 0 }] },
+    } as any);
+    await store.addPaymentRequest({
+      id: `pr_${id}`, code, userId: "u_owner", orgId: "org_co", accountId: "acc_co", handle: "org-co", amountEur: 100, currency: "EUR",
+      methods: ["bank"], state: "OPEN", invoiceId: id, cryptoQuotes: [], payments: [], source: { kind: "app" },
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now,
+    } as any);
+  };
+  const credit = (amount: string, memo: string) => {
+    const id = issue(COMPANY_SAFE, amount);
+    coOrders.set(id, { ...orders.get(id), memo });
+    orders.delete(id);
+  };
+  await mk("inv_inst_num", "CO-2026-0500", "5".repeat(32), "C0MPANYC0DE0005");
+  await mk("inv_inst_link", "CO-2026-0600", "6".repeat(32), "C0MPANYC0DE0006");
+  credit("60.00", "CO-2026-0500"); // first by number
+  credit("60.00", "C0MPANYC0DE0006"); // first by link
+  await pollDepositsOnce();
+  assert.equal((await store.findPaymentRequest("pr_inv_inst_num"))!.state, "OPEN");
+  assert.equal((await store.findPaymentRequest("pr_inv_inst_link"))!.state, "OPEN");
+  credit("40.00", "C0MPANYC0DE0005"); // the rest by link
+  credit("40.00", "CO-2026-0600"); // the rest by number
+  await pollDepositsOnce();
+  for (const id of ["inv_inst_num", "inv_inst_link"]) {
+    const inv = (await store.findInvoice(id))!;
+    assert.equal(inv.state, "PAID", id);
+    assert.equal((inv.settlements ?? []).length, 2, `${id}: each transfer once`);
+    assert.equal((await store.findPaymentRequest(`pr_${id}`))!.state, "PAID", `${id}: the link no longer collects`);
+  }
+});
+
+await check("the reconciler runs on company keys alone, and does not report a company credit on another chain or currency", async () => {
+  const { MONERIUM } = await import("../services/api/src/config.js");
+  const onOtherChain = issue(COMPANY_SAFE);
+  coOrders.set(onOtherChain, { ...orders.get(onOtherChain), chain: "ethereum" });
+  orders.delete(onOtherChain);
+  const inGbp = issue(COMPANY_SAFE);
+  coOrders.set(inGbp, { ...orders.get(inGbp), currency: "gbp" });
+  orders.delete(inGbp);
+  const missed = issue(COMPANY_SAFE);
+  coOrders.set(missed, orders.get(missed));
+  orders.delete(missed);
+  const appId = MONERIUM.clientId;
+  (MONERIUM as any).clientId = ""; // no app keys; no user has their own
+  try {
+    const report = await reconcile();
+    assert.ok(report.findings.some((f) => f.kind === "UNMIRRORED" && f.orderId === missed), "company keys alone open the comparison");
+    assert.ok(!report.findings.some((f) => f.orderId === onOtherChain || f.orderId === inGbp), JSON.stringify(report.findings));
+  } finally {
+    (MONERIUM as any).clientId = appId;
+  }
+  await pollDepositsOnce();
+  assert.equal(await store.isOrderProcessed(onOtherChain), false);
+  assert.equal(await store.isOrderProcessed(inGbp), false);
 });
 
 console.log("\nFail closed");
@@ -996,7 +1300,6 @@ await check("a redeem in a state Monerium did not document halts: not PAID, not 
 
 console.log("\nOAuth token refresh across workers and restarts");
 
-const { SECRETS } = await import("../services/api/src/stored-secrets.js");
 const { moneriumAccessToken, moneriumClientFor } = await import("../services/api/src/adapters/monerium-connection.js");
 const past = () => new Date(Date.now() - 3_600_000).toISOString();
 await user("u_oauth", addr("9"));

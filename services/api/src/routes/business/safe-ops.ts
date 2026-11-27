@@ -8,6 +8,7 @@
  * Safe's own threshold. Nothing here creates an op: payments and owner
  * changes queue theirs (M2.3). Before a signature is taken, the op's own
  * re-checks run (companySendSignRefusal for a crypto send,
+ * companyConversionSignRefusal for a crypto-in conversion,
  * guardianSetupSignRefusal for a recovery guardian): one that can never pass
  * invalidates the op.
  */
@@ -31,6 +32,9 @@ import {
 } from "../../wallet/org-safe-queue.js";
 import { requirePermission, type OrgContext } from "../org-context.js";
 import { companySendSignRefusal } from "../crypto-sends.js";
+import { CONVERT_KIND, companyConversionSignRefusal } from "./org-crypto-deposits.js";
+import { followCompanyConversions } from "../../adapters/crypto-deposits.js";
+import { describeCause } from "../../http/log-cause.js";
 import { guardianSetupSignRefusal, liveOrgRecoveryChain, type OrgRecoveryChain } from "../../wallet/org-recovery.js";
 import { wrap } from "../util.js";
 import type { OrgRoutes } from "./drafts.js";
@@ -77,7 +81,7 @@ export type BeforeSign = (op: PendingSafeOp) => Promise<{ status: number; code: 
 
 /** Every kind's re-checks; a kind with none passes. */
 export const opSignRefusal = (recoveryChain: OrgRecoveryChain = liveOrgRecoveryChain): BeforeSign =>
-  async (op) => (await companySendSignRefusal(op)) ?? (await guardianSetupSignRefusal(op, recoveryChain));
+  async (op) => (await companySendSignRefusal(op)) ?? (await companyConversionSignRefusal(op)) ?? (await guardianSetupSignRefusal(op, recoveryChain));
 
 export function createSafeOpRoutes(
   deps: OrgRoutes,
@@ -195,6 +199,11 @@ export function createSafeOpRoutes(
           : (await notPending());
       }
       const after = await relayIfReady(added, chain);
+      // A relayed conversion names its transaction now, before a scan can read
+      // its EURe as money in; the poller does the same if this fails.
+      if (after.kind === CONVERT_KIND && after.state !== "PENDING") {
+        await followCompanyConversions().catch((err) => console.error(`safe op ${after.id}: conversion not followed: ${describeCause(err)}`));
+      }
       const fresh = after.state === "PENDING" ? (await signerView(ctx, after, view)) : {};
       res.status(after.state === "FAILED" || after.state === "MANUAL_REVIEW" ? 502 : 201).json({ op: await publicSafeOp(after), ...fresh });
     }),

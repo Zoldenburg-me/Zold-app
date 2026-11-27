@@ -149,7 +149,8 @@ async function groupedRows(): Promise<Rows> {
   const cryptoSends = groupBy((await store.list("cryptoSends")).filter((c) => !c.safeOpId), (c) => c.userId);
   const orgSends = groupBy((await store.list("cryptoSends")).filter((c) => c.safeOpId), (c) => c.orgId);
   const sweeps = groupBy(await store.list("conversionSweeps"), (s) => s.userId);
-  const paymentRequests = groupBy(await store.list("paymentRequests"), (r) => r.userId);
+  // A company link is the company's, not its creator's (store.paymentRequestsForUser).
+  const paymentRequests = groupBy((await store.list("paymentRequests")).filter((r) => !r.accountId), (r) => r.userId);
   const invoices = groupBy(await store.list("invoices"), (i) => i.orgId);
   const paid = invoicePayments(await store.list("invoices"));
   const rules = groupBy(await store.list("accountRules"), (r) => r.orgId);
@@ -243,7 +244,10 @@ export async function writeAccountStatementLines(account: Account, rows: Rows = 
       companyPayouts: account.moneriumPayouts ?? [],
       swapsHaveExecuted: await rows.swapsHaveExecuted(),
     };
-    return await writeProjected(inp, undefined, rows);
+    // From when the Safe is the company's: set when it was deployed, else its
+    // plan's date (the same start, for an account set up before it was kept).
+    const since = account.backedSince ?? (await store.findOrganisation(account.orgId))?.safe?.createdAt;
+    return await writeProjected(inp, since, rows);
   });
 }
 
@@ -264,7 +268,8 @@ export async function writeCompanyPayoutLines(account: Account, payouts: Company
       deposits: [],
       issueOrders: [],
       sweeps: [],
-      invoices: [],
+      // The invoices too: a line's invoice link would otherwise be dropped.
+      invoices: await storeRows.invoicesOf(account.orgId),
       paymentRequests: [],
       cryptoSends: [],
       companyPayouts: payouts,

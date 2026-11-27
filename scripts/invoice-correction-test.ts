@@ -1,9 +1,9 @@
 /**
- * A corrected invoice (§ 31 Abs. 5 UStDV) replaces an issued one: a new
- * number in the same series, the original's number and date printed on it,
- * the issuer's details as they are now. The original stays as REPLACED with
- * its link cancelled, its payments carry over, and money that still names it
- * settles the correction, so the books count the pair once.
+ * A corrected invoice (§ 31 Abs. 5 UStDV) replaces an issued one: the next
+ * number, the original's number and date printed on it, the issuer's details
+ * as they are now. The original stays as REPLACED, its open link and its
+ * payments move to the correction, and money that still names it settles the
+ * correction, so the books count the pair once.
  *
  * In-process routers, no chain, no Monerium.
  *
@@ -26,7 +26,7 @@ const { resolveOrg } = await import("../services/api/src/routes/org-context.js")
 const { createInvoicingRoutes } = await import("../services/api/src/routes/business/invoicing.js");
 const { createInvoiceRoutes } = await import("../services/api/src/routes/business/invoices.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
-const { attributeMoneriumOrderToInvoice } = await import("../services/api/src/routes/payment-requests.js");
+const { attributeMoneriumOrder, attributeMoneriumOrderToInvoice } = await import("../services/api/src/routes/payment-requests.js");
 const { recordInvoiceSettlement } = await import("../services/api/src/adapters/crypto-deposits.js");
 const { projectStatementLines } = await import("../services/api/src/bookkeeping/statement.js");
 const { assertDeletable, buildBankSettlement, settlementRef, settlementUpdate } = await import("../services/api/src/domain/invoices.js");
@@ -117,7 +117,9 @@ await check("a viewer cannot correct, and another org's id is a 404", async () =
 });
 
 let second: any;
-await check("with the granted number: a new number, the original's printed, the original REPLACED and its link cancelled", async () => {
+let handedLink: any;
+await check("with the granted number: a new number, the original's printed, the original REPLACED and its link handed over", async () => {
+  const oldLink = (await links(first.invoice.id))[0];
   await store.patchOrgSub("org_de", "invoicing", (cur) => ({ ...(cur ?? {}), vatId: "DE123456789" }));
   const r = await correct(first.invoice.id);
   assert.equal(r.status, 201, JSON.stringify(r.data));
@@ -133,8 +135,12 @@ await check("with the granted number: a new number, the original's printed, the 
   assert.equal(old.state, "REPLACED");
   assert.equal(old.issued!.number, first.invoice.issued.number, "never renumbered");
   assert.equal(old.replacedBy?.invoiceId, second.invoice.id);
-  assert.equal((await links(first.invoice.id))[0].state, "CANCELLED");
-  assert.equal(second.payment.ok, true, "the correction gets its own pay link");
+  assert.equal((await links(first.invoice.id)).length, 0);
+  handedLink = (await links(second.invoice.id))[0];
+  assert.equal(handedLink.id, oldLink.id, "the same link, so the customer's saved reference still pays");
+  assert.equal(handedLink.state, "OPEN");
+  assert.equal(second.payment.ok, true);
+  assert.equal(second.payment.reused, true, "no second link");
   assert.throws(() => assertDeletable(old), /stays in your records/);
 });
 
@@ -154,14 +160,32 @@ await check("a replaced invoice is not corrected twice", async () => {
   assert.match(r.data.error, new RegExp(second.invoice.issued.number));
 });
 
+await check("a bank transfer carrying the old link's code settles the correction", async () => {
+  const r = await attributeMoneriumOrder({
+    id: "ord-old-code", kind: "issue", amount: "40.00", address: SAFE, memo: `Ref ${handedLink.code}`,
+    meta: { state: "processed", processedAt: new Date().toISOString() },
+  });
+  assert.equal(r?.id, handedLink.id);
+  assert.equal((await store.findInvoice(first.invoice.id))!.settlements, undefined, "nothing lands on the replaced one");
+  const c = (await store.findInvoice(second.invoice.id))!;
+  assert.equal(c.settlements?.length, 1);
+  assert.equal(c.state, "SUBMITTED", "part-paid");
+});
+
+await check("a settlement written straight at a replaced row is refused", async () => {
+  const s = buildBankSettlement({ id: "ord-race", kind: "issue", amount: "1.00", address: SAFE, memo: "x", meta: { state: "processed", processedAt: now } } as any, "invoice-number");
+  assert.equal(await store.settleInvoice(first.invoice.id, settlementRef(s), (row) => settlementUpdate(row, s)), null);
+  assert.equal((await store.findInvoice(first.invoice.id))!.settlements, undefined);
+});
+
 await check("a bank transfer quoting the replaced number settles the correction", async () => {
   await attributeMoneriumOrderToInvoice({
-    id: "ord-old-number", kind: "issue", amount: "100.00", address: SAFE, memo: `${first.invoice.issued.number} thanks`,
+    id: "ord-old-number", kind: "issue", amount: "60.00", address: SAFE, memo: `${first.invoice.issued.number} thanks`,
     meta: { state: "processed", processedAt: new Date().toISOString() },
   } as any);
   assert.equal((await store.findInvoice(first.invoice.id))!.settlements, undefined, "nothing lands on the replaced one");
   const c = (await store.findInvoice(second.invoice.id))!;
-  assert.equal(c.settlements?.length, 1);
+  assert.equal(c.settlements?.length, 2);
   assert.equal(c.state, "PAID");
 });
 
@@ -211,6 +235,30 @@ await check("the statement books that payment once, against the correction", () 
   assert.equal(settling.length, 1, JSON.stringify(lines.map((l) => l.statement)));
   assert.equal(settling[0].statement!.links.invoiceId, paidCorrection.id);
   assert.match(settling[0].statement!.reference, new RegExp(paidCorrection.issued.number));
+});
+
+await check("money a link took that has not settled the invoice yet blocks a correction", async () => {
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
+  const link = (await links(r.data.invoice.id))[0];
+  await store.updatePaymentRequest(link.id, { state: "PAID", payments: [{ id: "p1", method: "crypto", ref: "deposit:d1", amountEur: 100, kind: "full", at: now } as any] });
+  const fixed = await correct(r.data.invoice.id);
+  assert.equal(fixed.status, 409, JSON.stringify(fixed.data));
+  assert.equal((await store.findInvoice(r.data.invoice.id))!.state, "SUBMITTED");
+});
+
+await check("a part-paid invoice whose link lapsed gets no new full-amount link", async () => {
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
+  const link = (await links(r.data.invoice.id))[0];
+  await store.updatePaymentRequest(link.id, { state: "EXPIRED" });
+  const s = buildBankSettlement({ id: "ord-part", kind: "issue", amount: "40.00", address: SAFE, memo: "x", meta: { state: "processed", processedAt: now } } as any, "invoice-number");
+  await store.settleInvoice(r.data.invoice.id, settlementRef(s), (row) => settlementUpdate(row, s));
+  const before = (await store.list("paymentRequests")).length;
+  const fixed = await correct(r.data.invoice.id);
+  assert.equal(fixed.status, 201, JSON.stringify(fixed.data));
+  assert.equal(fixed.data.invoice.state, "SUBMITTED");
+  assert.equal(fixed.data.invoice.settlements.length, 1, "the 40 carries over");
+  assert.equal(fixed.data.payment, undefined);
+  assert.equal((await store.list("paymentRequests")).length, before);
 });
 
 await check("an amount that no longer matches is refused, not issued", async () => {

@@ -538,6 +538,16 @@ await check("the books statement and the export draw Replace where the receipt s
   assert.match(read("document.js"), /doc\.revokedAt \|\| doc\.verification\?\.checks\?\.some\(\(c\) => c\.name === "Records still match" && !c\.ok\)/, "no PDF link the server refuses");
 });
 
+await check("the export names who owns each IBAN: a backed account and a company's own-Safe account", async () => {
+  await store.addAccount({ id: "acc_co_safe", orgId: "org_co", currency: "EUR", label: "EUR (company)", status: "active", provider: "monerium", identifier: { iban: "DE02100100109307118603" }, address: safe("cc"),
+    moneriumProfile: { id: "prof-co", kind: "corporate", name: "Co UG", checkedAt: NOW }, createdAt: NOW } as any);
+  const prep = await call("POST", `/orgs/org_co/bookkeeping/export/${MONTH}/prepare`);
+  assert.equal(prep.status, 200, JSON.stringify(prep.body));
+  const owners = new Map(prep.body.ibanOwners.map((o: any) => [o.accountId, o]));
+  assert.ok(owners.has("acc_co"), "the backed account");
+  assert.deepEqual((owners.get("acc_co_safe") as any)?.moneriumProfile, { id: "prof-co", kind: "corporate", name: "Co UG", checkedAt: NOW }, "the company account and its Monerium profile");
+});
+
 server.close();
 console.log(`\n${passed} beleg-reissue checks passed`);
 if (process.exitCode) process.exit(process.exitCode);

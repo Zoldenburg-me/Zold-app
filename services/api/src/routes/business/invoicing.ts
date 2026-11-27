@@ -30,7 +30,7 @@ import { cachedVatCheck, checkVatId } from "../../adapters/vies.js";
 import { ibanChecksumValid, normaliseIban } from "../../domain/contacts.js";
 import type { Organisation } from "../../domain/types.js";
 import { correctable, correctionBody, issueOutgoing } from "./issue-outgoing.js";
-import { payLinkForInvoice } from "./invoice-pay-link.js";
+import { openLinkFor, payLinkForInvoice } from "./invoice-pay-link.js";
 import { baseUrlFor } from "../payment-requests.js";
 import { requireCapability, requirePermission, type OrgContext } from "../org-context.js";
 import { verifyPasskeyStepUp } from "../auth.js";
@@ -344,7 +344,12 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     if (!issued) return res.status(answer.status).json(answer.body);
     await store.audit(auditEntry("org.invoice_corrected", { orgId: ctx.org.id, memberId: ctx.member.id, invoiceId: original.id, correctionId: issued.id }, ctx.userId));
     // A paid original's money is the correction's: nothing is left to collect.
-    const payment = issued.state === "PAID" ? undefined : await payLinkForInvoice(ctx, issued, baseUrlFor(req));
+    // A part-paid one keeps the link it had (handed over, reused here); a new
+    // link would ask for the full amount again, so none is made for it.
+    const handedOver = await openLinkFor(issued);
+    const payment = issued.state === "PAID" || (!handedOver && issued.settlements?.length)
+      ? undefined
+      : await payLinkForInvoice(ctx, issued, baseUrlFor(req));
     res.status(201).json({ ...answer.body, ...(payment ? { payment } : {}) });
   }));
 

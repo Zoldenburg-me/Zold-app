@@ -1037,8 +1037,13 @@ export const ACTIONS = {
     const id = el.dataset.id;
     const correct = async (acceptWarnings) => {
       const r = await api(`/api/orgs/${org.id}/invoices/${id}/correct`, { method: "POST", body: acceptWarnings ? { acceptWarnings: true } : {} });
+      // Paid already: nothing to collect. Otherwise say whether it has a Pay button, and why not.
+      const pay = r.payment;
+      const how = r.invoice.state === "PAID" ? "It is already paid."
+        : pay?.ok ? `It has a Pay button${typeof pay.amountEur === "number" ? ` for ${eur(pay.amountEur)}` : ""}.`
+        : `There’s no Pay button on it${pay?.reason ? `: ${plain(pay.reason)}` : "."}`;
       const showLink = () => setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} replaces ${el.dataset.number}`,
-        "Send your customer this link. The old invoice’s link now says it was replaced, and its payment link no longer takes money.", location.origin + r.linkPath), 0);
+        `Send your customer this link. ${how} The old invoice’s link now says it was replaced; money sent with its payment details counts for the new one.`, location.origin + r.linkPath), 0);
       try { await render(); } finally { showLink(); }
     };
     Z.closeOverlay("inv-drawer");

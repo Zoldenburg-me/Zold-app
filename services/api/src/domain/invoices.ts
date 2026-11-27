@@ -447,7 +447,8 @@ export function buildCryptoSettlement(deposit: CryptoDeposit): CryptoInvoiceSett
         }
       : {}),
     ...(deposit.realisedGainEur === undefined ? {} : { realisedGainEur: deposit.realisedGainEur }),
-    at: deposit.receipt?.blockTimestamp ?? deposit.detectedAt,
+    // When it landed on chain, not when the scanner saw it.
+    at: deposit.receipt?.blockTimestamp ?? deposit.arrivedAt ?? deposit.detectedAt,
   };
 }
 
@@ -542,12 +543,29 @@ export function settlementUpdate(
 ): Pick<Invoice, "settlements"> & Partial<Pick<Invoice, "state" | "payment">> {
   const settlements = withSettlement(invoice.settlements, s);
   const due = payableEur(invoice);
-  if (invoice.direction !== "outgoing" || invoice.state !== "SUBMITTED" || due === undefined) {
-    return { settlements };
+  if (invoice.direction !== "outgoing" || due === undefined) return { settlements };
+  const at = coveredAt(settlements, due);
+  if (invoice.state === "SUBMITTED") {
+    return at ? { settlements, state: "PAID", payment: { ...invoice.payment, paidAt: at } } : { settlements };
   }
-  const paid = settlements.reduce((sum, x) => sum + (Number.isFinite(x.amountEur) ? x.amountEur : 0), 0);
-  if (paid + 0.005 < due) return { settlements };
-  return { settlements, state: "PAID", payment: { ...invoice.payment, paidAt: s.at } };
+  // A payment it already holds, rewritten (a USDC receipt valued late), can
+  // move when the payments first covered a PAID invoice; nothing else changes.
+  const rewritten = (invoice.settlements ?? []).some((x) => settlementRef(x) === settlementRef(s));
+  if (invoice.state === "PAID" && rewritten && at && invoice.payment?.paidAt && at !== invoice.payment.paidAt) {
+    return { settlements, payment: { ...invoice.payment, paidAt: at } };
+  }
+  return { settlements };
+}
+
+/** When the payments, in the order they arrived, first covered `due`: a
+ *  payment valued or recorded late must not move that moment. */
+function coveredAt(settlements: InvoiceSettlement[], due: number): string | undefined {
+  let paid = 0;
+  for (const x of [...settlements].sort((a, b) => (a.at ?? "").localeCompare(b.at ?? ""))) {
+    paid += Number.isFinite(x.amountEur) ? x.amountEur : 0;
+    if (paid + 0.005 >= due) return x.at;
+  }
+  return undefined;
 }
 
 /** Rows written before `ref` existed are keyed by their deposit id. */

@@ -89,9 +89,15 @@ await check("two equal credits on one day cite two mints, the nearest each, neve
   inp.deposits = [mint("m-1", 41, "2026-09-07T09:00:10.000Z"), mint("m-2", 42, "2026-09-07T15:00:10.000Z")] as any;
   const byOrder = Object.fromEntries(projectStatementLines(inp).map((l) => [l.statement!.links.orderId, l.statement!.links.depositId]));
   assert.deepEqual(byOrder, { "ord-a": "m-1", "ord-b": "m-2" });
+  const both = projectStatementLines(inp);
   inp.deposits = [mint("m-1", 41, "2026-09-07T09:00:10.000Z")] as any;
-  const one = projectStatementLines(inp).map((l) => l.statement!.links.depositId);
+  const oneLines = projectStatementLines(inp);
+  const one = oneLines.map((l) => l.statement!.links.depositId);
   assert.deepEqual(one.filter(Boolean), ["m-1"], "one mint is one order's; the other credit cites none");
+  // A credit that loses its mint loses its hash too, the row's copy included (the export reads it).
+  const lost = mergeStatementLines(both, oneLines).toUpdate.find((u) => u.id === lineId("org_1", "monerium:issue:ord-b"))!;
+  assert.ok("txHash" in lost.patch && lost.patch.txHash === undefined);
+  assert.deepEqual(lost.patch.statement!.links.txHashes, []);
 });
 
 await check("a PAID SEPA payout is a debit line plus a fee line when a fee was taken", () => {

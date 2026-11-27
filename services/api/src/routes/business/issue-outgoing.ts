@@ -10,11 +10,11 @@
  * was written for. Its issue date is always the day it is issued, whatever
  * the request says: the receipts are in the past, the invoice is not.
  *
- * A correction (§ 31 Abs. 5 UStDV) is issued here too: a new number in the
- * same series, the original's customer, lines, treatment and euro figures,
+ * A correction (§ 31 Abs. 5 UStDV) is issued here too: the next number of
+ * today's series, the original's customer, lines, treatment and euro figures,
  * today's issuer details, and a printed reference to the original's number
  * and date. The original moves to REPLACED in the same transaction, with its
- * payments carried over and its open payment link cancelled.
+ * payments carried over and its open payment link handed to the correction.
  */
 import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
@@ -177,8 +177,13 @@ export async function issueOutgoing(
       if (!original || original.updatedAt !== correctingReadAt || !correctable(original)) {
         return refusal(409, "This invoice changed while the correction was being issued. Nothing was issued; look at it again.");
       }
-      // Money mid-way through the link would settle an invoice being replaced.
-      if (originalLink?.payments.length) {
+      // Money taken by any of its links (open, paid or lapsed) that has not
+      // settled the invoice yet would settle an invoice being replaced, and a
+      // fresh link for the correction would ask for it again.
+      const linkPaid = original.state !== "PAID" && (await store.list("paymentRequests")).some(
+        (p) => p.invoiceId === original.id && p.orgId === original.orgId && !p.test && p.payments.length > 0,
+      );
+      if (linkPaid) {
         return refusal(409, "A payment is arriving through this invoice's payment link. Correct it once that payment has settled. Nothing was issued.");
       }
     }
@@ -263,17 +268,19 @@ export async function issueOutgoing(
       submittedAt: now.toISOString(),
     };
 
+    let replaced: Invoice | null | undefined;
     if (original) {
       // First, and from the state checked: a payment landing meanwhile wins,
       // and nothing has been written yet.
-      const replaced = await store.updateInvoiceFrom(original.id, [original.state], {
+      replaced = await store.updateInvoiceFrom(original.id, [original.state], {
         state: "REPLACED",
         replacedBy: { invoiceId: id, number, issueDate: draft.issueDate!, at: now.toISOString(), byMemberId: ctx.member.id },
       });
       if (!replaced) return refusal(409, "This invoice changed while the correction was being issued. Nothing was issued; look at it again.");
-      // The old link stops taking money. One paid in the meantime settles the
-      // correction (liveInvoiceId).
-      if (originalLink) await store.cancelUnpaidPaymentRequest(originalLink.id, now, true);
+      // The customer may already have the old link's bank reference or crypto
+      // quote: the link itself moves to the correction, so its money settles
+      // the correction, and the correction needs no new link.
+      if (originalLink) await store.updatePaymentRequestFrom(originalLink.id, ["OPEN"], { invoiceId: id });
     }
     const invoice = fromDraft
       ? (await issueDraft(fromDraft, { ...document, linkTokenEnc }, hash))
@@ -287,8 +294,10 @@ export async function issueOutgoing(
           ...document,
           // Same amount, so the original's payments settle the correction as
           // they settled it: paid stays paid, part-paid stays part-paid.
-          ...(original
-            ? { state: original.state, settlements: original.settlements, ...(original.payment ? { payment: original.payment } : {}) }
+          // From the row as it was replaced, under its lock: a settlement that
+          // landed after the read above is carried too.
+          ...(replaced
+            ? { state: original!.state, settlements: replaced.settlements, ...(replaced.payment ? { payment: replaced.payment } : {}) }
             : {}),
           createdByMemberId: ctx.member.id,
           createdAt: now.toISOString(),

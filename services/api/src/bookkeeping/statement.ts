@@ -290,6 +290,7 @@ function companyPayoutLines(inp: StatementInputs): LineDraft[] {
   const out: LineDraft[] = [];
   for (const p of inp.companyPayouts ?? []) {
     if (!p.orderId || p.state !== "sent" || !(p.amountEur > 0)) continue;
+    const paidInvoice = p.invoiceId ? inp.invoices.find((i) => i.id === p.invoiceId) : undefined;
     out.push({
       event: "sepa_out",
       key: `org-payout:${p.id}`,
@@ -298,7 +299,11 @@ function companyPayoutLines(inp: StatementInputs): LineDraft[] {
       amountCents: -cents(p.amountEur),
       counterparty: { name: p.recipientName, iban: p.recipientIban },
       reference: referenceFor([p.reference, p.memo], p.orderId),
-      links: { orderId: p.orderId, txHashes: [] },
+      links: {
+        orderId: p.orderId,
+        ...(paidInvoice ? { invoiceId: paidInvoice.id, invoiceNumber: invoiceNumber(paidInvoice) } : {}),
+        txHashes: [],
+      },
       txType: "payout",
       tags: ["sepa", ...(p.draftId ? ["business_run"] : [])],
     });
@@ -331,6 +336,8 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
     if (!ownDeposit(inp, d) || d.token !== "EURE" || !((d.amountEur ?? 0) > 0)) continue;
     if ((d.from ?? ZERO) === ZERO || booked.has(d.txHash.toLowerCase()) || isConversionOutput(d.txHash, d.logIndex, depositOwner(d))) continue;
     const at = d.arrivedAt ?? d.detectedAt;
+    // EURe tied to an invoice it pays is that invoice's payment, as USDC is.
+    const inv = d.invoiceId ? inp.invoices.find((i) => i.id === d.invoiceId) : undefined;
     out.push({
       event: "eure_in",
       key: `deposit:${d.id}:eure`,
@@ -338,9 +345,9 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
       valueAt: at,
       amountCents: cents(d.amountEur!),
       counterparty: { address: d.from },
-      reference: `Deposit ${d.txHash.slice(0, 10)}`,
-      links: { depositId: d.id, txHashes: [d.txHash] },
-      txType: "transfer_in",
+      reference: referenceFor([invoiceNumber(inv)], `Deposit ${d.txHash.slice(0, 10)}`),
+      links: { depositId: d.id, ...(inv ? { invoiceId: inv.id } : {}), ...(invoiceNumber(inv) ? { invoiceNumber: invoiceNumber(inv) } : {}), txHashes: [d.txHash] },
+      txType: inv ? "invoice_payment" : "transfer_in",
       tags: ["eure"],
     });
   }
@@ -645,7 +652,8 @@ export function mergeStatementLines(
           at: p.at,
           // An invoice linked after arrival makes the money in its payment.
           ...(cur.txType !== p.txType ? { txType: p.txType } : {}),
-          ...(p.txHash ? { txHash: p.txHash } : {}),
+          // A mint given to another credit leaves this line with none: no stale hash in the export.
+          txHash: p.txHash,
           counterparty: { ...(cur.counterparty ?? {}), ...(p.counterparty ?? {}) },
           statement: facts,
           ...(dropMark ? { tags: cur.tags.filter((t) => t !== "internal") } : {}),

@@ -195,6 +195,8 @@ setInterval(async () => {
   if (!req || req.state !== "OPEN") return;
   try {
     const res = await fetch(API);
+    // The link closed while the tab was open: its bank details are no longer the payee's.
+    if (res.status === 404) { hide("req"); show("notfound"); req = null; return; }
     if (!res.ok) return;
     const p = await res.json();
     const changed = JSON.stringify(p.payments) !== JSON.stringify(req.payments) || p.state !== req.state

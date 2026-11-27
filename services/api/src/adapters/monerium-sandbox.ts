@@ -30,6 +30,10 @@ import { noteMoneriumIssue, writeStatementLines } from "../bookkeeping/writer.js
 import { bookHolderLabel, moneyInHolder, type MoneyInHolder } from "../bookkeeping/money-in.js";
 import { moneriumAmountEur, moneriumOrderProcessed, redeemMemoDiffers, redeemOrderDiffers } from "../domain/monerium-order.js";
 import { can } from "../domain/segments.js";
+import { orgEntity } from "../domain/org-entity.js";
+import { companyEurAccount } from "../domain/org-monerium-iban.js";
+import type { Organisation } from "../domain/types.js";
+import { companyMoneriumClient, recheckCompanyIbans, type CompanyMonerium } from "../routes/business/org-monerium-iban.js";
 
 /**
  * The bank facts of a processed issue order on our chain, for the statement
@@ -660,6 +664,12 @@ async function ourProfileIds(): Promise<(string | undefined)[]> {
   return [undefined, ...ids];
 }
 
+/** What mirrorOrder would book: a processed EURe issue on OUR chain. The
+ *  reconciler lists only these, so a credit on another chain or in another
+ *  currency is not reported as missed. */
+const euroIssue = (o: MoneriumOrder) =>
+  o.kind === "issue" && isProcessed(o) && o.chain === MONERIUM.chain && String(o.currency ?? "eur").toLowerCase() === "eur";
+
 /** Every processed `issue` order across our profiles — the reconciler's view
  *  of what should have been credited locally. */
 export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
@@ -671,7 +681,7 @@ export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
     } catch {
       continue; // a dead profile must not blind us to the others
     }
-    for (const o of list) if (o.kind === "issue" && isProcessed(o)) seen.set(o.id, o);
+    for (const o of list) if (euroIssue(o)) seen.set(o.id, o);
   }
   for (const u of (await usersWithOwnCredentials())) {
     for (const profile of ownProfilesOf(u)) {
@@ -681,9 +691,10 @@ export async function listProcessedIssueOrders(): Promise<MoneriumOrder[]> {
       } catch {
         continue;
       }
-      for (const o of list) if (o.kind === "issue" && isProcessed(o)) seen.set(o.id, o);
+      for (const o of list) if (euroIssue(o)) seen.set(o.id, o);
     }
   }
+  for (const o of (await companyIssueOrders())) if (euroIssue(o)) seen.set(o.id, o);
   return [...seen.values()];
 }
 
@@ -741,8 +752,50 @@ export async function pollDepositsOnce(): Promise<number> {
       }
     }
   }
+  // A company's own keys (routes/business/org-monerium.ts): its IBAN sits
+  // under its own profile, which neither the app's keys nor a member's see.
+  for (const order of (await companyIssueOrders())) {
+    if ((await mirrorOrder(order)) === "recorded") credited++;
+    if (moneriumAmountEur(order.amount) === undefined) continue;
+    await attributeMoneriumOrder(order);
+    await attributeMoneriumOrderToInvoice(order);
+    await keepIssueFacts(order);
+  }
   await writeStatementLines();
   return credited;
+}
+
+/**
+ * Orders on each company's own Monerium keys, for its own Safe only. Those
+ * keys are the company's to choose, so an order they list for any other
+ * address is not taken as the company's: mirrorOrder books by address, and
+ * this keeps a company's keys from feeding orders for someone else's Safe.
+ * A company whose keys fail is skipped; the others are still read.
+ */
+export async function companyIssueOrders(client: (org: Organisation) => Pick<CompanyMonerium, "orders"> = companyMoneriumClient): Promise<MoneriumOrder[]> {
+  const out: MoneriumOrder[] = [];
+  for (const { org, safe } of (await companiesWithOwnKeys())) {
+    let list: MoneriumOrder[];
+    try {
+      list = orderList((await client(org).orders(org.monerium!.profile.id)) as Awaited<ReturnType<MoneriumClient["orders"]>>);
+    } catch (err: any) {
+      console.warn(`monerium: could not read orders for org ${org.id} on its own keys: ${moneriumFailureReason(err)}`);
+      continue;
+    }
+    for (const o of list) if (String(o.address ?? "").toLowerCase() === safe) out.push(o);
+  }
+  return out;
+}
+
+/** Companies whose own Monerium keys are read, with the Safe they are read for. */
+export async function companiesWithOwnKeys(): Promise<{ org: Organisation; safe: string }[]> {
+  const out: { org: Organisation; safe: string }[] = [];
+  for (const org of (await store.list("organisations"))) {
+    if (!org.monerium || orgEntity(org) !== "company") continue;
+    const safe = companyEurAccount(await store.accountsOf(org.id))?.address?.toLowerCase();
+    if (safe) out.push({ org, safe });
+  }
+  return out;
 }
 
 /** The profiles a user's own credentials should be asked about: their default
@@ -858,6 +911,7 @@ export function startDepositPoller() {
         if (u.funding?.status === "iban_pending") await refreshPendingIban(u);
         else if (u.funding?.status === "active" && u.iban) await verifyIbanBinding(u);
       }
+      await recheckCompanyIbans();
     } catch (err: any) {
       console.error(`monerium poll failed: ${moneriumFailureReason(err)}`);
     } finally {

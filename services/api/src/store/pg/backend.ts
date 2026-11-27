@@ -828,7 +828,8 @@ export function createPgStore(database: Database): StoreBackend {
     findPaymentRequest: (id) => first<PaymentRequest>(q, TABLE.paymentRequests, "id = $1", [id]),
     findPaymentRequestByCode: (code) =>
       first<PaymentRequest>(q, TABLE.paymentRequests, "code = $1", [code.replace(/-/g, "").toUpperCase()]),
-    paymentRequestsForUser: (userId) => rows<PaymentRequest>(q, TABLE.paymentRequests, "user_id = $1", [userId]),
+    // A company link (accountId) is its account's, not its creator's (store.ts).
+    paymentRequestsForUser: async (userId) => (await rows<PaymentRequest>(q, TABLE.paymentRequests, "user_id = $1", [userId])).filter((r) => !r.accountId),
     findPaymentRequestBySource: (kind, externalId, shop) =>
       first<PaymentRequest>(q, TABLE.paymentRequests, "source_kind = $1 AND source_external_id = $2 AND source_shop = $3", [kind, externalId, shop]),
 
