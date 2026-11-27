@@ -138,7 +138,9 @@ never a redeploy of an older build or a hand-edited schema.
 
 ## Cut-over (S8, at the owner's time)
 
-The steps of design §6, testnet first, then mainnet:
+The steps of design §6, testnet first, then mainnet. Both deployments are
+imported: accounts, Safes, passkeys and IBANs carry over, and no one signs
+up again.
 
 1. Preconditions: `check:pg` on the release's commit against a scratch
    Postgres 17 (the host's `pg_hba` rejects its temporary roles and
@@ -161,7 +163,7 @@ The steps of design §6, testnet first, then mainnet:
 
 ## Host loss and rebuild
 
-Proposed target, for the owner to accept (design §9): service back within 4
+Target (the owner's, design §7.1): service back within 4
 hours of the decision to rebuild, losing at most the last minute of writes
 while archiving keeps up. Mainnet first, testnet the same way after.
 
