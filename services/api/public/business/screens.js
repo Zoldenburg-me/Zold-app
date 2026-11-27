@@ -365,7 +365,7 @@ export function invoiceDrawer(i, trigger) {
       <dl class="z-kv z-card">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
       ${!out && i.payTo ? payToHtml(i.payTo) : ""}
       ${isDraft ? receiptDraftSections(i) : i.settlements?.length ? settlementRows(i.settlements) : ""}
-      <div class="zb-actions" style="margin-top:0">${out && i.issued ? `<a class="z-btn z-btn--secondary z-btn--sm" href="/invoice/own?org=${encodeURIComponent(org.id)}&amp;id=${encodeURIComponent(i.id)}" target="_blank" rel="noopener">${Z.icon("print")}<span>View, print or save as PDF</span><span class="z-sr"> (opens in a new tab)</span></a>` : ""}${invoiceActions(i, iv.payLink)}</div></div>`,
+      <div class="zb-actions" style="margin-top:0">${out && i.issued ? `<a class="z-btn z-btn--secondary z-btn--sm" href="/invoice/own?org=${encodeURIComponent(org.id)}&amp;id=${encodeURIComponent(i.id)}" target="_blank" rel="noopener">${Z.icon("print")}<span>View, print or save as PDF</span><span class="z-sr"> (opens in a new tab)</span></a>` : ""}${i.linkKept && roleCan(org.role, "invoices") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-link" data-id="${esc(i.id)}">${Z.icon("link")}<span>Copy link</span></button>` : ""}${invoiceActions(i, iv.payLink)}</div></div>`,
   }));
   Z.openOverlay("inv-drawer", trigger);
 }

@@ -5,7 +5,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
 
 const token = location.pathname.split("/").filter(Boolean).pop();
 // /invoice/own?org=…&id=… is the issuer reading their own issued invoice
-// again (Zold Business): their session, not the link, which is shown once.
+// again (Zold Business): their session, not the link.
 const own = token === "own" ? new URLSearchParams(location.search) : null;
 let session = "";
 try { session = localStorage.getItem("zold-session") || localStorage.getItem("zoll-session") || ""; } catch { /* signed out */ }
@@ -256,6 +256,17 @@ const lineAmount = (l) => formatCents(lineNetCents(l.quantity, l.unitPrice));
 const total = () => formatCents(formTotalCents(lines));
 
 function renderForm(inv) {
+  // Dollars are paid as USDC to a wallet; euro by SEPA, or as EURe to a wallet.
+  const usd = inv.currency === "USD";
+  // A dollar link where no wallet can be paid has nothing to fill in.
+  if (usd && !chains.length) {
+    $("#content").innerHTML = `<div class="panel"><h2>Invoice requested by ${esc(inv.payor.name)}</h2>
+      <div class="note">This invoice is in US dollars, paid to a wallet, and ${esc(inv.payor.name)} can’t pay to a wallet right now. Ask them for a new link in euro.</div></div>`;
+    return;
+  }
+  const walletFields = `<label for="f-wallet">Wallet address</label><input id="f-wallet" placeholder="0x…" />
+        <label for="f-chain">Network</label><select id="f-chain">${chains.map((c) =>
+          `<option value="${esc(c.chainId)}">${esc(c.name)}</option>`).join("")}</select>`;
   $("#content").innerHTML = `
     <div class="panel"><h2>Invoice requested by ${esc(inv.payor.name)}</h2>
       <div class="note">Fill this in and submit — no account and no wallet needed. Once submitted it is
@@ -273,15 +284,14 @@ function renderForm(inv) {
       <div style="margin-top:1rem; text-align:right; font-size:1.1rem; font-weight:600" id="total">${total()} ${esc(inv.currency)}</div>
     </div>
     <div class="panel"><h2>How to pay you</h2>
+      ${usd ? `<div class="note">${esc(inv.payor.name)} pays this invoice in USDC to your wallet.</div>${walletFields}` : `
       <div class="note">Your bank account lets ${esc(inv.payor.name)} pay this invoice by SEPA transfer with your invoice number as the reference.</div>
       <label for="f-holder">Account holder</label><input id="f-holder" placeholder="Name on the account" />
       <label for="f-iban">IBAN</label><input id="f-iban" placeholder="DE89 3704 0044 0532 0130 00" />
       <label for="f-bic">BIC (optional)</label><input id="f-bic" placeholder="COBADEFFXXX" />
-      <details style="margin-top:.8rem"><summary style="cursor:pointer;color:var(--muted)">Or a wallet address instead</summary>
-        <label for="f-wallet">Wallet address</label><input id="f-wallet" placeholder="0x…" />
-        <label for="f-chain">Network</label><select id="f-chain">${chains.map((c) =>
-          `<option value="${esc(c.chainId)}">${esc(c.name)}</option>`).join("")}</select>
-      </details>
+      ${chains.length ? `<details style="margin-top:.8rem"><summary style="cursor:pointer;color:var(--muted)">Or a wallet address instead, paid in EURe</summary>
+        ${walletFields}
+      </details>` : ""}`}
     </div>
     <div style="margin-top:1.2rem"><button id="submit">Submit invoice</button></div>
     <div id="err" role="alert"></div>`;
@@ -302,8 +312,8 @@ function renderForm(inv) {
   $("#submit").onclick = async () => {
     $("#err").innerHTML = ""; $("#submit").disabled = true;
     try {
-      const wallet = $("#f-wallet").value.trim();
-      const iban = $("#f-iban").value.trim();
+      const wallet = $("#f-wallet")?.value.trim();
+      const iban = usd ? "" : $("#f-iban").value.trim();
       const payTo = iban
         ? { kind: "bank", bank: { holderName: $("#f-holder").value.trim() || $("#f-org").value.trim(), iban, bic: $("#f-bic").value.trim() || undefined } }
         : wallet ? { kind: "wallet", address: wallet, chainId: Number($("#f-chain").value) } : undefined;
