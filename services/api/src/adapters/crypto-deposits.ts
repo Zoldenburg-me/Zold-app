@@ -30,7 +30,7 @@
  *   transfer belongs with a compliance provider.
  */
 import { randomUUID } from "node:crypto";
-import { usdToken } from "../usd-token.js";
+import { usdLabel, usdToken } from "../usd-token.js";
 import { CHAIN_ID, CRYPTO_IN } from "../config.js";
 import { store, type CryptoDeposit, type User } from "../store.js";
 import { describeCause } from "../http/log-cause.js";
@@ -40,13 +40,14 @@ import { safeDebitBlocker } from "../orchestrator.js";
 import { walletBlocker } from "../domain/wallet-tier.js";
 import { midRates, referenceRate } from "../rates.js";
 import { attributeDepositToRequest, noteDepositSettled } from "../routes/payment-requests.js";
-import { buildCryptoSettlement, settlementRef, settlementUpdate } from "../domain/invoices.js";
+import { buildCryptoSettlement, ownerInvoiceView, settlementRef, settlementUpdate } from "../domain/invoices.js";
 import { writeStatementLines } from "../bookkeeping/writer.js";
 import { readLogWindow } from "../log-range.js";
 import { conversionOutputs, depositOwner } from "../transfers/conversion-outputs.js";
 import { conversionReverted } from "../transfers/activity.js";
 import { userOperationOutcome } from "../wallet/candide.js";
 import { someSeq } from "../seq.js";
+import { orgOpOutcome } from "../wallet/org-debit.js";
 import { moneyInHolder } from "../bookkeeping/money-in.js";
 import type { Account } from "../domain/types.js";
 
@@ -198,7 +199,38 @@ function unrecordedSwap(deposit: CryptoDeposit): boolean {
 }
 
 export function depositConversionBlocker(user: User, deposit: CryptoDeposit): string | null {
-  if (deposit.token !== "USDC") return `only ${usdToken().symbol} deposits can be converted`;
+  const state = depositStateBlocker(deposit);
+  if (state) return state;
+  const identity = walletBlocker(user);
+  if (identity) return identity;
+  const floor = belowFloor(deposit);
+  if (floor) return floor;
+  /**
+   * No Safe, nothing to sign with. safeDebitBlocker is the same check the send
+   * path uses, so the two cannot drift.
+   */
+  const safeBlocker = safeDebitBlocker(user);
+  if (safeBlocker) {
+    return (
+      `${safeBlocker}. Your ${usd.fromUnits(unconvertedUnits(deposit))} ${usdToken().symbol} is still yours at ${user.address} — ` +
+      "it simply cannot be converted until the account can sign."
+    );
+  }
+  return null;
+}
+
+/**
+ * The same refusals for USDC on a company's own Safe. Its owners sign the
+ * swap in the org Safe queue, so the person's wallet tier and passkey Safe
+ * do not apply; orgDebitSource checks the Safe when the op is queued.
+ */
+export function companyDepositBlocker(deposit: CryptoDeposit): string | null {
+  return depositStateBlocker(deposit) ?? belowFloor(deposit);
+}
+
+/** What the row itself says against converting it, whoever holds it. */
+function depositStateBlocker(deposit: CryptoDeposit): string | null {
+  if (deposit.token !== "USDC") return `only ${usdLabel().symbol} deposits can be converted`;
   if (deposit.holding === "converted") return "this deposit has already been converted to EURe";
   if (deposit.holding === "unconfirmed") {
     if (conversionReverted(deposit)) {
@@ -206,6 +238,8 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
     }
     return "a conversion of this deposit was sent and may still land — it has to be checked on chain before it can be converted again";
   }
+  // Queued in the org Safe queue: nothing has been sent until the owners sign.
+  if (deposit.conversionIntent?.safeOpId) return "a conversion of this deposit is waiting for the company's owners to sign it";
   // Written before the swap was submitted and never cleared: the process
   // stopped before the outcome was recorded, so the swap may have landed.
   if (deposit.conversionIntent) {
@@ -218,25 +252,21 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
   if (deposit.holding === "refused" && unrecordedSwap(deposit)) {
     return "a swap of this deposit went through and is under review — it cannot be converted again";
   }
-  const identity = walletBlocker(user);
-  if (identity) return identity;
-  const amountUsdc = usd.fromUnits(unconvertedUnits(deposit));
-  if (amountUsdc < CRYPTO_IN.minUsdc) {
-    const sym = usdToken().symbol;
-    return `${amountUsdc} ${sym} is below the ${CRYPTO_IN.minUsdc} ${sym} floor — converting it would cost more than it delivers`;
-  }
-  /**
-   * No Safe, nothing to sign with. safeDebitBlocker is the same check the send
-   * path uses, so the two cannot drift.
-   */
-  const safeBlocker = safeDebitBlocker(user);
-  if (safeBlocker) {
-    return (
-      `${safeBlocker}. Your ${amountUsdc} ${usdToken().symbol} is still yours at ${user.address} — ` +
-      "it simply cannot be converted until the account can sign."
-    );
-  }
   return null;
+}
+
+function belowFloor(deposit: CryptoDeposit): string | null {
+  const amountUsdc = usd.fromUnits(unconvertedUnits(deposit));
+  if (amountUsdc >= CRYPTO_IN.minUsdc) return null;
+  const sym = usdLabel().symbol;
+  return `${amountUsdc} ${sym} is below the ${CRYPTO_IN.minUsdc} ${sym} floor — converting it would cost more than it delivers`;
+}
+
+/** Whose Safe a deposit sits on: the person's, or the company account's own. */
+export async function depositHolder(d: CryptoDeposit): Promise<{ id: string; address: string } | undefined> {
+  if (d.userId) return await store.findUser(d.userId);
+  const account = d.accountId ? await store.findAccount(d.accountId) : undefined;
+  return account?.address ? { id: account.id, address: account.address } : undefined;
 }
 
 /**
@@ -248,7 +278,7 @@ export function depositConversionBlocker(user: User, deposit: CryptoDeposit): st
  * Per deposit: two held deposits over a balance that covers only one both
  * pass, and the second swap then fails at the bundler.
  */
-export async function heldUsdcBlocker(user: User, deposit: CryptoDeposit): Promise<string | null> {
+export async function heldUsdcBlocker(user: Pick<User, "address">, deposit: CryptoDeposit): Promise<string | null> {
   const need = unconvertedUnits(deposit);
   const have = (await publicClient.readContract({
     address: addrs().usdc,
@@ -314,17 +344,75 @@ export async function settleOnArrival(deposit: CryptoDeposit): Promise<CryptoDep
 
 
 /**
- * Money that landed on a company's own Safe. No pay link or invoice names it
- * (both are a person's), and nothing here converts it: the books' line is the
- * whole of it. EURe is the settlement currency; USDC stays held.
+ * Money that landed on a company's own Safe. No pay link names it (links are
+ * a person's); an invoice the owners tied it to is settled, as for a person.
+ * EURe is the settlement currency; USDC stays held until the owners sign a
+ * conversion in the org Safe queue. Nothing converts it unattended.
  */
 async function settleCompanyArrival(deposit: CryptoDeposit): Promise<CryptoDeposit> {
-  if (!deposit.accountId) throw new Error(`crypto deposit ${deposit.id} names neither a user nor an account`);
+  const account = deposit.accountId ? await store.findAccount(deposit.accountId) : undefined;
+  if (!account) throw new Error(`crypto deposit ${deposit.id} names neither a user nor an account`);
+  // The org's row is the lock every writer of a company deposit's money takes.
+  await store.lockOrganisation(account.orgId);
   const settled = await store.settleCryptoDeposit(deposit.id, (row) =>
     row.token === "USDC"
       ? { holding: "held", creditedUsdc: row.amountUsdc ?? 0, reason: "held in the company's Safe" }
       : { holding: "none", reason: undefined });
-  return settled ?? (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id) ?? deposit;
+  if (!settled) return (await store.list("cryptoDeposits")).find((d) => d.id === deposit.id) ?? deposit;
+  if (settled.invoiceId) await recordInvoiceSettlement(settled);
+  return settled;
+}
+
+/**
+ * Move a company conversion on from its org Safe op (wallet/org-debit.ts
+ * orgOpOutcome). Relayed, or in review with a hash: the row is parked
+ * `unconfirmed` on the op's userOpHash, and settleUnconfirmedConversions
+ * measures and settles it from the chain as it does a person's. Ended
+ * without relaying: the intent goes and the USDC is convertible again; an op
+ * included but reverted is refused, as a person's would be. Asymmetric like
+ * the queue: anything that may have landed waits for the chain's answer.
+ */
+export async function followCompanyConversions(now = Date.now()): Promise<number> {
+  let n = 0;
+  for (const d of [...await store.list("cryptoDeposits")]) {
+    const opId = d.conversionIntent?.safeOpId;
+    if (!opId || d.userId || d.holding === "unconfirmed" || d.holding === "converted") continue;
+    const op = await store.findSafeOp(opId);
+    const o = orgOpOutcome(op, now);
+    if (o.state === "QUEUED" || (o.state === "SUBMITTED" && op?.state === "RELAYING" && !o.userOpHash)) continue;
+    const account = d.accountId ? await store.findAccount(d.accountId) : undefined;
+    if (!account) continue;
+    const moved = await store.tx(async () => {
+      await store.lockOrganisation(account.orgId);
+      return await store.patchCryptoDeposit(d.id, (row) => {
+        if (row.conversionIntent?.safeOpId !== opId || row.holding === "unconfirmed" || row.holding === "converted") return null;
+        const intent = row.conversionIntent;
+        if ((o.state === "DONE" || o.state === "SUBMITTED") && o.userOpHash) {
+          return {
+            holding: "unconfirmed",
+            reason: "the company's owners signed the conversion; recording what arrived",
+            conversionIntent: { ...intent, ...(op?.txHash ? { txHash: op.txHash } : {}) },
+            txs: [...row.txs, { step: "safe.swap(usdc->eure).unconfirmed", hash: o.userOpHash }],
+          };
+        }
+        if (o.state === "DONE" || o.state === "SUBMITTED") {
+          // Relayed with no hash to ask the bundler about: may have landed.
+          return { holding: "unconfirmed", reason: "the conversion was relayed but its outcome is unknown — it is being checked and will not be offered again" };
+        }
+        if (op?.state === "FAILED") {
+          return {
+            holding: "refused",
+            reason: `the conversion was not made: ${o.reason}`,
+            conversionIntent: undefined,
+            ...(o.txHash ? { txs: [...row.txs, { step: "safe.swap(usdc->eure).reverted", hash: o.txHash }] } : {}),
+          };
+        }
+        return { holding: "held", reason: `the conversion was not made (${o.reason}); the USDC is still held and can be converted`, conversionIntent: undefined };
+      });
+    });
+    if (moved) n++;
+  }
+  return n;
 }
 
 /**
@@ -380,7 +468,8 @@ export async function eureSwappedOut(
  */
 export async function settleConvertedDeposit(
   deposit: CryptoDeposit,
-  user: User,
+  /** Whose Safe the swap ran on: a person's, or a company account's. */
+  user: { id: string; address: string },
   quote: { provider: string; rate: bigint; minOut: bigint },
   balanceBeforeWei: bigint,
   txs: CryptoDeposit["txs"],
@@ -457,7 +546,7 @@ export async function settleConvertedDeposit(
     ...(otherInflowWei > 0n ? { otherInflowWei: otherInflowWei.toString() } : {}),
   };
   console.log(
-    `crypto-in: converted ${usd.fromUnits(amountInUnits)} USDC to EUR ${filledEur} for user ${user.id} ` +
+    `crypto-in: converted ${usd.fromUnits(amountInUnits)} USDC to EUR ${filledEur} for ${user.id} ` +
       `via ${quote.provider} at ${venueRate.toFixed(4)}` + (leftover > 0n ? ` (${usd.fromUnits(leftover)} USDC left held)` : ""),
   );
 
@@ -584,7 +673,7 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
       });
       continue;
     }
-    const user = d.userId ? await store.findUser(d.userId) : undefined;
+    const user = await depositHolder(d);
     if (!user) continue;
     /**
      * The swap's own EURe logs, read before the step is rewritten. A swap
@@ -654,6 +743,47 @@ export async function settleUnconfirmedConversions(outcome = userOperationOutcom
       });
     }
   }
+}
+
+/**
+ * Tie a deposit to the issued invoice it pays, or untie it (null), after the
+ * caller checked who may and whose invoice it is. The settled check, the
+ * link and the settlement are one transaction on rows read inside it, under
+ * the holder's lock (`lock`): two links of one deposit, or a link and its
+ * arrival, otherwise both pass the check and settle two invoices.
+ */
+export async function linkDepositInvoice(
+  depositId: string,
+  invoiceId: string | null,
+  lock: () => Promise<unknown>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  return await store.tx(async (t) => {
+    await lock();
+    // A deposit pays one invoice once. After its payment is on an invoice,
+    // moving or dropping the link would leave that payment where it is and
+    // let the same money settle a second invoice.
+    const ref = `deposit:${depositId}`;
+    const settled = (await t.list("invoices")).find((i) => (i.settlements ?? []).some((s) => settlementRef(s) === ref));
+    if (settled && invoiceId !== settled.id) {
+      return { status: 409, body: { error: "This payment is already recorded on an invoice. Reconcile that invoice instead of moving the payment." } };
+    }
+    if (invoiceId === null) {
+      const unlinked = await t.updateCryptoDeposit(depositId, { invoiceId: undefined });
+      return { status: 200, body: { deposit: unlinked } };
+    }
+    const current = (await t.findInvoice(invoiceId))!;
+    // Money that arrived settles an invoice the org issued, never a bill it owes.
+    if (current.direction !== "outgoing") return { status: 409, body: { error: "Only an invoice your organisation issued can be paid by a deposit." } };
+    // A draft made from receipts is settled by its own ledger rows; a
+    // deposit tied to it would be a second payment once it is issued.
+    if (current.state === "DRAFT") return { status: 409, body: { error: "That invoice is a draft and has not been issued." } };
+
+    const linked = await t.updateCryptoDeposit(depositId, { invoiceId: current.id });
+    // Already settled (it arrived before the link existed)? Then it belongs on
+    // the invoice now; the settlement will not be written again on arrival.
+    if (linked.settledAt) await recordInvoiceSettlement(linked);
+    return { status: 200, body: { deposit: linked, invoice: ownerInvoiceView((await t.findInvoice(current.id))!) } };
+  });
 }
 
 /**
@@ -748,6 +878,7 @@ export async function pollCryptoDepositsOnce(outcome = userOperationOutcome): Pr
         const head = await publicClient.getBlockNumber({ cacheTime: 0 });
         // After the head is read: a swap the bundler has no receipt for now
         // lands past it, outside this tick's window.
+        await followCompanyConversions();
         await settleUnconfirmedConversions(outcome);
         for (let w = 0; w < CRYPTO_IN.windowsPerTick; w++) {
           const r = await scanCryptoDeposits(head);

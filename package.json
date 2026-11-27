@@ -60,6 +60,7 @@
     "org-owner-changes:test": "tsx scripts/org-owner-changes-test.ts",
     "org-draft-queue:test": "tsx scripts/org-draft-queue-test.ts",
     "org-crypto-send:test": "tsx scripts/org-crypto-send-test.ts",
+    "org-crypto-in:test": "tsx scripts/org-crypto-in-test.ts",
     "org-iban:test": "tsx scripts/org-iban-test.ts",
     "org-documents:test": "tsx scripts/org-documents-test.ts",
     "org-recovery:test": "tsx scripts/org-recovery-test.ts",

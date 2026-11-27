@@ -36,6 +36,9 @@ export function conversionOutputs(
   for (const d of deposits) {
     const indexed = new Set<string>();
     for (const t of d.txs ?? []) if (t.step === "safe.swap(usdc->eure)") mark(t, depositOwner(d), indexed);
+    // A relayed company conversion not settled yet: its whole transaction.
+    const relayed = d.conversionIntent?.txHash?.toLowerCase();
+    if (relayed && !indexed.has(relayed)) whole.add(`${relayed}:${depositOwner(d)}`);
     for (const c of [d.conversion, ...(d.partials ?? []).map((p) => p.conversion)]) {
       const tx = c?.txHash?.toLowerCase();
       if (tx && !indexed.has(tx)) whole.add(`${tx}:${depositOwner(d)}`);
