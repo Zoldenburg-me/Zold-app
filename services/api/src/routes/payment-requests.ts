@@ -812,9 +812,16 @@ export async function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike):
 export async function attributeMoneriumOrder(order: any): Promise<PaymentRequest | undefined> {
   return store.tx(async () => {
     if (order?.kind !== "issue") return undefined;
-    const user = await store.findUserByAddress(String(order.address ?? ""));
-    if (!user) return undefined;
-    for (const r of (await store.paymentRequestsForUser(user.id))) {
+    const address = String(order.address ?? "");
+    const user = address ? await store.findUserByAddress(address) : undefined;
+    // No person at the address: a company's own Safe collects for its links,
+    // which carry its account (accountId; userId is only who made the link).
+    const holder = user ? undefined : await moneyInHolder(address);
+    const company = holder?.kind === "account" ? holder.account : undefined;
+    const payee = user?.address ?? company?.address;
+    if (!payee) return undefined;
+    const requests = user ? await store.paymentRequestsForUser(user.id) : (await store.list("paymentRequests")).filter((r) => r.accountId === company!.id);
+    for (const r of requests) {
       if (r.state !== "OPEN" && r.state !== "PAID") continue;
       // The poller re-sees every order: one already on this request writes
       // nothing, bar an invoice settlement a crash left unwritten.
@@ -822,7 +829,7 @@ export async function attributeMoneriumOrder(order: any): Promise<PaymentRequest
         if (r.invoiceId) await recordBankSettlement(r.invoiceId, order, "payment-link");
         return r;
       }
-      const payment = matchMoneriumOrder(order, r, user.address);
+      const payment = matchMoneriumOrder(order, r, payee);
       if (payment) {
         const saved = await record(r, payment);
         // A link raised for an invoice puts its bank credit on the invoice too,

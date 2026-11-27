@@ -513,7 +513,7 @@ await check("a company invoice paid by bank with its number is settled when the 
   assert.equal((inv.settlements![0] as any).matchedOn, "invoice-number");
   // A later number that reads alike ("CO/2026/0042"): the re-polled credit is
   // already on the paid invoice and pays no second one.
-  await store.addInvoice({ ...(await store.findInvoice(invoiceId))!, id: "inv_co_alike", state: "SUBMITTED", settlements: [], payment: undefined,
+  await store.addInvoice({ ...(await store.findInvoice(invoiceId))!, id: "inv_co_alike", linkTokenHash: "1".repeat(32), state: "SUBMITTED", settlements: [], payment: undefined,
     issued: { ...(await store.findInvoice(invoiceId))!.issued!, number: "CO/2026/0042" } } as any);
   await pollDepositsOnce();
   assert.equal((await store.findInvoice("inv_co_alike"))!.state, "SUBMITTED", "one bank order pays one invoice");
@@ -525,6 +525,46 @@ await check("a company invoice paid by bank with its number is settled when the 
   await pollDepositsOnce();
   assert.equal(((await store.findInvoice("inv_co_alike"))!.settlements ?? []).length, 0, "ambiguous over every issued number");
   assert.equal((await store.findInvoice(invoiceId))!.settlements?.length, 1);
+});
+
+await check("a company pay link's code in a credit to the company Safe pays the link and its invoice, and no other invoice the memo names", async () => {
+  const invoice = (id: string, number: string, hash: string) => store.addInvoice({
+    id, orgId: "org_co", direction: "outgoing", state: "SUBMITTED", linkTokenHash: hash,
+    lines: [{ description: "Work", quantity: "1", unitPrice: "20.00", amount: "20.00" }],
+    currency: "EUR", total: "20.00", createdByMemberId: "m_co", createdAt: now, updatedAt: now,
+    issued: {
+      number, issueDate: now.slice(0, 10), issuer: { name: "org_co" }, recipient: { name: "Kunde GmbH" },
+      vatTreatment: { kind: "exempt", reason: "kleinunternehmer" }, netCents: 2000, vatCents: 0, grossCents: 2000,
+      buckets: [{ rate: 0, netCents: 2000, vatCents: 0 }], currency: "EUR",
+    },
+  } as any);
+  await invoice("inv_co_link", "CO-2026-0100", "2".repeat(32));
+  await invoice("inv_co_other", "CO-2026-0200", "3".repeat(32));
+  const code = "C0MPANYC0DE0001";
+  await store.addPaymentRequest({
+    id: "pr_co", code, userId: "u_owner", orgId: "org_co", accountId: "acc_co", handle: "org-co", amountEur: 20, currency: "EUR",
+    methods: ["bank"], state: "OPEN", invoiceId: "inv_co_link", cryptoQuotes: [], payments: [], source: { kind: "app" },
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now,
+  } as any);
+  // The same code paid into the creating member's own Safe is their money, not the company link's.
+  const personal = issue(addr("a"), "20.00");
+  orders.get(personal).memo = code;
+  await pollDepositsOnce();
+  assert.equal((await store.findPaymentRequest("pr_co"))!.state, "OPEN");
+  // Paid to the company: the memo carries the link code AND another invoice's number.
+  const id = issue(COMPANY_SAFE, "20.00");
+  coOrders.set(id, { ...orders.get(id), memo: `${code} CO-2026-0200` });
+  orders.delete(id);
+  await pollDepositsOnce();
+  await pollDepositsOnce(); // re-seen: the order is on the link's invoice, so it settles no other
+  const link = (await store.findPaymentRequest("pr_co"))!;
+  assert.equal(link.state, "PAID");
+  assert.deepEqual(link.payments.map((p) => p.orderId), [id]);
+  const paid = (await store.findInvoice("inv_co_link"))!;
+  assert.equal(paid.state, "PAID");
+  assert.deepEqual((paid.settlements ?? []).map((s: any) => s.matchedOn), ["payment-link"]);
+  assert.equal(((await store.findInvoice("inv_co_other"))!.settlements ?? []).length, 0, "one bank order pays one invoice");
+  assert.equal((await store.findInvoice("inv_co_other"))!.state, "SUBMITTED");
 });
 
 await check("the reconciler runs on company keys alone, and does not report a company credit on another chain or currency", async () => {
