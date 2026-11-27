@@ -640,7 +640,8 @@ export function mergeStatementLines(
           at: p.at,
           // An invoice linked after arrival makes the money in its payment.
           ...(cur.txType !== p.txType ? { txType: p.txType } : {}),
-          ...(p.txHash ? { txHash: p.txHash } : {}),
+          // A mint given to another credit leaves this line with none: no stale hash in the export.
+          txHash: p.txHash,
           counterparty: { ...(cur.counterparty ?? {}), ...(p.counterparty ?? {}) },
           statement: facts,
           ...(dropMark ? { tags: cur.tags.filter((t) => t !== "internal") } : {}),
