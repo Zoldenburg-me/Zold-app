@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx services/api/src/server.ts",
-    "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts"
+    "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts",
+    "db:migrate": "tsx services/api/src/store/pg/migrate-cli.ts"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.1.0",
