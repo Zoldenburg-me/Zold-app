@@ -130,6 +130,14 @@ export async function issueOutgoing(
     if (perRate(report.totals.buckets, report.totals.vatCents) !== perRate(was.buckets, was.vatCents)) {
       return refusal(422, `The corrected invoice would show different VAT than the original (${fromCents(report.totals.vatCents)} instead of ${fromCents(was.vatCents)}, or split differently across rates). A correction keeps the tax; change it with a cancellation and a new invoice. Nothing was issued.`);
     }
+    // A line made from a wallet receipt carries that receipt by position, so
+    // such lines may be reworded but not merged, split, reordered or repriced.
+    const fromReceipts = correcting.lines.some((l) => l.receipt);
+    const moved = fromReceipts && (report.totals.lines.length !== correcting.lines.length ||
+      report.totals.lines.some((l, i) => fromCents(l.netCents) !== correcting.lines[i].amount || (correcting.lines[i].vatRate !== undefined && l.appliedRate !== correcting.lines[i].vatRate)));
+    if (moved) {
+      return refusal(422, "This invoice was made from wallet receipts: each line stays with its receipt, so a correction may change a line's wording but not merge, split, reorder or reprice lines. Nothing was issued.");
+    }
   }
   // A receipt month the wallets may not have delivered in full is confirmed in
   // the same answer as the compliance warnings, so one acceptance covers only

@@ -114,7 +114,7 @@ META["invoice-new"] = () => ({
 export function correctionDraft(i) {
   const d = i.issued;
   return {
-    _correcting: { id: i.id, number: d.number },
+    _correcting: { id: i.id, number: d.number, recipient: { name: d.recipient?.name, email: d.recipient?.email }, conversion: d.conversion },
     issueDate: today(),
     recipient: { ...d.recipient, isBusiness: d.recipientIsBusiness === true },
     // vatRate kept: without it a mixed-rate invoice re-taxes every line at one rate.
@@ -122,6 +122,7 @@ export function correctionDraft(i) {
     language: d.language || "en",
     supplyKind: d.supplyKind,
     supplyDate: d.supplyDate || "",
+    ...(d.supplyPeriod ? { supplyPeriod: { ...d.supplyPeriod } } : {}),
     purchaseOrder: d.purchaseOrder || "",
     currency: d.currency || "EUR",
     vat: d.vatTreatment.kind === "standard" ? { kind: "standard", rate: d.vatTreatment.rate } : { kind: "exempt", reason: d.vatTreatment.reason, note: d.vatTreatment.note },
@@ -201,7 +202,10 @@ RENDER["invoice-new"] = async () => {
       </div>
       <div class="zb-row zb-row--3">
         ${fixing ? "" : f("inv-issue", "Invoice date", invoiceDraft.issueDate || today(), 'type="date"')}
-        ${f("inv-supply", "Service date", invoiceDraft.supplyDate || today(), 'type="date"')}
+        ${invoiceDraft.supplyPeriod
+          // An invoice made from a month's receipts prints a period, not a date.
+          ? f("inv-period-from", "Service from", invoiceDraft.supplyPeriod.from, 'type="date"') + f("inv-period-to", "Service to", invoiceDraft.supplyPeriod.to, 'type="date"')
+          : f("inv-supply", "Service date", invoiceDraft.supplyDate || today(), 'type="date"')}
         ${fixing ? "" : f("inv-due", "Due", invoiceDraft.dueDate || "", 'type="date"')}
       </div>
       <fieldset><legend>Lines</legend>
@@ -259,10 +263,13 @@ export function readInvoiceEditor() {
   const val = (id) => $("#" + id)?.value?.trim() ?? "";
   const before = invoiceDraft.recipient || {};
   const isBusiness = before.isBusiness === true;
-  // Spread first: fields the editor does not show (taxNumber, email) are kept.
+  const name = val("inv-r-name");
+  const orig = invoiceDraft._correcting?.recipient;
   invoiceDraft.recipient = {
-    ...before,
-    name: val("inv-r-name"), addressLine: val("inv-r-addr"), postalCode: val("inv-r-zip"),
+    // The email the editor does not show stays only with the same customer:
+    // a replaced one must not receive (or read) the old one's address.
+    ...(orig?.email && name === orig.name ? { email: orig.email } : {}),
+    name, addressLine: val("inv-r-addr"), postalCode: val("inv-r-zip"),
     city: val("inv-r-city"), country: val("inv-r-country").toUpperCase(),
     // A private customer's VAT ID is not asked for and not sent.
     vatId: isBusiness ? ($("#inv-r-vat") ? val("inv-r-vat") : before.vatId || "") : "",
@@ -270,7 +277,8 @@ export function readInvoiceEditor() {
   };
   invoiceDraft.language = val("inv-lang") || "en";
   invoiceDraft.issueDate = val("inv-issue") || invoiceDraft.issueDate;
-  invoiceDraft.supplyDate = val("inv-supply");
+  if ($("#inv-period-from")) invoiceDraft.supplyPeriod = { from: val("inv-period-from"), to: val("inv-period-to") };
+  else invoiceDraft.supplyDate = val("inv-supply");
   invoiceDraft.dueDate = val("inv-due") || undefined;
   invoiceDraft.purchaseOrder = val("inv-po");
   if ($("#inv-currency")) invoiceDraft.currency = val("inv-currency").toUpperCase() || "EUR";
@@ -384,7 +392,8 @@ export async function refreshInvoiceCheck() {
   try {
     const r = await api(`/api/orgs/${org.id}/invoicing/check`, { method: "POST", body: invoiceBody() });
     if (mine !== checkSeq) return;
-    const conv = r.preview?.conversion;
+    // A correction is collected at the original's rate (issue-outgoing.ts), not today's.
+    const conv = invoiceDraft._correcting?.conversion ?? r.preview?.conversion;
     const issues = [
       ...r.errors.map((i) => `<div class="zb-note zb-note--a">${Z.icon("error")}<span>${esc(i.message)}${i.legalBasis ? ` <span class="desc">(${esc(i.legalBasis)})</span>` : ""}</span></div>`),
       ...r.warnings.map((i) => `<div class="zb-note">${Z.icon("info")}<span>${esc(i.message)}</span></div>`),

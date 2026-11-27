@@ -345,6 +345,18 @@ function payToHtml(p) {
   return `<section><h3 class="z-eyebrow" style="margin-bottom:8px">How the supplier wants to be paid</h3><dl class="z-kv z-card">${rows.join("")}</dl></section>`;
 }
 
+// The More menu opens rightwards from its button, or leftwards where that
+// would run past the drawer (the actions row wraps, so either can happen).
+// toggle does not bubble: listened for in the capture phase.
+document.addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (!d.classList?.contains("zb-more-menu") || !d.open) return;
+  const list = d.querySelector(".zb-more-menu__list");
+  list.classList.remove("zb-more-menu__list--end");
+  const edge = (d.closest(".z-sheet, .z-dialog") ?? document.documentElement).getBoundingClientRect().right;
+  if (list.getBoundingClientRect().right > edge) list.classList.add("zb-more-menu__list--end");
+}, true);
+
 /** The drawer's rarer actions, behind "More": a correction replaces an open
  *  or paid invoice (POST …/correct), the states the API accepts, for a member
  *  who may issue. Not in the list's rows: it is not what a row is opened for. */

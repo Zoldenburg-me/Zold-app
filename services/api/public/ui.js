@@ -278,7 +278,8 @@
   }
 
   const reduceMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-  const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  // summary: a <details> menu (the invoice drawer's More) is a stop too.
+  const FOCUSABLE = 'a[href], summary, button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
   const open = [];   // stack: { scrim, trigger, inerted }
 
   function openOverlay(id, trigger) {
