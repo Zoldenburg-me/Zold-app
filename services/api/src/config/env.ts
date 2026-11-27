@@ -45,10 +45,10 @@ export const IS_LOCAL_CHAIN = CHAIN_ID === 31337;
 /**
  * Which store serves the API: `json` (db.json, the default until the
  * cut-over) or `postgres` (`DATABASE_URL`, and `DATABASE_CA` for a TLS host;
- * docs/postgres-store-design.md §4). Postgres is refused on a real-money
- * chain until the cut-over (§8 S8): until then it runs for the suites and on
- * testnet only. Anything else refuses, so a typo never runs on db.json while
- * the operator believes it is on Postgres.
+ * docs/postgres-store-design.md §4). On a real-money chain the pool takes
+ * only a unix socket, loopback, or another host with sslmode=verify-full and
+ * DATABASE_CA (store/pg/sql.ts pgPoolConfig). Anything else refuses, so a typo
+ * never runs on db.json while the operator believes it is on Postgres.
  */
 export const STORE_BACKEND = process.env.STORE_BACKEND || "json";
 if (STORE_BACKEND !== "json" && STORE_BACKEND !== "postgres") {
@@ -57,7 +57,6 @@ if (STORE_BACKEND !== "json" && STORE_BACKEND !== "postgres") {
 export const DATABASE_URL = process.env.DATABASE_URL ?? "";
 export const DATABASE_CA = process.env.DATABASE_CA || undefined;
 if (STORE_BACKEND === "postgres") {
-  if (IS_REAL_MONEY_CHAIN) throw new Error("STORE_BACKEND=postgres is refused on a real-money chain until the cut-over");
   if (!DATABASE_URL) throw new Error("STORE_BACKEND=postgres needs DATABASE_URL");
 }
 export const USING_LOCAL_API_HOST = API_HOST === "127.0.0.1" || API_HOST === "localhost" || API_HOST === "::1";
