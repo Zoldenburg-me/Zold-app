@@ -619,6 +619,14 @@ console.log("a company's own account");
     try {
       assert.equal((await call("GET", `/api/pay/weber-bau/${ownCode}`, undefined, "")).status, 404);
       assert.equal((await call("GET", `/api/pay/weber-bau-gmbh/${ownCode}`, undefined, "")).status, 200);
+      // Copy link and the invoice's Payment link hand out the address that opens now.
+      const listed = (await call("GET", "/api/orgs/org_own/payment-requests", undefined, "u_admin")).body.paymentRequests.find((x: any) => x.code === ownCode);
+      assert.match(listed.url, /\/pay\/weber-bau-gmbh\//);
+      const reused = await call("POST", "/api/orgs/org_own/payment-requests", { invoiceId: "inv_own" }, "u_co");
+      assert.equal(reused.body.reused, true, JSON.stringify(reused.body));
+      assert.match(reused.body.url, /\/pay\/weber-bau-gmbh\//);
+      const path = new URL(reused.body.url).pathname;
+      assert.equal((await call("GET", `/api${path}`, undefined, "")).status, 200, "the reused URL resolves");
     } finally {
       await store.updateUser("u_admin", { paymentPage: u.paymentPage } as any);
       await store.updateOrganisation("org_own", { paymentPage: org.paymentPage });
