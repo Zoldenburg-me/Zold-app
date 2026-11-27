@@ -174,7 +174,7 @@ export function monthSummary(lines, ym) {
 export function owedInvoices(invoices) {
   const due = (i) => (i.dueDate ? Date.parse(i.dueDate) : Infinity);
   return (invoices || [])
-    .filter((i) => i.direction === "outgoing" && !["PAID", "RECONCILED", "DRAFT", "DELETED"].includes(i.state))
+    .filter((i) => i.direction === "outgoing" && !["PAID", "RECONCILED", "REPLACED", "DRAFT", "DELETED"].includes(i.state))
     .sort((a, b) => (b.overdue ? 1 : 0) - (a.overdue ? 1 : 0) || due(a) - due(b));
 }
 

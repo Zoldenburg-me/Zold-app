@@ -54,6 +54,7 @@ const L = {
         converted: "Umrechnungskurs:", payIn: "Zahlbar in",
         convBasis: "Der Steuerbetrag ist gemäß § 16 Abs. 6 UStG zusätzlich in Euro angegeben.",
         paid: "Bezahlt", awaiting: "Zahlung ausstehend", pay: "Bezahlen",
+        corrects: "Diese Rechnung berichtigt und ersetzt die Rechnung", of: "vom", replaced: "Ersetzt durch die Rechnung",
         payNote: "Die Zahlungsart wählen Sie auf der nächsten Seite. Die Rechnung gilt als bezahlt, sobald das Geld eingegangen ist." },
   en: { invoice: "Invoice", number: "Invoice number", issueDate: "Invoice date",
         supplyDate: "Date of supply", supplyPeriod: "Period of supply", vatId: "VAT ID",
@@ -64,6 +65,7 @@ const L = {
         converted: "Rate of exchange:", payIn: "Payable in",
         convBasis: "The tax amount is also stated in euro, as § 16 Abs. 6 UStG requires.",
         paid: "Paid", awaiting: "Awaiting payment", pay: "Pay",
+        corrects: "This invoice corrects and replaces invoice", of: "of", replaced: "Replaced by invoice",
         payNote: "You choose how to pay on the next page. This invoice is marked paid when the money arrives." },
   fr: { invoice: "Facture", number: "Numéro de facture", issueDate: "Date de facture",
         supplyDate: "Date de livraison", supplyPeriod: "Période de prestation", vatId: "N° de TVA",
@@ -74,6 +76,7 @@ const L = {
         converted: "Taux de change :", payIn: "Payable en",
         convBasis: "Le montant de la taxe est également indiqué en euros, conformément au § 16 Abs. 6 UStG.",
         paid: "Payée", awaiting: "En attente de paiement", pay: "Payer",
+        corrects: "Cette facture rectifie et remplace la facture", of: "du", replaced: "Remplacée par la facture",
         payNote: "Vous choisissez le mode de paiement sur la page suivante. La facture est marquée comme payée dès réception des fonds." },
   es: { invoice: "Factura", number: "Número de factura", issueDate: "Fecha de factura",
         supplyDate: "Fecha de prestación", supplyPeriod: "Período de prestación", vatId: "NIF-IVA",
@@ -84,6 +87,7 @@ const L = {
         converted: "Tipo de cambio:", payIn: "Pagadero en",
         convBasis: "El importe del impuesto también se indica en euros, conforme al § 16 Abs. 6 UStG.",
         paid: "Pagada", awaiting: "Pendiente de pago", pay: "Pagar",
+        corrects: "Esta factura rectifica y sustituye a la factura", of: "del", replaced: "Sustituida por la factura",
         payNote: "Elija la forma de pago en la página siguiente. La factura se marca como pagada cuando llega el dinero." },
 };
 
@@ -105,7 +109,7 @@ function renderIssued(inv) {
   const amount = (c, cu) => money(c, cu, loc);
   const day = (iso) => date(iso, loc);
   const decimal = (v) => Number(v).toLocaleString(loc, { minimumFractionDigits: 2 });
-  const settled = inv.state === "PAID" || inv.state === "RECONCILED";
+  const settled = inv.state === "PAID" || inv.state === "RECONCILED" || inv.state === "REPLACED";
   // The issuer reading their own invoice is not the one to pay it.
   const pay = !settled && !own && inv.payPath ? inv.payPath : "";
   const sign = canSign(inv, own);
@@ -155,6 +159,8 @@ function renderIssued(inv) {
       </div>
     </div>
 
+    ${d.corrects ? `<div class="vat-note"><div>${esc(lab("corrects"))} ${esc(d.corrects.number)} ${esc(lab("of"))} ${esc(day(d.corrects.issueDate))}.</div></div>` : ""}
+    ${inv.replacedBy ? `<div class="vat-note"><div>${esc(lab("replaced"))} ${esc(inv.replacedBy.number)} ${esc(lab("of"))} ${esc(day(inv.replacedBy.issueDate))}.</div></div>` : ""}
     <div class="sender-line">${esc([d.issuer.name, ...addressOf(d.issuer, home)].join(" · "))}</div>
 
     <div class="parties">
@@ -226,7 +232,7 @@ function renderIssued(inv) {
   </div>
 
   <div class="panel pay-card no-print">
-    <div class="await${settled ? " ok" : ""}" role="heading" aria-level="2" lang="${sheetLang}">${esc(settled ? t.paid : t.awaiting)}</div>
+    <div class="await${settled ? " ok" : ""}" role="heading" aria-level="2" lang="${sheetLang}">${esc(inv.replacedBy ? `${t.replaced} ${inv.replacedBy.number}` : settled ? t.paid : t.awaiting)}</div>
     <div class="pay-total">${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</div>
     <p class="lead">${esc([d.issuer?.name, !settled && inv.dueDate ? `due ${day(inv.dueDate)}` : ""].filter(Boolean).join(" · "))}</p>
     ${sign ? `<div class="pay-actions">
@@ -510,7 +516,7 @@ function wireSigning() {
 
 function render(inv) {
   if (inv.issued) {
-    const settled = inv.state === "PAID" || inv.state === "RECONCILED";
+    const settled = inv.state === "PAID" || inv.state === "RECONCILED" || inv.state === "REPLACED";
     document.title = `${inv.issued.number} · ${(L[inv.issued.language] || L.en).invoice}`;
     $("#actions").innerHTML = `${!settled && !own && inv.payPath ? `<a class="pay-btn" lang="${L[inv.issued.language] ? inv.issued.language : "en"}" href="${esc(inv.payPath)}">${esc((L[inv.issued.language] || L.en).pay)}</a> ` : ""}<button class="ghost" id="print">Print / PDF</button>`;
     $("#print").addEventListener("click", () => window.print());

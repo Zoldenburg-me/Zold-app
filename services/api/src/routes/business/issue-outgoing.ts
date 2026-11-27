@@ -9,6 +9,12 @@
  * settlements, gains its number and today's date, and is paid by the rows it
  * was written for. Its issue date is always the day it is issued, whatever
  * the request says: the receipts are in the past, the invoice is not.
+ *
+ * A correction (§ 31 Abs. 5 UStDV) is issued here too: the next number of
+ * today's series, the original's customer, lines, treatment and euro figures,
+ * today's issuer details, and a printed reference to the original's number
+ * and date. The original moves to REPLACED in the same transaction, with its
+ * payments carried over and its open payment link handed to the correction.
  */
 import { randomUUID } from "node:crypto";
 import { store } from "../../store.js";
@@ -27,7 +33,8 @@ import {
 } from "../../domain/invoicing.js";
 import { vatIdShape } from "../../domain/vat-ids.js";
 import { checkVatId } from "../../adapters/vies.js";
-import { assertTransition, newLinkToken, ownerInvoiceView, settlementRef, settlementUpdate } from "../../domain/invoices.js";
+import { assertTransition, newLinkToken, ownerInvoiceView, payableEur, settlementRef, settlementUpdate } from "../../domain/invoices.js";
+import { openLinkFor } from "./invoice-pay-link.js";
 import type { Invoice } from "../../domain/types.js";
 import { sealInvoiceLink } from "../../stored-secrets.js";
 import type { OrgContext } from "../org-context.js";
@@ -53,24 +60,35 @@ export async function issueOutgoing(
   /** Run with nothing awaited before the write: a reason the draft may no
    *  longer be issued (what it bills changed during the lookups), or none. */
   stillIssuable?: () => Promise<string | undefined>,
+  /** The issued invoice this one corrects and replaces (correctionBody). */
+  correcting?: Invoice,
 ): Promise<IssueAnswer> {
-  const body = fromDraft ? { ...requestBody, issueDate: undefined, dueDate: undefined } : requestBody;
+  // A correction takes the next number; a draft may be given one of its own.
+  const body = correcting
+    ? { ...requestBody, issueDate: undefined, dueDate: undefined, number: undefined }
+    : fromDraft ? { ...requestBody, issueDate: undefined, dueDate: undefined } : requestBody;
   // Taken now: the store hands out the row itself, so after the lookups below
   // `fromDraft.updatedAt` is whatever the row says by then.
   const draftReadAt = fromDraft?.updatedAt;
+  const correctingReadAt = correcting?.updatedAt;
   let draft;
   let language: InvoiceLanguage;
   let dueDate: string | undefined;
   let report;
   try {
     draft = await withConversion(await draftFrom(ctx.org, body));
+    // The euro figures the customer was given, not today's rate: a correction
+    // changes who issued it, never what is owed.
+    if (correcting?.issued?.conversion) draft.conversion = correcting.issued.conversion;
     // Chosen per invoice; the profile's language and payment terms are the
     // defaults.
     language = invoiceLanguage(body.language, languageOf(ctx.org));
     // An invoice for money already received has nothing falling due.
     dueDate = fromDraft
       ? undefined
-      : invoiceDueDate(body.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
+      : correcting
+        ? (correcting.dueDate && correcting.dueDate >= draft.issueDate! ? correcting.dueDate : undefined)
+        : invoiceDueDate(body.dueDate, draft.issueDate!, draftDueDate(ctx.org, draft.issueDate!));
     // The customer's VAT ID is looked up here, by the server, and the answer
     // goes on the document: an answer the browser sent would prove nothing.
     if (draft.recipient.vatId && vatIdShape(draft.recipient.vatId).ok) {
@@ -103,6 +121,19 @@ export async function issueOutgoing(
         : "There are warnings on this invoice. Re-send with acceptWarnings: true to issue it anyway.",
       { ...report, warnings: [...receiptWarnings, ...report.warnings] },
     );
+  }
+  if (correcting) {
+    // The point of the correction is the number the original lacked: a note
+    // in its place again would need a correction of its own.
+    if (report.warnings.some((w) => w.field === "issuer.vatId")) {
+      return refusal(422, "A corrected invoice prints your VAT ID itself. Enter the number you were given in the business profile, then correct the invoice. Nothing was issued.", { ...report });
+    }
+    // Same amount, so the payments carry over as they are. A different amount
+    // is a cancellation and a new invoice, which this does not do.
+    const euroCents = draft.conversion?.grossCents ?? report.totals.grossCents;
+    if (euroCents !== Math.round((payableEur(correcting) ?? NaN) * 100)) {
+      return refusal(422, `The corrected invoice would total ${fromCents(euroCents)} EUR, not the original's ${fromCents(Math.round((payableEur(correcting) ?? 0) * 100))} EUR. Nothing was issued.`);
+    }
   }
   if (fromDraft) {
     // The invoice must bill exactly what arrived, or it would be issued as
@@ -140,6 +171,22 @@ export async function issueOutgoing(
       const changed = await stillIssuable?.();
       if (changed) return refusal(409, changed);
     }
+    const original = correcting ? await store.findInvoice(correcting.id) : undefined;
+    const originalLink = original ? await openLinkFor(original) : undefined;
+    if (correcting) {
+      if (!original || original.updatedAt !== correctingReadAt || !correctable(original)) {
+        return refusal(409, "This invoice changed while the correction was being issued. Nothing was issued; look at it again.");
+      }
+      // Money taken by any of its links (open, paid or lapsed) that has not
+      // settled the invoice yet would settle an invoice being replaced, and a
+      // fresh link for the correction would ask for it again.
+      const linkPaid = original.state !== "PAID" && (await store.list("paymentRequests")).some(
+        (p) => p.invoiceId === original.id && p.orgId === original.orgId && !p.test && p.payments.length > 0,
+      );
+      if (linkPaid) {
+        return refusal(409, "A payment is arriving through this invoice's payment link. Correct it once that payment has settled. Nothing was issued.");
+      }
+    }
     const now = new Date();
     const { token, hash } = newLinkToken();
     const id = fromDraft?.id ?? `inv_${randomUUID()}`;
@@ -172,7 +219,7 @@ export async function issueOutgoing(
         unitPrice: l.unitPriceNet,
         amount: fromCents(l.netCents),
         ...(draft.treatment.kind === "standard" ? { vatRate: l.appliedRate } : {}),
-        ...(fromDraft?.lines[i]?.receipt ? { receipt: fromDraft.lines[i].receipt } : {}),
+        ...((fromDraft ?? original)?.lines[i]?.receipt ? { receipt: (fromDraft ?? original)!.lines[i].receipt } : {}),
       })),
       currency: draft.currency ?? SETTLEMENT_CURRENCY,
       total: fromCents(report.totals.grossCents),
@@ -201,7 +248,7 @@ export async function issueOutgoing(
         currency: draft.currency ?? SETTLEMENT_CURRENCY,
         ...(draft.conversion ? { conversion: draft.conversion } : {}),
         purchaseOrder: str(body.purchaseOrder),
-        paymentTerms: str(body.paymentTerms) ?? (fromDraft ? undefined : ctx.org.invoicing?.paymentTermsNote),
+        paymentTerms: str(body.paymentTerms) ?? (fromDraft || correcting ? undefined : ctx.org.invoicing?.paymentTermsNote),
         notes: str(body.notes),
         display,
         customFields: ctx.org.invoicing?.customFields,
@@ -216,10 +263,25 @@ export async function issueOutgoing(
         ...(draft.recipientVatCheck ? { recipientVatCheck: draft.recipientVatCheck } : {}),
         // Frozen with the document: which rules ran, and how far they went.
         jurisdiction: report.jurisdiction,
+        ...(original ? { corrects: { invoiceId: original.id, number: original.issued!.number, issueDate: original.issued!.issueDate } } : {}),
       },
       submittedAt: now.toISOString(),
     };
 
+    let replaced: Invoice | null | undefined;
+    if (original) {
+      // First, and from the state checked: a payment landing meanwhile wins,
+      // and nothing has been written yet.
+      replaced = await store.updateInvoiceFrom(original.id, [original.state], {
+        state: "REPLACED",
+        replacedBy: { invoiceId: id, number, issueDate: draft.issueDate!, at: now.toISOString(), byMemberId: ctx.member.id },
+      });
+      if (!replaced) return refusal(409, "This invoice changed while the correction was being issued. Nothing was issued; look at it again.");
+      // The customer may already have the old link's bank reference or crypto
+      // quote: the link itself moves to the correction, so its money settles
+      // the correction, and the correction needs no new link.
+      if (originalLink) await store.updatePaymentRequestFrom(originalLink.id, ["OPEN"], { invoiceId: id });
+    }
     const invoice = fromDraft
       ? (await issueDraft(fromDraft, { ...document, linkTokenEnc }, hash))
       : (await store.addInvoice({
@@ -230,6 +292,13 @@ export async function issueOutgoing(
           linkTokenEnc,
           state: "SUBMITTED", // issued and locked; nothing for a supplier to fill in
           ...document,
+          // Same amount, so the original's payments settle the correction as
+          // they settled it: paid stays paid, part-paid stays part-paid.
+          // From the row as it was replaced, under its lock: a settlement that
+          // landed after the read above is carried too.
+          ...(replaced
+            ? { state: original!.state, settlements: replaced.settlements, ...(replaced.payment ? { payment: replaced.payment } : {}) }
+            : {}),
           createdByMemberId: ctx.member.id,
           createdAt: now.toISOString(),
           updatedAt: now.toISOString(),
@@ -274,4 +343,37 @@ async function issueDraft(draft: Invoice, document: Partial<Invoice>, linkTokenH
     if (!last) return submitted;
     return (await store.settleInvoice(draft.id, settlementRef(last), (row) => settlementUpdate(row, last), true))!;
   });
+}
+
+/** An issued outgoing invoice a correction may replace: open or paid by the
+ *  platform. A manually reconciled one, or one already replaced, is not. */
+export const correctable = (i: Invoice) =>
+  i.direction === "outgoing" && !!i.issued && !i.replacedBy && (i.state === "SUBMITTED" || i.state === "PAID");
+
+/** The request a correction is issued from: the original's own document,
+ *  so only the issuer's details (read from today's profile) can differ. */
+export function correctionBody(original: Invoice, acceptWarnings: boolean): Record<string, unknown> {
+  const d = original.issued!;
+  return {
+    recipient: { ...d.recipient, ...(d.recipientIsBusiness !== undefined ? { isBusiness: d.recipientIsBusiness } : {}) },
+    ...(d.supplyKind ? { supplyKind: d.supplyKind } : {}),
+    supplyDate: d.supplyDate,
+    supplyPeriod: d.supplyPeriod,
+    lines: original.lines.map((l) => ({
+      description: l.description,
+      quantity: l.quantity,
+      unitPriceNet: l.unitPrice,
+      ...(l.vatRate !== undefined ? { vatRate: l.vatRate } : {}),
+    })),
+    vat: d.vatTreatment.kind === "standard"
+      ? { kind: "standard", rate: d.vatTreatment.rate }
+      : { kind: "exempt", reason: d.vatTreatment.reason, note: d.vatTreatment.note },
+    currency: d.currency ?? original.currency,
+    language: d.language,
+    purchaseOrder: d.purchaseOrder,
+    // The original's terms as printed; none stays none, not the profile's.
+    paymentTerms: d.paymentTerms,
+    notes: d.notes,
+    acceptWarnings,
+  };
 }

@@ -37,10 +37,11 @@ export class InvoiceError extends Error {
 const TRANSITIONS: Record<InvoiceState, InvoiceState[]> = {
   DRAFT: ["SUBMITTED", "DELETED"],
   LINK_CREATED: ["SUBMITTED", "DELETED"],
-  SUBMITTED: ["PAYING", "PAID", "RECONCILED", "DELETED"],
+  SUBMITTED: ["PAYING", "PAID", "RECONCILED", "REPLACED", "DELETED"],
   PAYING: ["PAID", "SUBMITTED"],
-  PAID: ["RECONCILED"],
+  PAID: ["RECONCILED", "REPLACED"],
   RECONCILED: [],
+  REPLACED: [],
   DELETED: [],
 };
 
@@ -286,6 +287,7 @@ function printedIssued(d: NonNullable<Invoice["issued"]>) {
     display: d.display,
     customFields: d.customFields,
     language: d.language,
+    ...(d.corrects ? { corrects: { number: d.corrects.number, issueDate: d.corrects.issueDate } } : {}),
     recipientIsBusiness: d.recipientIsBusiness,
     supplyKind: d.supplyKind,
     jurisdiction: d.jurisdiction && {
@@ -331,6 +333,8 @@ export function supplierView(
           ...(issuerExtras.payLinkLapsed ? { payLinkLapsed: true } : {}),
         }
       : {}),
+    // The customer holding the old link is told which invoice replaced it.
+    ...(invoice.replacedBy ? { replacedBy: { number: invoice.replacedBy.number, issueDate: invoice.replacedBy.issueDate } } : {}),
     supplier: invoice.supplier,
     // The printed columns only: a line's `receipt` names a ledger row and is
     // the organisation's own record.
@@ -355,7 +359,7 @@ export function supplierView(
 
 export function isOverdue(invoice: Invoice, now = new Date()): boolean {
   if (!invoice.dueDate) return false;
-  if (invoice.state === "PAID" || invoice.state === "RECONCILED") return false;
+  if (invoice.state === "PAID" || invoice.state === "RECONCILED" || invoice.state === "REPLACED") return false;
   return new Date(invoice.dueDate).getTime() < now.getTime();
 }
 
@@ -570,6 +574,35 @@ export function settlementRef(s: InvoiceSettlement): string {
   if (s.method === "bank") return `monerium:${s.orderId}`;
   if (s.method === "wallet-receipt") return `ledger:${s.ledgerEntryId}`;
   return `deposit:${s.depositId}`;
+}
+
+/**
+ * The invoice that stands for `invoice` now: itself, or the correction that
+ * replaced it, followed to the last one. Money naming a replaced invoice (its
+ * old pay link, its number on a transfer) belongs to the correction, which
+ * carries its payments; books and settlements read through this so the pair
+ * counts once.
+ */
+export function liveInvoice<T extends Pick<Invoice, "id" | "replacedBy">>(invoices: readonly T[], invoice: T | undefined): T | undefined {
+  let cur = invoice;
+  // Bounded: corrections of corrections are rare, and a cycle is not followed.
+  for (let hops = 0; cur?.replacedBy && hops < 50; hops++) {
+    const next = invoices.find((i) => i.id === cur!.replacedBy!.invoiceId);
+    if (!next) break;
+    cur = next;
+  }
+  return cur;
+}
+
+/** liveInvoice by id, from the store's rows one at a time. */
+export async function liveInvoiceId(id: string, find: (id: string) => Promise<Invoice | undefined>): Promise<string> {
+  let cur = await find(id);
+  for (let hops = 0; cur?.replacedBy && hops < 50; hops++) {
+    const next = await find(cur.replacedBy.invoiceId);
+    if (!next) break;
+    cur = next;
+  }
+  return cur?.id ?? id;
 }
 
 export function assertDeletable(invoice: Invoice) {
