@@ -179,7 +179,8 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     }
     if ("logoId" in next && next.logoId !== stored?.logoId && !requirePermission(ctx, res, "org.update")) return;
     // On a logo change, keep only the logos an issued invoice prints, the new
-    // one and the one it replaces (an issue in flight may have just read it):
+    // one and the one it replaces (an issue in flight may have just read it;
+    // `cur` too, the locked row, for a PATCH that raced this one):
     // the map would otherwise grow by every image ever tried.
     const keptLogos = "logoId" in next && next.logoId !== stored?.logoId
       ? new Set([
@@ -259,7 +260,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
       ...next,
       ...(keptLogos ? {
         logos: {
-          ...Object.fromEntries(Object.entries(cur?.logos ?? {}).filter(([id]) => keptLogos.has(id))),
+          ...Object.fromEntries(Object.entries(cur?.logos ?? {}).filter(([id]) => keptLogos.has(id) || id === cur?.logoId)),
           ...(logo ? { [logo.id]: logo.dataUrl } : {}),
         },
       } : {}),
