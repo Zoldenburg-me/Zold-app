@@ -228,6 +228,7 @@ await check("an unsettled deposit has no line yet", () => {
 
 await check("converted with no receipt value: ONE payment line at the measured proceeds", () => {
   const inp = base();
+  inp.paymentRequests = [req()];
   inp.deposits = [usdcDeposit({ receipt: undefined, realisedGainEur: undefined }) as any];
   const lines = projectStatementLines(inp);
   assert.equal(lines.length, 1);
@@ -262,6 +263,27 @@ await check("a deposit already booked as one :converted line gets no receipt or 
   inp.deposits = [usdcDeposit() as any];
   const { toAdd } = mergeStatementLines(legacy, projectStatementLines(inp));
   assert.equal(toAdd.length, 0, "the income would be counted twice");
+  // A first part booked at its proceeds blocks a receipt valued later just the same.
+  const p1 = { creditedEur: 32.3, provider: "dex", rate: 1.1452, conversion: { txHash: H(30), at: "2026-09-10T10:01:00.000Z", amountInUnits: "37000000" } };
+  const partLegacy = projectStatementLines({ ...inp, deposits: [usdcDeposit({ receipt: undefined, holding: "held", creditedEur: undefined, conversion: undefined, partials: [p1], txs: [] }) as any] });
+  assert.deepEqual(partLegacy.map((l) => l.statement!.key), ["deposit:d-1:converted:p1"]);
+  const valuedLater = projectStatementLines({ ...inp, deposits: [usdcDeposit({ holding: "held", creditedEur: undefined, conversion: undefined, partials: [p1], txs: [] }) as any] });
+  assert.equal(mergeStatementLines(partLegacy, valuedLater).toAdd.length, 0, "no receipt beside a part already booked as the payment");
+});
+
+await check("USDC nobody invoiced or asked for is money in, as the same EURe would be; a pay link's or an invoice's is the payment", () => {
+  const inp = base();
+  inp.deposits = [usdcDeposit({ paymentRequestId: undefined }) as any];
+  assert.equal(projectStatementLines(inp).find((l) => l.statement!.key === "deposit:d-1:held")!.txType, "transfer_in");
+  inp.deposits = [usdcDeposit({ paymentRequestId: undefined, receipt: undefined }) as any];
+  assert.equal(projectStatementLines(inp)[0].txType, "transfer_in", "the proceeds line too");
+  inp.paymentRequests = [req()];
+  inp.deposits = [usdcDeposit() as any];
+  assert.equal(projectStatementLines(inp).find((l) => l.statement!.key === "deposit:d-1:held")!.txType, "invoice_payment");
+  inp.paymentRequests = [];
+  inp.invoices = [{ id: "inv_1", orgId: "org_1", issued: { number: "RE-1" } } as any];
+  inp.deposits = [usdcDeposit({ paymentRequestId: undefined, invoiceId: "inv_1" }) as any];
+  assert.equal(projectStatementLines(inp).find((l) => l.statement!.key === "deposit:d-1:held")!.txType, "invoice_payment");
 });
 
 await check("EURe sent from another wallet is one line dated by the block; a mint, a swap's output and a refund are not lines of their own", () => {

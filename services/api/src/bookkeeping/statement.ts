@@ -27,7 +27,7 @@ import type {
 } from "../store/types.js";
 import { OPERATOR_REFUND_STEP } from "../store/types.js";
 import { safeMovedEur } from "../transfers/safe-moved.js";
-import { conversionOutputs } from "../transfers/conversion-outputs.js";
+import { conversionOutputs, depositOwner } from "../transfers/conversion-outputs.js";
 import type { PaymentRequest } from "../payment-requests.js";
 import { textCarriesCode } from "../payment-requests.js";
 import { paymentMemo } from "../sepa.js";
@@ -139,6 +139,10 @@ function requestFor(inp: StatementInputs, id?: string, memo?: string): PaymentRe
   return inp.paymentRequests.find((r) => textCarriesCode(memo, r.code));
 }
 
+/** This account's deposit: the person's Safe, or the company's own Safe. */
+const ownDeposit = (inp: StatementInputs, d: CryptoDeposit) =>
+  inp.userId ? d.userId === inp.userId : !d.userId && d.accountId === inp.accountId;
+
 // ── SEPA in ──────────────────────────────────────────────────────────────────
 
 function sepaInLines(inp: StatementInputs): LineDraft[] {
@@ -150,7 +154,7 @@ function sepaInLines(inp: StatementInputs): LineDraft[] {
     const inv = invoiceByRef(inp.invoices, `monerium:${o.orderId}`) ?? (req?.invoiceId ? inp.invoices.find((i) => i.id === req.invoiceId) : undefined);
     // The chain's view of the same money: the mint into the Safe.
     const mint = inp.deposits.find(
-      (d) => d.token === "EURE" && (d.from ?? ZERO) === ZERO && d.userId === inp.userId &&
+      (d) => d.token === "EURE" && (d.from ?? ZERO) === ZERO && ownDeposit(inp, d) &&
         Math.abs((d.amountEur ?? 0) - o.amountEur) < 0.005 &&
         Math.abs(Date.parse(d.receipt?.blockTimestamp ?? d.detectedAt) - Date.parse(o.processedAt)) < 3 * 24 * 3600_000,
     );
@@ -314,8 +318,8 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
   const isConversionOutput = conversionOutputs(inp.deposits, inp.transfers);
   const out: LineDraft[] = [];
   for (const d of inp.deposits) {
-    if (d.userId !== inp.userId || d.token !== "EURE" || !((d.amountEur ?? 0) > 0)) continue;
-    if ((d.from ?? ZERO) === ZERO || booked.has(d.txHash.toLowerCase()) || isConversionOutput(d.txHash, d.logIndex, d.userId)) continue;
+    if (!ownDeposit(inp, d) || d.token !== "EURE" || !((d.amountEur ?? 0) > 0)) continue;
+    if ((d.from ?? ZERO) === ZERO || booked.has(d.txHash.toLowerCase()) || isConversionOutput(d.txHash, d.logIndex, depositOwner(d))) continue;
     const at = d.arrivedAt ?? d.detectedAt;
     out.push({
       event: "eure_in",
@@ -339,7 +343,8 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
 // euro value on arrival. So a USDC payment is booked in up to two lines:
 //
 //   receipt   on arrival, whatever the settlement currency: + the ECB value of
-//             the day, as the payment (invoice_payment). That is the income
+//             the day, as the payment (invoice_payment, or transfer_in when
+//             no invoice or pay link names it). That is the income
 //             and the cost basis.
 //   disposal  when the held USDC is converted: + (EURe credited − receipt
 //             value), the realised gain or loss (realised_gain / realised_loss).
@@ -352,7 +357,7 @@ function eureInLines(inp: StatementInputs): LineDraft[] {
 function cryptoLines(inp: StatementInputs): LineDraft[] {
   const out: LineDraft[] = [];
   for (const d of inp.deposits) {
-    if (d.userId !== inp.userId || d.token !== "USDC" || !d.settledAt) continue;
+    if (!ownDeposit(inp, d) || d.token !== "USDC" || !d.settledAt) continue;
     const req = requestFor(inp, d.paymentRequestId);
     const inv = d.invoiceId ? inp.invoices.find((i) => i.id === d.invoiceId) : undefined;
     const receivedAt = d.receipt?.blockTimestamp ?? d.detectedAt;
@@ -383,6 +388,8 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
       ...(d.conversion?.userOpHash ? { userOpHash: d.conversion.userOpHash } : {}),
     };
     const counterparty = { ...(req?.source.orderName ? { name: `Order ${req.source.orderName}` } : {}), ...(d.from ? { address: d.from } : {}) };
+    // Money nobody invoiced or asked for is money in, as the same EURe would be.
+    const paymentType = req || inv ? "invoice_payment" : "transfer_in";
     const converted = d.holding === "converted" && (d.creditedEur ?? 0) > 0;
     const valued = !!d.receipt && d.receipt.amountEur > 0;
 
@@ -396,7 +403,7 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
         counterparty,
         reference,
         links: { ...baseLinks, txHashes: [d.txHash] },
-        txType: "invoice_payment",
+        txType: paymentType,
         tags: ["usdc", "received"],
         note: `${d.amountUsdc ?? 0} USDC received, valued at the ECB reference rate of ${d.receipt!.rateAsOf} (1 EUR = ${d.receipt!.rate} USD).`,
       });
@@ -438,7 +445,7 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
           counterparty,
           reference,
           links: { ...links, txHashes: [d.txHash, ...links.txHashes] },
-          txType: "invoice_payment",
+          txType: paymentType,
           tags: ["usdc", "converted", "partial"],
           note: `Part of ${d.amountUsdc ?? 0} USDC received on a day with no ECB reference rate, booked at the measured proceeds ${pVia}. The rest stays held.`,
           unexecuted: !inp.swapsHaveExecuted,
@@ -483,7 +490,7 @@ function cryptoLines(inp: StatementInputs): LineDraft[] {
       counterparty,
       reference,
       links: { ...conversionLinks, txHashes: [d.txHash, ...conversionLinks.txHashes] },
-      txType: "invoice_payment",
+      txType: paymentType,
       tags: ["usdc", "converted"],
       note: `${d.amountUsdc ?? 0} USDC received on a day with no ECB reference rate; booked at the measured conversion proceeds${via ? ` ${via}` : ""}.`,
       unexecuted: !inp.swapsHaveExecuted,
@@ -565,14 +572,17 @@ export function projectStatementLines(inp: StatementInputs, now = new Date().toI
 }
 
 /**
- * A deposit whose conversion was booked as one `:converted` line (the payment
- * at its conversion proceeds) must not also get a receipt and a disposal
- * line: that would count the income twice. Lines are never deleted, so the
- * existing one stands and the pair is not added.
+ * A deposit whose conversion was booked as `:converted` lines (the payment at
+ * its conversion proceeds, whole or a first part) must not also get a receipt
+ * and a disposal line: that would count the income twice. Lines are never
+ * deleted, so the existing one stands and the pair is not added.
  */
 function bookedAsOneLine(byKey: Map<string, LedgerEntry>, key: string): boolean {
   const m = /^deposit:(.+?):(held|disposal(?::p\d+)?)$/.exec(key);
-  return !!m && byKey.has(`deposit:${m[1]}:converted`);
+  if (!m) return false;
+  const converted = `deposit:${m[1]}:converted`;
+  for (const k of byKey.keys()) if (k === converted || k.startsWith(`${converted}:p`)) return true;
+  return false;
 }
 
 /** An invoice number alone is an external invoice on a pay link. */

@@ -88,7 +88,7 @@ export async function reconcile(): Promise<ReconcileReport> {
   for (const d of (await store.list("cryptoDeposits"))) {
     for (const c of [d.conversion, ...(d.partials ?? []).map((p) => p.conversion)]) {
       if (!c?.otherInflowWei) continue;
-      const address = (await store.findUser(d.userId))?.address;
+      const address = d.userId ? (await store.findUser(d.userId))?.address : d.accountId ? (await store.findAccount(d.accountId))?.address : undefined;
       findings.push({
         kind: "CONVERSION_OVERLAP",
         detail: `swap ${c.txHash} of deposit ${d.id}: the Safe grew by more than the swap delivered — check the scanner booked that EURe as its own deposit`,

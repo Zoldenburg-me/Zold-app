@@ -280,6 +280,73 @@ await check("a SEPA credit to a company's own Safe is booked to the company's ac
   assert.deepEqual(await writeAccountStatementLines((await store.findAccount("acc_co"))!), { added: 0, updated: 0 });
 });
 
+await check("a company's own Safe is watched for crypto in; a person's Safe, a clash and twin accounts are not watched as a company", async () => {
+  const { watchedAddresses } = await import("../services/api/src/adapters/crypto-deposits.js");
+  const watched = await watchedAddresses();
+  const company = watched.filter((w) => w.source === "company-safe").map((w) => w.account!.id);
+  assert.deepEqual(company, ["acc_co"]);
+  assert.equal(watched.find((w) => w.address.toLowerCase() === addr("d"))?.user?.id, "u_clash", "a user's Safe stays the user's");
+  assert.ok(!watched.some((w) => w.address.toLowerCase() === addr("e")), "two accounts on one address name no holder");
+});
+
+await check("EURe and USDC landing on a company's own Safe are booked in the company's books, never a person's", async () => {
+  const { settleOnArrival } = await import("../services/api/src/adapters/crypto-deposits.js");
+  const { attributeDepositToRequest } = await import("../services/api/src/routes/payment-requests.js");
+  const H = (k: number) => `0x${k.toString(16).padStart(64, "0")}`;
+  const at = "2026-10-05T10:00:00.000Z";
+  const common = { accountId: "acc_co", chainId: 31337, logIndex: 0, from: addr("f"), arrivedAt: at, paymentAddress: COMPANY_SAFE, holding: "awaiting_approval", txs: [], detectedAt: at, updatedAt: at } as const;
+  const eure = await store.addCryptoDeposit({ ...common, id: "co-eure", token: "EURE", txHash: H(901), amountUnits: "40000000000000000000", amountEur: 40, creditedEur: 40, settlementAsset: "EURE" } as any);
+  const usdc = await store.addCryptoDeposit({
+    ...common, id: "co-usdc", token: "USDC", txHash: H(902), amountUnits: "110000000", amountUsdc: 110, amountEur: 100, settlementAsset: "USDC",
+    receipt: { amountEur: 100, rate: 1.1, rateProvider: "ecb", rateAsOf: "2026-10-05", ratedAt: at, blockTimestamp: at },
+  } as any);
+  assert.equal(await attributeDepositToRequest(usdc), undefined, "no person's pay link");
+  assert.equal((await settleOnArrival(eure)).holding, "none");
+  const held = await settleOnArrival(usdc);
+  assert.equal(held.holding, "held");
+  assert.equal(held.creditedUsdc, 110);
+  assert.ok(held.settledAt);
+  await writeStatementLines();
+  const lines = (await store.ledgerOf("org_co")).filter((e) => e.statement?.links.depositId?.startsWith("co-"));
+  assert.deepEqual(lines.map((e) => [e.statement!.event, e.statement!.amountCents]).sort(), [["crypto_held", 10000], ["eure_in", 4000]]);
+  assert.ok(lines.every((e) => e.source.kind === "account" && e.source.accountId === "acc_co"));
+  for (const o of ["org_owner", "org_st", "org_clash"]) {
+    assert.ok(!(await store.ledgerOf(o)).some((e) => e.statement?.links.depositId?.startsWith("co-")), `nothing on ${o}'s books`);
+  }
+  assert.deepEqual(await writeAccountStatementLines((await store.findAccount("acc_co"))!), { added: 0, updated: 0 }, "a re-run adds nothing");
+});
+
+await check("USDC that arrived while no rate could be read is valued later at its day's fixing, once; a converted one is not", async () => {
+  const { valueUnratedReceipts } = await import("../services/api/src/adapters/crypto-deposits.js");
+  const H = (k: number) => `0x${k.toString(16).padStart(64, "0")}`;
+  const at = "2026-10-06T10:00:00.000Z";
+  const row = (id: string, k: number, over: any = {}) => ({
+    id, accountId: "acc_co", chainId: 31337, token: "USDC", txHash: H(k), logIndex: 0, from: addr("f"), arrivedAt: at, amountUnits: "110000000", amountUsdc: 110,
+    settlementAsset: "USDC", holding: "held", creditedUsdc: 110, settledAt: at, txs: [], detectedAt: at, updatedAt: at, ...over,
+  });
+  await store.addCryptoDeposit(row("co-unrated", 911) as any);
+  await store.addCryptoDeposit(row("co-unrated-converted", 912, { holding: "converted", creditedEur: 99, settlementAsset: "EURE" }) as any);
+  await store.addCryptoDeposit(row("co-unrated-no-time", 913, { arrivedAt: undefined }) as any);
+  const before = process.env.TRANSF_RATES_FIXED;
+  process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, KES: 147.53 });
+  try {
+    assert.equal(await valueUnratedReceipts(), 1);
+    assert.equal(await valueUnratedReceipts(), 0, "stamped once");
+  } finally {
+    if (before === undefined) delete process.env.TRANSF_RATES_FIXED; else process.env.TRANSF_RATES_FIXED = before;
+  }
+  const byId = async (id: string) => (await store.list("cryptoDeposits")).find((d) => d.id === id)!;
+  const valued = await byId("co-unrated");
+  assert.equal(valued.receipt?.amountEur, 100);
+  assert.equal(valued.receipt?.rateAsOf, "2026-10-06", "the fixing of the day it arrived");
+  assert.equal((await byId("co-unrated-converted")).receipt, undefined, "its proceeds already are the payment");
+  assert.equal((await byId("co-unrated-no-time")).receipt, undefined, "no block time, no day to value it at");
+  await writeStatementLines();
+  const line = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "deposit:co-unrated:held");
+  assert.equal(line?.statement?.amountCents, 10000, "the books get the receipt they lacked");
+  assert.equal(line?.txType, "transfer_in", "nobody invoiced it");
+});
+
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {
   const id = issue(addr("a"));
   assert.equal(await mirrorOrderById(id), "recorded");
