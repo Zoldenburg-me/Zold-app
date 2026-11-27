@@ -147,12 +147,22 @@ assert.equal(signsSafeDebit({ ...sender, address: "0x000000000000000000000000000
 assert.match(sharedNonceRunProblem(sender, 2, 0.99) ?? "", /€0\.99 fee.*one payee/s, "two payees, a positive fee: refused");
 assert.equal(sharedNonceRunProblem(sender, 1, 0.99), null, "one payee is one operation");
 assert.equal(sharedNonceRunProblem(sender, 200, 0), null, "no fee, no Safe debit: any number of payees");
+assert.equal(sharedNonceRunProblem(sender, 2, 0.004), null, "a fee a quote rounds to nothing is no Safe debit");
+assert.match(sharedNonceRunProblem(sender, 2, 0.005) ?? "", /one payee/);
 assert.equal(sharedNonceRunProblem({ ...sender, passkeySafe: undefined }, 2, 0.99), null, "no passkey Safe, no prepared operation");
 const draftsSource = readFileSync(path.join(ROOT, "services/api/src/routes/business/drafts.ts"), "utf8");
 const exec = draftsSource.slice(draftsSource.indexOf('"/:orgId/drafts/:draftId/execute"'));
 const refusal = exec.indexOf("sharedNonceRunProblem(user, plans.length, railFeeEur(\"sepa\"))");
 assert.ok(refusal > 0, "draft execution asks sharedNonceRunProblem");
 assert.ok(refusal < exec.indexOf("store.claimDraftExecution(") && refusal < exec.indexOf("buildTransferFromQuote("), "refused before the draft is claimed and before any transfer, so before any debit");
+// Saving and submitting ask too, so a run is never approved only to be refused.
+const before = (route: string, write: string) => {
+  const body = draftsSource.slice(draftsSource.indexOf(route));
+  const ask = body.indexOf("await bankRunProblem(");
+  return ask > 0 && ask < body.indexOf(write);
+};
+assert.ok(before('r.post("/:orgId/drafts", ', "store.addDraft("), "a new draft is checked before it is saved");
+assert.ok(before('r.post("/:orgId/drafts/:draftId/submit"', "store.updateDraftFrom("), "a draft is checked before it is submitted for review");
 const buildSource = readFileSync(path.join(ROOT, "services/api/src/transfers/build.ts"), "utf8");
 assert.match(buildSource, /debitWei > 0n && signsSafeDebit\(user\) && !HARNESS\.enabled/, "the builder prepares a Safe debit for exactly the users the run refusal counts");
 
