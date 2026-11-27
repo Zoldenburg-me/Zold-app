@@ -91,4 +91,8 @@ therefore gives every Candide payment page a new deposit address.
    the old address or QR to use the page link instead.
 
 Recovery itself: [forwarding-address.candidelabs.com](https://forwarding-address.candidelabs.com/),
-signed by the custodial withdrawer or the recipient on the source chain.
+signed by the custodial withdrawer or the recipient on the source chain. That
+page offers Withdraw to the recipient only. A withdrawal by the mainnet
+withdrawer Safe after the timelock is a transaction the Safe sends to the
+forwarding contract itself; none has been made, so the call is not yet
+written down here.

@@ -74,8 +74,10 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   a contract guardian, so every mainnet recovery is confirmed from the Safe
   in Safe Cover, outside the console's gate: the operator checks the ID and
   bank steps below by hand before signing. Admin → Recoveries' guardian
-  wallet test and its sign step end in WRONG_SIGNER with this guardian; that
-  is the contract guardian, not a broken wallet. The same Safe is the Candide
+  wallet test and its sign step stop at "Select the guardian account" with
+  this guardian (the browser wallet holds the Safe's owners, not the Safe);
+  that is the contract guardian, not a broken wallet. The console's Safe
+  Cover link opens `SAFE_COVER_URL`, by default `https://recovery.candide.dev`. The same Safe is the Candide
   custodial withdrawer.
   **The API never holds the guardian key**, recomputes the digest from the
   module before accepting a signature, and moves a request only on what the

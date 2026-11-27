@@ -71,9 +71,9 @@ export function assertZoldenburgRecoveryEnabled(): `0x${string}` {
  * Safe Cover (github.com/candidelabs/safecover, run by Bleu). Configurable
  * because it is a static site anyone can host — self-hosting a pinned build is
  * the safer choice for a page that asks the guardian's hardware wallet to
- * sign; the default is the deployment its repository names.
+ * sign; the default is Candide's hosted deployment.
  */
-export const SAFE_COVER_URL = (process.env.SAFE_COVER_URL ?? "https://candide-account-recovey.vercel.app").replace(/\/+$/, "");
+export const SAFE_COVER_URL = (process.env.SAFE_COVER_URL ?? "https://recovery.candide.dev").replace(/\/+$/, "");
 /** Chains Safe Cover's wallet config lists (src/providers/Web3Provider.tsx). */
 const SAFE_COVER_CHAINS = new Set([1, 10, 42161, 43114, 8453, 137, 11155111]);
 
