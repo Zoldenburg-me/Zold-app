@@ -76,7 +76,7 @@ const convertingDeposits = new Set<string>();
 async function parkDeposit(id: string, patch: Partial<CryptoDeposit>, step?: CryptoDeposit["txs"][number]): Promise<void> {
   return store.tx(async () => {
     const seen = (await store.list("cryptoDeposits")).find((d) => d.id === id);
-    if (!seen) return;
+    if (!seen?.userId) return;
     // The owner's row is the lock every writer of a deposit's money takes.
     await store.lockUser(seen.userId);
     await store.patchCryptoDeposit(id, (d) => (d.holding === "converted" ? null : { ...patch, ...(step ? { txs: [...d.txs, step] } : {}) }));
@@ -168,7 +168,7 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
       const out = await store.tx(async (t) => {
         // The owner's row is the lock every writer of a deposit's money takes:
         // its arrival, its attribution to a request and this link.
-        await t.lockUser(deposit.userId);
+        await t.lockUser(user.id);
         // A deposit pays one invoice once. After its payment is on an invoice,
         // moving or dropping the link would leave that payment where it is and
         // let the same money settle a second invoice.
