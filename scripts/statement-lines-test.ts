@@ -79,6 +79,20 @@ await check("a processed issue order is one SEPA-in line with the bank facts and
   assert.equal(lines[0].id, lineId("org_1", "monerium:issue:ord-1"));
 });
 
+await check("two equal credits on one day cite two mints, the nearest each, never the same one", () => {
+  const inp = base();
+  const order = (id: string, at: string) => ({ orderId: id, userId: "u_1", amountEur: 100, processedAt: at, recordedAt: at });
+  const mint = (id: string, n: number, at: string) => ({ id, userId: "u_1", chainId: 31337, token: "EURE", txHash: H(n), logIndex: 0, amountUnits: "100000000000000000000",
+    from: `0x${"00".repeat(20)}` as any, amountEur: 100, creditedEur: 100, holding: "none", settledAt: at, settlementAsset: "EURE", txs: [], arrivedAt: at, detectedAt: at, updatedAt: at });
+  inp.issueOrders = [order("ord-b", "2026-09-07T15:00:00.000Z"), order("ord-a", "2026-09-07T09:00:00.000Z")];
+  inp.deposits = [mint("m-1", 41, "2026-09-07T09:00:10.000Z"), mint("m-2", 42, "2026-09-07T15:00:10.000Z")] as any;
+  const byOrder = Object.fromEntries(projectStatementLines(inp).map((l) => [l.statement!.links.orderId, l.statement!.links.depositId]));
+  assert.deepEqual(byOrder, { "ord-a": "m-1", "ord-b": "m-2" });
+  inp.deposits = [mint("m-1", 41, "2026-09-07T09:00:10.000Z")] as any;
+  const one = projectStatementLines(inp).map((l) => l.statement!.links.depositId);
+  assert.deepEqual(one.filter(Boolean), ["m-1"], "one mint is one order's; the other credit cites none");
+});
+
 await check("a PAID SEPA payout is a debit line plus a fee line when a fee was taken", () => {
   const inp = base();
   inp.transfers = [{ id: "t-1", userId: "u_1", quoteId: "q", rail: "sepa", state: "PAID", sendEur: 50.99, receiveEur: 50, recipientName: "Vermieter GmbH", recipientIban: "DE02120300000000202051", reference: "Miete September", txs: [{ step: "safe.redeem", hash: H(2) }], sepa: { mode: "sandbox", orderId: "ord-r", state: "processed" }, createdAt: "2026-09-05T08:00:00.000Z", updatedAt: "2026-09-05T10:00:00.000Z" } as any];
@@ -269,6 +283,18 @@ await check("a deposit already booked as one :converted line gets no receipt or 
   assert.deepEqual(partLegacy.map((l) => l.statement!.key), ["deposit:d-1:converted:p1"]);
   const valuedLater = projectStatementLines({ ...inp, deposits: [usdcDeposit({ holding: "held", creditedEur: undefined, conversion: undefined, partials: [p1], txs: [] }) as any] });
   assert.equal(mergeStatementLines(partLegacy, valuedLater).toAdd.length, 0, "no receipt beside a part already booked as the payment");
+});
+
+await check("a receipt tied to an invoice after it was written is refreshed to the invoice's payment", () => {
+  const inp = base();
+  const before = projectStatementLines({ ...inp, deposits: [usdcDeposit({ paymentRequestId: undefined }) as any] });
+  inp.invoices = [{ id: "inv_1", orgId: "org_1", issued: { number: "RE-1" } } as any];
+  const after = projectStatementLines({ ...inp, deposits: [usdcDeposit({ paymentRequestId: undefined, invoiceId: "inv_1" }) as any] });
+  const { toAdd, toUpdate } = mergeStatementLines(before, after);
+  assert.equal(toAdd.length, 0);
+  const held = toUpdate.find((u) => u.id === before.find((l) => l.statement!.key === "deposit:d-1:held")!.id)!;
+  assert.equal(held.patch.txType, "invoice_payment");
+  assert.ok(!toUpdate.some((u) => u.patch.txType && u.id !== held.id), "the disposal keeps its type");
 });
 
 await check("USDC nobody invoiced or asked for is money in, as the same EURe would be; a pay link's or an invoice's is the payment", () => {

@@ -142,6 +142,12 @@ Say this plainly rather than letting the surface imply otherwise:
   closed). An issued IBAN is re-read only when someone presses **Check
   again**: there is no poller. Deposits are listed live from Monerium and
   booked nowhere.
+- **No crypto has been booked from a company's own Safe.** The scanner
+  watches a company Safe that is the account's alone and books EURe and USDC
+  sent to it (`monerium-money-in:test` only; USDC stays held, nothing converts
+  it). It reads forward from its cursor, so money that reached a company Safe
+  before it was watched is not recorded until an operator sets
+  `CRYPTO_IN_RESCAN_FROM_BLOCK` (at most `CRYPTO_IN_MAX_RESCAN_BLOCKS` back).
 - **A bank payout from a company's own IBAN has never been sent.** It is off
   unless `MONERIUM_ORG_PAYOUTS=on`. With it on, Settings → Monerium lets an
   owner whose passkey owns the company Safe (threshold 1 only) sign Monerium's

@@ -291,6 +291,17 @@ async function writeProjected(inp: StatementInputs, since: string | undefined, r
       await store.addLedgerEntries(entries);
       rows.added(inp.orgId, entries);
     }
+    if (toUpdate.some((u) => u.patch.txType)) {
+      // A changed type is re-coded by the rules, as on insert; a code a human set stays (applyRules).
+      const rules = await rows.rulesOf(inp.orgId);
+      const byId = new Map((await store.ledgerOf(inp.orgId)).map((e) => [e.id, e]));
+      toUpdate = toUpdate.map((u) => {
+        const cur = byId.get(u.id);
+        if (!u.patch.txType || !cur) return u;
+        const [e] = applyRules(rules, [{ ...cur, ...u.patch }]).entries;
+        return e.accountCode === cur.accountCode ? u : { ...u, patch: { ...u.patch, accountCode: e.accountCode, accountCodeAuto: true } };
+      });
+    }
     for (const u of toUpdate) await store.updateLedgerEntry(u.id, u.patch);
     return { added: toAdd.length, updated: toUpdate.length };
   });
