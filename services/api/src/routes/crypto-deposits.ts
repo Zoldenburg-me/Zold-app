@@ -21,7 +21,7 @@ import {
   clearSettledIntent,
   depositConversionBlocker,
   heldUsdcBlocker,
-  recordInvoiceSettlement,
+  linkDepositInvoice,
   settleConvertedDeposit,
   settlementTarget,
   unconvertedUnits,
@@ -44,7 +44,6 @@ import {
 } from "../wallet/candide.js";
 import { publicClient } from "../chain.js";
 import { b64urlToBuf, verifyAssertionForChallenge } from "../webauthn.js";
-import { ownerInvoiceView, settlementRef } from "../domain/invoices.js";
 import { roleCan } from "../domain/roles.js";
 import { describeCause, redactedMessage } from "../http/log-cause.js";
 
@@ -162,41 +161,9 @@ export function createCryptoDepositRouter(deps: CryptoDepositDeps) {
         }
       }
 
-      // The settled check, the link and the settlement are one transaction on
-      // rows read inside it: two links of one deposit, or a link and its
-      // arrival, otherwise both pass the check and settle two invoices.
-      const out = await store.tx(async (t) => {
-        // The owner's row is the lock every writer of a deposit's money takes:
-        // its arrival, its attribution to a request and this link.
-        await t.lockUser(user.id);
-        // A deposit pays one invoice once. After its payment is on an invoice,
-        // moving or dropping the link would leave that payment where it is and
-        // let the same money settle a second invoice.
-        const ref = `deposit:${deposit.id}`;
-        const settled = (await t.list("invoices")).find((i) => (i.settlements ?? []).some((s) => settlementRef(s) === ref));
-        if (settled && invoiceId !== settled.id) {
-          return { status: 409, body: { error: "This payment is already recorded on an invoice. Reconcile that invoice instead of moving the payment." } };
-        }
-        if (invoiceId === null) {
-          const unlinked = await t.updateCryptoDeposit(deposit.id, { invoiceId: undefined });
-          return { status: 200, body: { deposit: unlinked } };
-        }
-        const current = (await t.findInvoice(invoice!.id))!;
-        // Money that arrived settles an invoice the org issued, never a bill it owes.
-        if (current.direction !== "outgoing") return { status: 409, body: { error: "Only an invoice your organisation issued can be paid by a deposit." } };
-        // A draft made from receipts is settled by its own ledger rows; a
-        // deposit tied to it would be a second payment once it is issued.
-        if (current.state === "DRAFT") return { status: 409, body: { error: "That invoice is a draft and has not been issued." } };
-
-        const linked = await t.updateCryptoDeposit(deposit.id, { invoiceId: current.id });
-        // Already settled (it arrived before the link existed)? Then it belongs on
-        // the invoice now; the settlement will not be written again on arrival.
-        if (linked.settledAt) await recordInvoiceSettlement(linked);
-        return {
-          status: 200,
-          body: { deposit: linked, invoice: ownerInvoiceView((await t.findInvoice(current.id))!) },
-        };
-      });
+      // The owner's row is the lock every writer of a deposit's money takes:
+      // its arrival, its attribution to a request and this link.
+      const out = await linkDepositInvoice(deposit.id, invoiceId === null ? null : invoice!.id, () => store.lockUser(user.id));
       res.status(out.status).json(out.body);
     }),
   );

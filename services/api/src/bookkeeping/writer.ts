@@ -244,7 +244,10 @@ export async function writeAccountStatementLines(account: Account, rows: Rows = 
       companyPayouts: account.moneriumPayouts ?? [],
       swapsHaveExecuted: await rows.swapsHaveExecuted(),
     };
-    return await writeProjected(inp, undefined, rows);
+    // From when the Safe is the company's: set when it was deployed, else its
+    // plan's date (the same start, for an account set up before it was kept).
+    const since = account.backedSince ?? (await store.findOrganisation(account.orgId))?.safe?.createdAt;
+    return await writeProjected(inp, since, rows);
   });
 }
 
