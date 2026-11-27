@@ -752,6 +752,13 @@ async function recordBankSettlement(
   // Already booked: the poll re-sees it every pass and must not rewrite the
   // db. Checked on the stored row, in the same write.
   await store.settleInvoice(invoiceId, settlementRef(s), (row) => settlementUpdate(row, s));
+  // Paid now, whichever way the credits came (its number or a link): a link
+  // still open for it stops asking for money it no longer owes.
+  const paid = await store.findInvoice(invoiceId);
+  if (paid?.state !== "PAID" && paid?.state !== "RECONCILED") return;
+  for (const r of (await store.list("paymentRequests"))) {
+    if (r.invoiceId === invoiceId && r.state === "OPEN") await store.updatePaymentRequestFrom(r.id, ["OPEN"], { state: "PAID", paidAt: paid.payment?.paidAt ?? s.at });
+  }
 }
 
 /**
@@ -788,6 +795,9 @@ export async function attributeMoneriumOrderToInvoice(order: MoneriumOrderLike):
     // a pay link), a re-seen order settles no other, whatever state that one is in.
     const ref = `monerium:${order.id}`;
     if (invoices.some((invoice) => (invoice.settlements ?? []).some((s) => settlementRef(s) === ref))) return;
+    // Nor once it paid a pay link: a link without an invoice leaves no
+    // settlement, and the invoice number beside its code is context.
+    if (order.id && (await store.list("paymentRequests")).some((r) => r.payments.some((p) => p.orderId === order.id))) return;
     // Ambiguity is judged over every issued number, settled ones too: "INV-1"
     // and "INV/1" read alike, and a paid one must not hand its credit on.
     const named = invoices.filter(

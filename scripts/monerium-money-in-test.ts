@@ -541,13 +541,13 @@ await check("a company credit the scanner saw as a mint and the poller as an iss
   coOrders.set(id, orders.get(id));
   orders.delete(id);
   const mint = await store.addCryptoDeposit({
-    id: "co-mint", accountId: "acc_co", chainId: 31337, token: "EURE", txHash: `0x${"9a".repeat(32)}`, logIndex: 0,
+    id: "co-mint-poll", accountId: "acc_co", chainId: 31337, token: "EURE", txHash: `0x${"9b".repeat(32)}`, logIndex: 0,
     from: `0x${"0".repeat(40)}`, amountUnits: "33000000000000000000", amountEur: 33, creditedEur: 33, settlementAsset: "EURE",
     paymentAddress: COMPANY_SAFE, holding: "awaiting_approval", txs: [], arrivedAt: now, detectedAt: now, updatedAt: now,
   } as any);
   await settleOnArrival(mint);
   await pollDepositsOnce();
-  const lines = (await store.ledgerOf("org_co")).filter((e) => e.statement?.links.orderId === id || e.statement?.links.depositId === "co-mint");
+  const lines = (await store.ledgerOf("org_co")).filter((e) => e.statement?.links.orderId === id || e.statement?.links.depositId === "co-mint-poll");
   assert.deepEqual(lines.map((e) => e.statement!.event), ["sepa_in"], JSON.stringify(lines.map((e) => e.statement)));
   assert.equal(lines[0].statement!.amountCents, 3300);
 });
@@ -631,6 +631,65 @@ await check("a company pay link's code in a credit to the company Safe pays the 
   assert.deepEqual((paid.settlements ?? []).map((s: any) => s.matchedOn), ["payment-link"]);
   assert.equal(((await store.findInvoice("inv_co_other"))!.settlements ?? []).length, 0, "one bank order pays one invoice");
   assert.equal((await store.findInvoice("inv_co_other"))!.state, "SUBMITTED");
+});
+
+await check("a credit that pays a standalone company link pays no invoice its memo also names", async () => {
+  await store.addInvoice({
+    ...(await store.findInvoice("inv_co_other"))!, id: "inv_co_ctx", linkTokenHash: "4".repeat(32), state: "SUBMITTED", settlements: [], payment: undefined,
+    issued: { ...(await store.findInvoice("inv_co_other"))!.issued!, number: "CO-2026-0300" },
+  } as any);
+  const code = "C0MPANYC0DE0002";
+  await store.addPaymentRequest({
+    id: "pr_co_alone", code, userId: "u_owner", orgId: "org_co", accountId: "acc_co", handle: "org-co", amountEur: 20, currency: "EUR",
+    methods: ["bank"], state: "OPEN", cryptoQuotes: [], payments: [], source: { kind: "app" },
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now,
+  } as any);
+  const id = issue(COMPANY_SAFE, "20.00");
+  coOrders.set(id, { ...orders.get(id), memo: `${code} for CO-2026-0300` });
+  orders.delete(id);
+  await pollDepositsOnce();
+  await pollDepositsOnce();
+  assert.equal((await store.findPaymentRequest("pr_co_alone"))!.state, "PAID");
+  const ctx = (await store.findInvoice("inv_co_ctx"))!;
+  assert.equal(ctx.state, "SUBMITTED");
+  assert.equal((ctx.settlements ?? []).length, 0, "one transfer pays one request");
+});
+
+await check("a link raised for an invoice closes once bank credits pay the invoice, in either instalment order", async () => {
+  const base = (await store.findInvoice("inv_co_other"))!;
+  const mk = async (id: string, number: string, hash: string, code: string) => {
+    await store.addInvoice({
+      ...base, id, linkTokenHash: hash, state: "SUBMITTED", settlements: [], payment: undefined, total: "100.00",
+      lines: [{ description: "Work", quantity: "1", unitPrice: "100.00", amount: "100.00" }],
+      issued: { ...base.issued!, number, netCents: 10000, grossCents: 10000, buckets: [{ rate: 0, netCents: 10000, vatCents: 0 }] },
+    } as any);
+    await store.addPaymentRequest({
+      id: `pr_${id}`, code, userId: "u_owner", orgId: "org_co", accountId: "acc_co", handle: "org-co", amountEur: 100, currency: "EUR",
+      methods: ["bank"], state: "OPEN", invoiceId: id, cryptoQuotes: [], payments: [], source: { kind: "app" },
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: now, updatedAt: now,
+    } as any);
+  };
+  const credit = (amount: string, memo: string) => {
+    const id = issue(COMPANY_SAFE, amount);
+    coOrders.set(id, { ...orders.get(id), memo });
+    orders.delete(id);
+  };
+  await mk("inv_inst_num", "CO-2026-0500", "5".repeat(32), "C0MPANYC0DE0005");
+  await mk("inv_inst_link", "CO-2026-0600", "6".repeat(32), "C0MPANYC0DE0006");
+  credit("60.00", "CO-2026-0500"); // first by number
+  credit("60.00", "C0MPANYC0DE0006"); // first by link
+  await pollDepositsOnce();
+  assert.equal((await store.findPaymentRequest("pr_inv_inst_num"))!.state, "OPEN");
+  assert.equal((await store.findPaymentRequest("pr_inv_inst_link"))!.state, "OPEN");
+  credit("40.00", "C0MPANYC0DE0005"); // the rest by link
+  credit("40.00", "CO-2026-0600"); // the rest by number
+  await pollDepositsOnce();
+  for (const id of ["inv_inst_num", "inv_inst_link"]) {
+    const inv = (await store.findInvoice(id))!;
+    assert.equal(inv.state, "PAID", id);
+    assert.equal((inv.settlements ?? []).length, 2, `${id}: each transfer once`);
+    assert.equal((await store.findPaymentRequest(`pr_${id}`))!.state, "PAID", `${id}: the link no longer collects`);
+  }
 });
 
 await check("the reconciler runs on company keys alone, and does not report a company credit on another chain or currency", async () => {
