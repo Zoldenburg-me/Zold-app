@@ -563,7 +563,7 @@ document.addEventListener("click", (e) => {
 export function jurisdictionBanner(j, disclaimer, notVerified) {
   const what = {
     statutory: "rules encoded to statute",
-    directive: "national tax rules aren’t checked. Zold checks only that your details and a unique invoice number are on the invoice.",
+    directive: "Zold checks the content the EU VAT Directive requires; national tax rules aren’t checked.",
     structural: "tax rules aren’t checked. Zold checks only that your details and a unique invoice number are on the invoice.",
   }[j.verification];
   return `<details class="card zb-juris"><summary class="zb-summary">

@@ -429,6 +429,14 @@ await check("the holder shown is the name Monerium has for the profile", async (
     assert.equal(p.body.bank.holder, "Lindner Holzbau GmbH & Co. KG");
   } finally { await store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH", checkedAt: now } } as any); }
 });
+await check("an invoice prints the holder Monerium has for the account, as the pay page does", async () => {
+  const { invoiceBankOf } = await import("../services/api/src/routes/business/shared.js");
+  await store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH & Co. KG", checkedAt: now } } as any);
+  try {
+    const bank = await invoiceBankOf((await store.findOrganisation("org_co"))!);
+    assert.equal(bank?.holder, "Lindner Holzbau GmbH & Co. KG");
+  } finally { await store.updateAccount("acc_co", { moneriumProfile: { id: "prof_co", kind: "corporate", name: "Lindner Holzbau GmbH", checkedAt: now } } as any); }
+});
 await check("a claimed page closes, without bank details, when the profile turns out personal", async () => {
   await store.updateAccount("acc_co", { moneriumProfile: { id: "prof_sara", kind: "personal", name: "Sara Lindner", checkedAt: now } } as any);
   try {

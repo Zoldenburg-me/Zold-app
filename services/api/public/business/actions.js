@@ -895,12 +895,15 @@ export const ACTIONS = {
         throw e;
       }
     };
-    // Outside Germany no invoicing rules are encoded: issuing is the issuer's
+    // Outside Germany no national rules are encoded: issuing is the issuer's
     // own verification, said to their face once before the invoice goes out.
     const jur = invoiceDraft._jur;
     if (jur && jur.ruleSet !== "DE") {
-      dialog(`${jur.countryName}: invoicing rules not supported`,
-        `<p class="desc">Zold checked only that this invoice names you, your address and a unique number — nothing in it is verified against ${esc(jur.countryName)}’s invoicing or tax law.</p>
+      const checked = jur.ruleSet === "EU"
+        ? `Zold checked the content the EU VAT Directive requires — both parties’ names and addresses, the dates, a unique number and, for reverse charge, both VAT IDs — but nothing against ${esc(jur.countryName)}’s own invoicing or tax law.`
+        : `Zold checked only that this invoice names you, your address and a unique number — nothing in it is verified against ${esc(jur.countryName)}’s invoicing or tax law.`;
+      dialog(`${jur.countryName}: ${jur.ruleSet === "EU" ? "national " : ""}invoicing rules not supported`,
+        `<p class="desc">${checked}</p>
          <p class="desc" style="margin-top:10px">It goes out exactly as you wrote it: the number, both parties’ details, the amounts and the tax line are yours to verify — with your accountant where you have one.</p>`,
         () => tryIssue(false), { okLabel: "I verified it — issue" });
       return "keep";

@@ -38,6 +38,7 @@ import {
 } from "../../domain/invoicing.js";
 import { dayOf } from "../../domain/income-invoices.js";
 import { vatIdShape } from "../../domain/vat-ids.js";
+import { orgEntity } from "../../domain/org-entity.js";
 import { createQuote } from "../../fx.js";
 import { midRates, referenceRate } from "../../rates.js";
 import { redactedMessage } from "../../http/log-cause.js";
@@ -86,15 +87,21 @@ type InvoiceBank = NonNullable<NonNullable<Organisation["invoicing"]>["bank"]>;
 export async function accountBankOf(org: Organisation): Promise<InvoiceBank | undefined> {
   const acc = (await store.accountsOf(org.id)).find((a) => a.currency === "EUR" && a.status === "active" && a.identifier?.iban);
   if (!acc?.identifier?.iban) return undefined;
-  return { holder: org.legalName?.trim() || org.name, iban: normaliseIban(acc.identifier.iban) };
+  // Monerium's name for the profile is the holder a payer's bank matches the
+  // IBAN against (Verification of Payee); the org's names are the fallback.
+  return { holder: acc.moneriumProfile?.name?.trim() || org.legalName?.trim() || org.name, iban: normaliseIban(acc.identifier.iban) };
 }
 
 /** The bank details an invoice prints: the profile's when it names an IBAN,
  *  else the org account's own. */
 export async function invoiceBankOf(org: Organisation): Promise<InvoiceBank | undefined> {
   const set = org.invoicing?.bank;
-  if (set?.iban) return { ...set, holder: set.holder || org.legalName?.trim() || org.name };
-  return await accountBankOf(org);
+  const account = await accountBankOf(org);
+  if (set?.iban) {
+    const own = account && normaliseIban(set.iban) === account.iban ? account.holder : undefined;
+    return { ...set, holder: set.holder || own || org.legalName?.trim() || org.name };
+  }
+  return account;
 }
 
 export async function issuerSuggestions(org: Organisation, callerId: string): Promise<{ name?: string; source?: "monerium" }> {
@@ -187,8 +194,11 @@ export function issuerIdentityFrom(
   return { ok: true, patch };
 }
 
+/** The org's own rules. One that reuses a built-in id is dropped: the
+ *  built-in's note and its VAT ID checks win, so the two never disagree.
+ *  Saving such a rule is refused (invoicing.ts). */
 export const customReasonsOf = (org: Organisation): CustomExemptionReason[] =>
-  (org.invoicing?.customReasons ?? []) as CustomExemptionReason[];
+  ((org.invoicing?.customReasons ?? []) as CustomExemptionReason[]).filter((c) => !(c.id in EXEMPTION_REASONS));
 
 /** Due date from the org's payment terms, so the field is not retyped either. */
 export function draftDueDate(org: Organisation, issueDate: string): string | undefined {
@@ -321,6 +331,7 @@ export async function draftFrom(org: Organisation, body: Record<string, any>, no
     treatment,
     selfBilled: body.selfBilled === true,
     currency,
+    ...(orgEntity(org) === "sole_trader" && !org.legalName?.trim() ? { issuerNameIsTradingName: true } : {}),
   };
 }
 
