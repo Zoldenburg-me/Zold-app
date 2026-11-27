@@ -47,7 +47,7 @@ const COST_BASIS_NOTES = [
   "First in, first out, per token contract on its chain, pooled across the organisation's imported wallets.",
   "A swap is booked as a sale of what left and a purchase of what arrived, each at its own EUR value; they are not paired.",
   "A gain is shown only where the sale, and every lot it used, has a EUR value and nothing was sold beyond the booked lots.",
-  "Whether a disposal is taxable, the holding period and the cost-basis method are for your tax adviser (Steuerberater) to decide; Zold computes, it does not classify.",
+  "Whether a disposal is taxable, the holding period and the cost-basis method are for your tax adviser to decide; Zold computes, it does not classify.",
 ];
 
 /** The cost basis over the organisation's whole ledger. */
@@ -402,7 +402,17 @@ export function createBookkeepingRoutes(deps: OrgRoutes): express.Router {
     if (!ctx) return;
     if (!requireCapability(ctx, res, "export.ledger")) return;
     if (!requirePermission(ctx, res, "ledger.read")) return;
-    const rows = ledgerExportRows(await store.ledgerOf(ctx.org.id));
+    // Each paid invoice's euro gross and VAT (the issued figures, or their
+    // euro restatement for a foreign-currency invoice), and what each payment
+    // put against it.
+    const invoices = new Map(
+      (await store.invoicesOf(ctx.org.id)).flatMap((i) => {
+        const euro = i.issued?.conversion ?? i.issued;
+        const settledCents = Object.fromEntries((i.settlements ?? []).map((x) => [x.ref, Math.round(x.amountEur * 100)]));
+        return euro ? [[i.id, { grossCents: euro.grossCents, vatCents: euro.vatCents, settledCents }] as const] : [];
+      }),
+    );
+    const rows = ledgerExportRows(await store.ledgerOf(ctx.org.id), invoices);
     res
       .type("text/csv")
       .attachment("transactions.csv")

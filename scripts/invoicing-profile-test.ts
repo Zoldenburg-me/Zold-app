@@ -203,6 +203,14 @@ await check("an EU VAT ID must be the issuer's own country's", async () => {
   assert.equal(prof.status, 400, "the invoicing profile checks the same");
 });
 
+await check("a custom rule may not reuse a built-in reason's id", async () => {
+  const r = await call("PATCH", "/api/orgs/org_prefix/invoicing/profile", "u_owner", {
+    customReasons: [{ id: "reverse_charge_eu", label: "Mine", invoiceNote: "No VAT here" }],
+  });
+  assert.equal(r.status, 400, JSON.stringify(r.data));
+  assert.equal(r.data.field, "customReasons");
+});
+
 await addOrg("org_move", "DE", { invoicing: { vatId: "DE123456789" } });
 await check("moving country re-checks a stored VAT ID the save does not replace", async () => {
   const r = await call("PATCH", "/api/orgs/org_move", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" } });
@@ -466,6 +474,28 @@ await check("reverse charge with a note in place of the USt-IdNr.: shown before 
   assert.equal(issued.status, 201, JSON.stringify(issued.data));
   assert.equal(issued.data.invoice.issued.issuer.vatId, "USt-IdNr. beantragt");
   assert.equal(issued.data.invoice.issued.display.issuerVatId, true, "a reason that needs the issuer's VAT ID prints it");
+});
+
+await check("the identifiers an invoice must print are switched on in its frozen display, so a reprint matches", async () => {
+  await addOrg("org_ids", "DE", { invoicing: { vatId: "DE123456789", display: { issuerVatId: false, issuerTaxNumber: false, recipientVatId: false } } });
+  const taxed = await call("POST", "/api/orgs/org_ids/invoicing/issue", "u_owner", { ...invoiceFor("DE"), vat: { kind: "standard", rate: 19 } });
+  assert.equal(taxed.status, 201, JSON.stringify(taxed.data));
+  assert.equal(taxed.data.invoice.issued.display.issuerVatId, true, "the issuer's only identifier prints though switched off");
+  const rc = await call("POST", "/api/orgs/org_ids/invoicing/issue", "u_owner", {
+    ...invoiceFor("SE"),
+    recipient: { name: "Kund AB", addressLine: "Gatan 1", postalCode: "11122", city: "Stockholm", country: "SE", isBusiness: true, vatId: "SE556677889901" },
+    vat: { kind: "exempt", reason: "reverse_charge_eu" },
+    acceptWarnings: true,
+  });
+  assert.equal(rc.status, 201, JSON.stringify(rc.data));
+  assert.equal(rc.data.invoice.issued.display.recipientVatId, true, "reverse charge prints the customer's VAT ID");
+});
+
+await check("an EU issuer's taxed invoice prints its VAT ID though the block is off and a tax number shows", async () => {
+  await addOrg("org_fr_ids", "FR", { invoicing: { vatId: "FR40303265045", taxNumber: "1234567890123", display: { issuerVatId: false } } });
+  const r = await call("POST", "/api/orgs/org_fr_ids/invoicing/issue", "u_owner", { ...invoiceFor("FR"), vat: { kind: "standard", rate: 20 } });
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.invoice.issued.display.issuerVatId, true);
 });
 
 console.log("\nNumbering: one number, once, picked at write time");

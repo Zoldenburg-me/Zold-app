@@ -4,6 +4,8 @@
  *
  * A payment link pays into the Safe of the member whose account backs the
  * euro account, whoever makes it: an owner, admin or payer (invoices.manage).
+ * A company on its own Safe has no such member: its links pay into its own
+ * account by bank transfer, under its company page.
  * Where the API would refuse (no account, no page, no way to get paid), the
  * button is switched off with the reason beside it, not a button that fails.
  */

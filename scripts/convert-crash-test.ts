@@ -95,7 +95,7 @@ async function child(which: string, name: string) {
 
   if (which === "restart") {
     const d = (await store.list("cryptoDeposits")).find((x) => x.id === "d-crash")!;
-    const blocker = depositConversionBlocker((await store.findUser(d.userId))!, d);
+    const blocker = depositConversionBlocker((await store.findUser(d.userId!))!, d);
     console.log(`RESULT ${JSON.stringify({ blocker, holding: d.holding })}`);
     process.exit(0);
   }

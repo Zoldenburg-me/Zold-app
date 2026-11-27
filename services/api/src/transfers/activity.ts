@@ -17,7 +17,7 @@
  */
 import type { CryptoDeposit, CryptoSend, MoneriumIssueRecord, Transfer } from "../store/types.js";
 import { userTransfer, type UserTransfer } from "./user-transfer.js";
-import { conversionOutputs } from "./conversion-outputs.js";
+import { conversionOutputs, depositOwner } from "./conversion-outputs.js";
 
 const ZERO_ADDRESS = /^0x0{40}$/i;
 const DAY_MS = 24 * 3600_000;
@@ -94,7 +94,7 @@ const bankRowFromMint = (d: CryptoDeposit): ActivityRow => ({
  *  a failed transfer's reverse-swap refund included. */
 export function withoutConversionOutputs(deposits: CryptoDeposit[], transfers: Transfer[]): CryptoDeposit[] {
   const isConversionOutput = conversionOutputs(deposits, transfers);
-  return deposits.filter((d) => !(d.token === "EURE" && isConversionOutput(d.txHash, d.logIndex, d.userId)));
+  return deposits.filter((d) => !(d.token === "EURE" && isConversionOutput(d.txHash, d.logIndex, depositOwner(d))));
 }
 
 /**
