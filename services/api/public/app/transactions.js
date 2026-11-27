@@ -5,10 +5,11 @@
 /* ---------- Share receipt ----------
    The composer picks what a public receipt exposes. The server builds the
    payload and never sends a withheld value, so these controls set what the
-   server publishes. A change to a live link is saved immediately, so closing
-   the screen after narrowing a selection narrows the real link. Until the
-   saved choices have loaded, nothing on the screen can be changed or
-   published: the defaults painted first are not what the sender chose. */
+   server publishes. A link once sent never changes: changing a choice while
+   a link is live offers "Make new link", which publishes the new choices
+   under a new link and turns the old one off. Until the saved choices have
+   loaded, nothing on the screen can be changed or published: the defaults
+   painted first are not what the sender chose. */
 const SHARE_GROUPS = [
   { key: "sender", label: "Your name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
   { key: "recipient", label: "Recipient name", options: [["full", "Full"], ["first", "First"], ["last", "Last"], ["hidden", "None"]] },
@@ -29,19 +30,16 @@ const SHARE_DEFAULTS = { sender: "last", recipient: "full", account: "short", fx
 /* One object per opened composer: a request answers only the object it was
    started for, so a reply that lands after another receipt opened is dropped
    rather than written into that receipt's screen. `published` is what the
-   live link carries, as the server last said; an edit Zold refuses goes back
-   to it, and one whose outcome is unknown re-reads it. `revokes` counts the
-   times this link was turned off: a save or a read that started before one
-   answers a link that no longer exists, and is dropped. A save in flight with
-   no link on screen (Create link, or an edit that outlived Turn this link
-   off) locks the choices and Create link until it answers: the create's
-   answer would undo a change tapped meanwhile, and an old edit reaching the
-   server after a new create would write its older choices onto the new
-   link. */
-let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false, revokes: 0 };
+   live link carries, as the server last said. `revokes` counts the times
+   this link was turned off: a read that started before one answers a link
+   that no longer exists, and is dropped. While a link is being made the
+   choices, the button and Turn this link off are locked: the answer would
+   undo a change tapped meanwhile, and a turn-off could land before the new
+   link exists. */
+let mShare = { transferId: null, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, loaded: false, revokes: 0 };
 
 function openShare(id) {
-  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, again: false, loaded: false, revokes: 0 };
+  mShare = { transferId: id, fields: { ...SHARE_DEFAULTS }, published: null, link: null, expiresAt: null, expired: false, busy: false, loaded: false, revokes: 0 };
   mobileNav("share");
 }
 
@@ -139,22 +137,26 @@ function paintShareControls() {
     </button></li>`).join("")}</ul>`;
 
   paintSharePreview();
+  const changed = shareChanged();
   $("m-share-revoke").classList.toggle("hidden", !mShare.link);
+  $("m-share-revoke").disabled = mShare.busy;
   // The link to send is drawn as the screen's result, with its own copy and
   // share buttons, so the address bar is not mistaken for it. Until what the
   // link carries is confirmed it is not drawn at all: the preview beside it
   // may not be what the recipient would see.
-  const sendable = mShare.loaded && mShare.link;
+  const sendable = mShare.loaded && !changed && mShare.link;
   $("m-share-out").classList.toggle("hidden", !sendable);
   $("m-share-url").textContent = sendable || "";
   $("m-share-copy").textContent = shareCopyLabel();
   $("m-share-copy").disabled = shareLocked();
   // Share appears only with a link, so its tap opens the sheet at once: a
   // request first would spend the tap's activation and the sheet would refuse.
-  $("m-share-native").classList.toggle("hidden", !mShare.link || !mShare.loaded || typeof navigator.share !== "function");
+  $("m-share-native").classList.toggle("hidden", !sendable || typeof navigator.share !== "function");
   const foot = $("m-share-foot");
   if (mShare.link && !mShare.loaded) {
     foot.textContent = "The link is on, but what it shows is not confirmed";
+  } else if (changed) {
+    foot.textContent = "The live link still shows your earlier choices. Make new link to share these: the current link then stops working.";
   } else if (mShare.link) {
     const days = Math.max(0, Math.ceil((Date.parse(mShare.expiresAt) - Date.now()) / 86400000));
     foot.textContent = `Live · expires in ${days} day${days === 1 ? "" : "s"}`;
@@ -217,102 +219,84 @@ function paintSharePreview() {
   }).join("");
 }
 
-/* What the link shows is unconfirmed, or a save with no link on screen is in flight. */
+/* What the link shows is unconfirmed, or a link is being made. */
 function shareLocked() {
-  return !mShare.loaded || (mShare.busy && !mShare.link);
+  return !mShare.loaded || mShare.busy;
 }
 
-async function setShare(key, value) {
+const sameShareFields = (a, b) => !!a && !!b && Object.keys(SHARE_DEFAULTS).every((k) => a[k] === b[k]);
+/* A live link whose choices differ from the screen: sending it would send
+   what the preview no longer shows. */
+const shareChanged = () => !!mShare.link && !sameShareFields(mShare.fields, mShare.published);
+
+/* A choice changes the screen only. Nothing is sent: a link that exists
+   keeps what it shows, and only the button publishes. */
+function setShare(key, value) {
   if (shareLocked()) return;
   mShare.fields = { ...mShare.fields, [key]: value };
   paintShare();
-  // Only a link that already exists needs pushing: narrowing an unpublished
-  // selection has nothing to narrow yet, and creating one here would publish a
-  // receipt the sender never asked to share.
-  // It goes as an edit: if the link ran out on the way, the server refuses
-  // rather than publishing a new one the sender did not ask for.
-  if (!mShare.link) return;
-  // A change made while a save is in flight is saved when that one lands, so
-  // the tap is neither lost nor visibly undone by the earlier answer.
-  if (mShare.busy) { mShare.again = true; return; }
-  await saveShare({ silent: true, edit: true });
 }
 
-async function saveShare({ silent, edit } = {}) {
+/* Make a link with the choices on screen. The server turns the previous one
+   off in the same step. */
+async function saveShare() {
   const m = mShare;
   if (m.busy || !m.loaded) return null;
   m.busy = true;
   const revokes = m.revokes;
-  if (!m.link) paintShare();
+  paintShare();
   let s = null;
   try {
-    s = await api(`/api/transfers/${m.transferId}/share`, edit ? { ...m.fields, edit: true } : m.fields);
+    s = await api(`/api/transfers/${m.transferId}/share`, m.fields);
     if (mShare !== m || m.revokes !== revokes) return null;
-    // The screen shows what the server saved, not what it was sent, unless a
-    // newer change is queued: that save's answer replaces this one.
+    // The screen shows what the server published, not what it was sent.
     m.published = { ...SHARE_DEFAULTS, ...s.fields };
-    if (!m.again) m.fields = { ...m.published };
+    m.fields = { ...m.published };
     m.link = s.url;
     m.expiresAt = s.expiresAt;
     m.expired = false;
     clearErr("m-share-err");
-    paintShare();
   } catch (e) {
     if (mShare !== m || m.revokes !== revokes) return null;
-    if (e?.body?.expired) {
-      m.link = null;
-      m.expiresAt = null;
-      m.expired = true;
-      paintShare();
-    } else if (edit && e?.fromZold && e.status < 500) {
-      /* Zold refused the edit, so the live link still carries what it
-         carried before: back to what is published, the queued change dropped
-         with it, and said out loud. */
-      m.fields = { ...m.published };
-      m.again = false;
-      paintShare();
-      showErr("m-share-err", new Error(`that change was not saved (${e.message}). The live link still shows what is selected here`));
-    } else if (edit) {
-      /* The route writes before it replies, so a lost answer, a gateway's
-         5xx or a drop mid-request may have saved the change. Neither the old
-         nor the new choice is known to be live: lock the screen and ask. */
-      m.again = false;
+    if (e?.fromZold && e.status < 500) {
+      // Refused: nothing was made, and any live link is as it was.
+      showErr("m-share-err", e);
+    } else {
+      /* The route writes before it replies, so a lost answer or a gateway's
+         5xx may have made the new link and turned the old one off. Which
+         link is live is not known: lock the screen and ask. */
       m.loaded = false;
+      m.busy = false;
       paintShare();
       try {
         await loadShare(m);
         if (mShare !== m || m.revokes !== revokes) return null;
-        paintShare();
-        showErr("m-share-err", new Error("Zold's answer to that change didn't arrive, so the screen now shows what the live link carries"));
+        showErr("m-share-err", new Error("Zold's answer didn't arrive, so the screen now shows the link that is live"));
       } catch {
         if (mShare !== m || m.revokes !== revokes) return null;
-        showErr("m-share-err", new Error("could not confirm what the link shows. Reopen this receipt before you change it or send it"));
+        showErr("m-share-err", new Error("could not confirm which link is live. Reopen this receipt before you send it"));
       }
     }
-    if (!silent) showErr("m-share-err", e);
   } finally {
     m.busy = false;
-    // Unlocks what a save with no link on screen locked.
-    if (mShare === m && !m.link) paintShare();
-  }
-  if (m.again && mShare === m) {
-    m.again = false;
-    if (m.link) await saveShare({ silent: true, edit: true });
+    if (mShare === m) paintShare();
   }
   return s;
 }
 
-const shareCopyLabel = () => (mShare.link ? "Copy link" : "Create link");
+const shareCopyLabel = () => (!mShare.link ? "Create link" : shareChanged() ? "Make new link" : "Copy link");
 
-/* With no link, the button only creates one: the clipboard, like the share
-   sheet, wants the tap's activation, which the request would have spent.
-   Copy and Share then work from their own taps. */
+/* With no link, or choices the live link does not carry, the button only
+   makes one: the clipboard, like the share sheet, wants the tap's
+   activation, which the request would have spent. Copy and Share then work
+   from their own taps. */
 $("m-share-copy").onclick = async () => {
   const btn = $("m-share-copy");
   if (shareLocked()) return;
   if (dropExpiredShare()) return paintShare();
-  if (!mShare.link) {
-    if (await saveShare()) announce("Link created");
+  if (!mShare.link || shareChanged()) {
+    const replacing = !!mShare.link;
+    if (await saveShare()) announce(replacing ? "New link created. The old link no longer works" : "Link created");
     return;
   }
   try {
@@ -333,7 +317,7 @@ $("m-share-copy").onclick = async () => {
    Copy: copying here, without a fresh tap, would fail the same way. */
 $("m-share-native").onclick = async () => {
   if (dropExpiredShare()) return paintShare();
-  if (!mShare.link || !mShare.loaded) return;
+  if (!mShare.link || !mShare.loaded || shareChanged()) return;
   try {
     await navigator.share({ title: "Zold receipt", url: mShare.link });
   } catch (e) {
@@ -347,22 +331,37 @@ $("m-share-native").onclick = async () => {
    choices load. */
 $("m-share-revoke").onclick = async () => {
   const m = mShare;
+  // A link being made could land after the turn-off and be live unseen.
+  if (m.busy) return;
+  // Busy until the turn-off answers: a new link made meanwhile would land
+  // after it and be live while the screen says none is.
+  m.busy = true;
+  paintShare();
   try {
-    await api(`/api/transfers/${m.transferId}/share`, undefined, "DELETE");
+    // Names the link on screen (the URL ends in its slug): if another tab
+    // replaced it, the newer link is not turned off unseen.
+    await api(`/api/transfers/${m.transferId}/share`, { slug: String(m.link).split("/r/").pop() }, "DELETE");
     if (mShare !== m) return;
     // No link is a known state, even after a confirmation that failed: the
-    // composer is unlocked and Create link starts a new one. A save still in
+    // composer is unlocked and Create link starts a new one. A read still in
     // flight answers the link just turned off, so its reply is dropped.
     m.revokes = (m.revokes || 0) + 1;
-    m.again = false;
     m.link = null;
     m.expiresAt = null;
     m.published = null;
     m.loaded = true;
     clearErr("m-share-err");
-    paintShare();
   } catch (e) {
     if (mShare !== m) return;
+    if (e?.body?.code === "LINK_REPLACED") {
+      // Show the link that is live; a failed read leaves the screen locked.
+      m.loaded = false;
+      await loadShare(m).catch(() => {});
+      if (mShare !== m) return;
+    }
     showErr("m-share-err", e);
+  } finally {
+    m.busy = false;
+    if (mShare === m) paintShare();
   }
 };

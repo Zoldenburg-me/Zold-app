@@ -1,4 +1,5 @@
 import { lineNetCents, formTotalCents, formatCents } from "/invoice-totals.js";
+import { canSign, strokePath } from "/invoice-sign.js";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -38,8 +39,9 @@ async function api(path, opts = {}) {
 const LOCALES = { de: "de-DE", en: "en-GB", fr: "fr-FR", es: "es-ES" };
 const money = (cents, currency = "EUR", locale = "en-GB") =>
   new Intl.NumberFormat(locale, { style: "currency", currency }).format((cents ?? 0) / 100);
+// A Date is an instant and is written as the reader's own calendar day.
 const date = (iso, locale = "en-GB") =>
-  (iso ? new Date(`${String(iso).slice(0, 10)}T12:00:00`).toLocaleDateString(locale, { day: "numeric", month: locale === "de-DE" ? "2-digit" : "short", year: "numeric" }) : "");
+  (iso ? (iso instanceof Date ? iso : new Date(`${String(iso).slice(0, 10)}T12:00:00`)).toLocaleDateString(locale, { day: "numeric", month: locale === "de-DE" ? "2-digit" : "short", year: "numeric" }) : "");
 
 // Labels live in one place so a bilingual invoice stays consistent.
 const L = {
@@ -106,6 +108,7 @@ function renderIssued(inv) {
   const settled = inv.state === "PAID" || inv.state === "RECONCILED";
   // The issuer reading their own invoice is not the one to pay it.
   const pay = !settled && !own && inv.payPath ? inv.payPath : "";
+  const sign = canSign(inv, own);
   const show = d.display ?? {};
   const bilingual = show.bilingual;
   const lab = (k) => (bilingual && L.de[k] !== L.en[k] ? `${L.de[k]} / ${L.en[k]}` : t[k]);
@@ -165,16 +168,16 @@ function renderIssued(inv) {
     <table class="items">
       <thead><tr>
         <th>${esc(lab("description"))}</th>
-        <th class="num">${esc(lab("qty"))}</th>
-        <th class="num">${esc(lab("unit"))}</th>
+        <th class="num wide">${esc(lab("qty"))}</th>
+        <th class="num wide">${esc(lab("unit"))}</th>
         ${exempt ? "" : `<th class="num">${esc(lab("rate"))}</th>`}
         <th class="num">${esc(lab("amount"))}</th>
       </tr></thead>
       <tbody>
         ${inv.lines.map((l) => `<tr>
-          <td>${esc(l.description)}</td>
-          <td class="num">${esc(l.quantity)}</td>
-          <td class="num">${esc(decimal(l.unitPrice))}</td>
+          <td>${esc(l.description)}<div class="sub narrow">${esc(l.quantity)} × ${esc(decimal(l.unitPrice))}</div></td>
+          <td class="num wide">${esc(l.quantity)}</td>
+          <td class="num wide">${esc(decimal(l.unitPrice))}</td>
           ${exempt ? "" : `<td class="num">${esc(d.vatTreatment.rate)} %</td>`}
           <td class="num">${esc(decimal(l.amount))}</td>
         </tr>`).join("")}
@@ -191,9 +194,9 @@ function renderIssued(inv) {
       <tr class="conv"><td colspan="2">${esc(lab("converted"))} 1 ${esc(conv.to)} = ${esc(conv.rate.toLocaleString(loc, { maximumFractionDigits: 6 }))} ${esc(conv.from)}
         <span class="basis">${esc(conv.rateProvider)}${conv.rateAsOf && conv.rateAsOf !== "unknown" ? `, ${esc(conv.rateAsOf)}` : ""}</span></td></tr>
       ${(conv.buckets ?? []).filter((b) => b.rate > 0).map((b) =>
-        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "in / in" : sheetLang === "de" ? "in" : "en")} ${esc(conv.to)}</td>
+        `<tr><td>${esc(lab("vat"))} ${b.rate} % ${esc(bilingual ? "in / in" : sheetLang === "fr" || sheetLang === "es" ? "en" : "in")} ${esc(conv.to)}</td>
              <td class="num">${amount(b.vatCents, conv.to)}</td></tr>`).join("")}
-      <tr><td>${esc(lab("gross"))} ${esc(bilingual ? "in / in" : sheetLang === "de" ? "in" : "en")} ${esc(conv.to)}</td><td class="num">${amount(conv.grossCents, conv.to)}</td></tr>
+      <tr><td>${esc(lab("gross"))} ${esc(bilingual ? "in / in" : sheetLang === "fr" || sheetLang === "es" ? "en" : "in")} ${esc(conv.to)}</td><td class="num">${amount(conv.grossCents, conv.to)}</td></tr>
       ` : ""}
     </table></div>
     ${conv ? `<div class="vat-note"><div>${esc(lab("payIn"))} ${amount(conv.grossCents, conv.to)}.</div>
@@ -210,14 +213,59 @@ function renderIssued(inv) {
       ${show.notes !== false && d.notes ? `<div><h3>&nbsp;</h3>${esc(d.notes)}</div>` : ""}
     </div>
 
+    ${sign ? `<div class="signed no-print" id="signed" data-loc="${esc(loc)}">
+      <h3>${esc(lab("to"))}</h3>
+      <button type="button" class="slot" id="signed-mark"><span class="hint">Sign here</span></button>
+      <div class="sub">${d.recipient.name ? `${esc(d.recipient.name)} · ` : ""}<span id="signed-date"></span></div>
+    </div>` : ""}
+
     ${show.footer !== false && inv.footerNote
       ? `<div class="sheet-footer">${esc(inv.footerNote)}</div>` : ""}
   </div>
 
-  <div class="panel no-print">
-    <h2 lang="${sheetLang}">${esc(settled ? t.paid : t.awaiting)}</h2>
-    ${pay ? `<p style="margin:.6rem 0 1rem"><a class="pay-btn" lang="${sheetLang}" href="${esc(pay)}">${esc(t.pay)} ${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</a></p>
-      <div class="note" lang="${sheetLang}">${esc(t.payNote)}</div>` : ""}
+  <div class="panel pay-card no-print">
+    <div class="await${settled ? " ok" : ""}" lang="${sheetLang}">${esc(settled ? t.paid : t.awaiting)}</div>
+    <div class="pay-total">${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</div>
+    <p class="lead">${esc([d.issuer?.name, !settled && inv.dueDate ? `due ${day(inv.dueDate)}` : ""].filter(Boolean).join(" · "))}</p>
+    ${sign ? `<div class="pay-actions">
+        <button class="soft" id="sign-open" type="button">Sign invoice</button>
+        ${pay ? `<a class="pay-btn" lang="${sheetLang}" href="${esc(pay)}">${esc(t.pay)} ${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</a>` : ""}
+      </div>
+      <dialog id="sign-dlg" aria-labelledby="sign-title">
+        <div class="grab" aria-hidden="true"></div>
+        <div class="view" id="sign-intro">
+          <div class="await">Awaiting your signature</div>
+          <h2 id="sign-title">Invoice ${esc(d.number)}</h2>
+          <p class="lead">From ${esc(d.issuer?.name || "the issuer")}. Add your signature to your copy of this invoice.</p>
+          <dl class="facts">
+            <div><dt>Issued</dt><dd>${esc(day(d.issueDate))}</dd></div>
+            ${inv.dueDate ? `<div><dt>Due</dt><dd>${esc(day(inv.dueDate))}</dd></div>` : ""}
+            <div><dt>Invoice total</dt><dd>${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</dd></div>
+          </dl>
+          <div class="dlg-actions">
+            <button type="button" class="pill soft" data-close>Close</button>
+            <button type="button" class="pill" id="sign-next">Add signature</button>
+          </div>
+        </div>
+        <div class="view" id="sign-pane" hidden>
+          <h2>Your signature</h2>
+          <p class="lead">Draw your name or type it below. It stays on your copy and its PDF; it is not sent to ${esc(d.issuer?.name || "the issuer")}.</p>
+          <div class="seg" role="group" aria-label="How to sign">
+            <button type="button" id="sign-mode-draw" aria-pressed="true">Draw signature</button>
+            <button type="button" id="sign-mode-type" aria-pressed="false">Type signature</button>
+          </div>
+          <div class="pad-wrap" id="sign-draw">
+            <svg id="sign-pad" viewBox="0 0 600 260" role="img" aria-label="Signature drawing area"></svg>
+            <button type="button" class="undo" id="sign-undo" hidden>↩&#xFE0E; Undo</button>
+          </div>
+          <input id="sign-typed" class="sig-typed" hidden aria-label="Your name" autocomplete="name" maxlength="60" placeholder="Your name" />
+          <div class="dlg-actions">
+            <button type="button" class="pill soft" data-close>Close</button>
+            <button type="button" class="pill" id="sign-go" disabled>Sign</button>
+          </div>
+        </div>
+      </dialog>` : ""}
+    ${pay ? `<div class="note" lang="${sheetLang}">${esc(t.payNote)}</div>` : ""}
     ${!settled && !own && !pay && inv.payLinkLapsed ? `<div class="note">The Pay link for this invoice has expired. ${inv.bank ? "You can still pay by bank transfer to the details on the invoice, or ask" : "Ask"} ${esc(d.issuer?.name || "the issuer")} for a new link.</div>` : ""}
     <div class="note">${esc(complianceNote(d.jurisdiction))} Zold is not a tax
       adviser — whether a supply is exempt, and which exemption applies, is the issuer's determination.${d.jurisdiction?.ruleSet === "DE" ? `
@@ -282,9 +330,9 @@ function renderForm(inv) {
         timestamped and locked.</div>
       <label for="f-org">Your organisation</label><input id="f-org" autocomplete="organization" />
       <label for="f-email">Email</label><input id="f-email" type="email" autocomplete="email" />
-      <label for="f-num">Invoice number</label><input id="f-num" />
-      <label for="f-vat">VAT ID (optional)</label><input id="f-vat" placeholder="DE123456789" />
-      <label for="f-addr">Address (optional)</label><input id="f-addr" autocomplete="street-address" />
+      <label for="f-num">Your invoice number</label><input id="f-num" placeholder="From your own numbering, e.g. 2026-014" />
+      <label for="f-vat">VAT ID or tax number</label><input id="f-vat" placeholder="DE123456789" />
+      <label for="f-addr">Address</label><input id="f-addr" autocomplete="street-address" />
     </div>
     <div class="panel"><h2>Lines</h2>
       <table class="items"><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Amount</th></tr></thead>
@@ -360,6 +408,104 @@ function renderSubmitted(inv) {
   </div>`;
 }
 
+// ── signing ────────────────────────────────────────────────────────────────
+// The recipient's own mark on their copy of the invoice: drawn or typed in a
+// dialog, then flown from the pad into its slot on the sheet. Nothing is sent or kept.
+const SVG_NS = "http://www.w3.org/2000/svg";
+const PAD_W = 600, PAD_H = 260;
+function wireSigning() {
+  const dlg = $("#sign-dlg"), pad = $("#sign-pad"), typed = $("#sign-typed"), go = $("#sign-go");
+  let strokes = [], cur = null, mode = "draw";
+  const sync = () => {
+    $("#sign-undo").hidden = !strokes.length;
+    go.disabled = mode === "draw" ? !strokes.length : !typed.value.trim();
+  };
+  const at = (e) => {
+    const r = pad.getBoundingClientRect();
+    // Held to the pad: a captured pointer keeps reporting after it leaves, and the copy shows only ink the pad showed.
+    return [[(e.clientX - r.left) * PAD_W / r.width, PAD_W], [(e.clientY - r.top) * PAD_H / r.height, PAD_H]]
+      .map(([n, max]) => Math.round(Math.min(max, Math.max(0, n)) * 10) / 10);
+  };
+  pad.addEventListener("pointerdown", (e) => {
+    pad.setPointerCapture(e.pointerId);
+    cur = { pts: [at(e)], el: pad.appendChild(document.createElementNS(SVG_NS, "path")) };
+    cur.el.setAttribute("d", strokePath(cur.pts));
+  });
+  pad.addEventListener("pointermove", (e) => {
+    if (!cur) return;
+    cur.pts.push(at(e));
+    cur.el.setAttribute("d", strokePath(cur.pts));
+  });
+  const lift = () => { if (cur) strokes.push(cur); cur = null; sync(); };
+  pad.addEventListener("pointerup", lift);
+  pad.addEventListener("pointercancel", lift);
+  $("#sign-undo").onclick = () => { strokes.pop()?.el.remove(); sync(); };
+
+  const setMode = (m) => {
+    mode = m;
+    $("#sign-mode-draw").setAttribute("aria-pressed", String(m === "draw"));
+    $("#sign-mode-type").setAttribute("aria-pressed", String(m === "type"));
+    $("#sign-draw").hidden = m !== "draw";
+    typed.hidden = m !== "type";
+    if (m === "type") typed.focus();
+    sync();
+  };
+  $("#sign-mode-draw").onclick = () => setMode("draw");
+  $("#sign-mode-type").onclick = () => setMode("type");
+  typed.oninput = sync;
+
+  $("#sign-open").onclick = $("#signed-mark").onclick = () => dlg.showModal();
+  dlg.querySelectorAll("[data-close]").forEach((b) => { b.onclick = () => dlg.close(); });
+  $("#sign-next").onclick = () => { $("#sign-intro").hidden = true; $("#sign-pane").hidden = false; };
+  go.onclick = async () => {
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    // The button writes "Signed" before the sheet lets go of the signature.
+    go.disabled = true;
+    go.innerHTML = `<span class="sig-typed sig-wipe">Signed</span>`;
+    if (!still) await new Promise((r) => setTimeout(r, 900));
+
+    const mark = $("#signed-mark");
+    mark.textContent = "";
+    let el, from, scale = 1;
+    if (mode === "type") {
+      from = typed.getBoundingClientRect();
+      el = mark.appendChild(document.createElement("span"));
+      el.className = "sig-typed";
+      el.textContent = typed.value.trim();
+    } else {
+      // Cropped to the ink, so a small signature in a corner still fills the line.
+      const all = strokes.flatMap((s) => s.pts), xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
+      const x = Math.min(...xs) - 8, y = Math.min(...ys) - 8;
+      const w = Math.max(...xs) - x + 8, h = Math.max(...ys) - y + 8;
+      const r = pad.getBoundingClientRect(), k = r.width / PAD_W;
+      from = { left: r.left + x * k, top: r.top + y * k, width: w * k, height: h * k };
+      el = mark.appendChild(document.createElementNS(SVG_NS, "svg"));
+      el.setAttribute("class", "sig");
+      el.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+      el.setAttribute("role", "img");
+      el.setAttribute("aria-label", "Signature");
+      el.style.aspectRatio = `${w} / ${h}`;
+      for (const s of strokes) el.appendChild(s.el.cloneNode());
+    }
+    $("#signed").classList.remove("no-print");
+    $("#signed").classList.add("is-signed");
+    $("#signed-date").textContent = date(new Date(), $("#signed").dataset.loc);
+    $("#sign-open").textContent = "Sign again";
+    dlg.close();
+    go.textContent = "Sign";
+    go.disabled = false;
+    $("#signed").scrollIntoView({ block: "center" });
+    if (still) return;
+    // It leaves the pad where it was drawn and lands, smaller, on its line.
+    const to = el.getBoundingClientRect();
+    if (mode === "draw") scale = from.width / to.width;
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    el.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${scale})` }, { transform: "none" }],
+      { duration: 800, easing: "cubic-bezier(.3,.7,.1,1)" });
+  };
+}
+
 function render(inv) {
   if (inv.issued) {
     const settled = inv.state === "PAID" || inv.state === "RECONCILED";
@@ -372,6 +518,7 @@ function render(inv) {
       if (a) try { sessionStorage.setItem("zold-pay-from", JSON.stringify([a.pathname, location.pathname])); } catch { /* no way back offered */ }
     });
     $("#content").innerHTML = renderIssued(inv);
+    if ($("#sign-open")) wireSigning();
     return;
   }
   $("#actions").innerHTML = "";

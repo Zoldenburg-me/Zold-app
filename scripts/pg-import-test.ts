@@ -76,6 +76,14 @@ assert.deepEqual(report(base()), [], "the clean store has no finding");
 // Each rule: a store that has it, and a near miss that does not.
 const cases: { rule: string; collection: string; ids: string[]; blocks: boolean; hit: (db: any) => void; miss: (db: any) => void }[] = [
   {
+    rule: "unstorable-text",
+    collection: "paymentRequests",
+    ids: ["pr_nul", "pr_half"],
+    blocks: true,
+    hit: (db) => db.paymentRequests.push({ id: "pr_nul", description: "a\u0000b" }, { id: "pr_half", description: "\ud83d" }),
+    miss: (db) => db.paymentRequests.push({ id: "pr_ok", description: "pay \u{1F600}" }),
+  },
+  {
     rule: "duplicate:transfers_quote_id",
     collection: "transfers",
     ids: ["t1", "t2"],

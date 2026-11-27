@@ -18,6 +18,7 @@ import type {
 } from "./types.js";
 import { redactedMessage } from "../http/log-cause.js";
 import { fromCents, toCents } from "./invoicing.js";
+import { hasUnstorableText, sliceChars } from "../store/text.js";
 
 export class DraftError extends Error {}
 
@@ -115,8 +116,8 @@ export function validateLine(raw: unknown, contact?: Contact): Omit<DraftLine, "
     asset,
     amount,
     accountCode: typeof input.accountCode === "string" ? input.accountCode : undefined,
-    note: (typeof input.note === "string" ? input.note.trim().slice(0, 500) : "") || undefined,
-    tags: Array.isArray(input.tags) ? input.tags.slice(0, 20).map((t) => String(t).slice(0, 60)) : [],
+    note: (typeof input.note === "string" ? sliceChars(input.note.trim(), 500) : "") || undefined,
+    tags: Array.isArray(input.tags) ? input.tags.slice(0, 20).map((t) => sliceChars(String(t), 60)) : [],
   };
 }
 
@@ -242,8 +243,10 @@ export interface CsvMapping {
  * Written out rather than pulled in because a payment file is the wrong place
  * to be surprised by a dependency's quirks.
  */
-export function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
+export function parseCsv(text: string): { cells: string[]; row: number }[] {
+  // Each record keeps its 1-based number in the file, so a rejection after a
+  // dropped blank row still names the row the user sees.
+  const rows: { cells: string[]; row: number }[] = [];
   let row: string[] = [];
   let field = "";
   let quoted = false;
@@ -266,15 +269,15 @@ export function parseCsv(text: string): string[][] {
       if (c === "\r" && text[i + 1] === "\n") i++;
       row.push(field);
       field = "";
-      rows.push(row);
+      rows.push({ cells: row, row: rows.length + 1 });
       row = [];
     } else field += c;
   }
   if (field !== "" || row.length) {
     row.push(field);
-    rows.push(row);
+    rows.push({ cells: row, row: rows.length + 1 });
   }
-  return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
+  return rows.filter((r) => r.cells.some((cell) => cell.trim() !== ""));
 }
 
 export interface CsvImportResult {
@@ -297,7 +300,7 @@ export function importCsv(
   const rows = parseCsv(text);
   if (!rows.length) throw new DraftError("That file has no rows.");
 
-  const header = rows[0].map((h) => h.trim());
+  const header = rows[0].cells.map((h) => h.trim());
   const body = rows.slice(1);
   if (body.length > maxRows) {
     throw new DraftError(
@@ -331,9 +334,10 @@ export function importCsv(
   const rejected: { row: number; reason: string }[] = [];
   const newTags = new Set<string>();
 
-  body.forEach((cells, i) => {
-    const rowNo = i + 2; // 1-based, past the header
+  body.forEach(({ cells, row: rowNo }) => {
     try {
+      // The CSV is parsed here, not by express.json, so the body check never saw it.
+      if (hasUnstorableText(cells)) throw new DraftError("this row contains a NUL character or half of an emoji");
       const tags =
         idx.tags >= 0
           ? (cells[idx.tags] ?? "")

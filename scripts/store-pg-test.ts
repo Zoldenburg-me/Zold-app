@@ -383,6 +383,9 @@ try {
       const denied = /permission denied/;
       await assert.rejects(() => app.query("DELETE FROM ledger"), denied, "no DELETE grant on ledger");
       await assert.rejects(() => app.query("DELETE FROM transfers"), denied, "nor on transfers");
+      for (const t of ["processed_monerium_orders", "processed_monerium_webhooks", "monerium_issue_orders", "crypto_deposits", "crypto_sends", "users", "payment_requests"]) {
+        await assert.rejects(() => app.query(`DELETE FROM ${t}`), denied, `no DELETE on ${t}: no store method deletes from it`);
+      }
       await assert.rejects(() => app.query("UPDATE audit SET doc = doc"), denied, "audit: no UPDATE grant");
       await assert.rejects(() => app.query("INSERT INTO ledger_history (entry_id, doc) VALUES ('x', '{}')"), denied, "history is written by the trigger only");
       await assert.rejects(() => app.query("DELETE FROM schema_migrations"), denied, "schema_migrations is read-only");
@@ -620,6 +623,11 @@ try {
     ["scripts/outbox-test.ts"],
     ["scripts/checkout-service-test.ts"],
     ["scripts/identity-race-test.ts"],
+    // One live receipt share per transfer under parallel posts (receipt_shares_live).
+    ["scripts/receipt-share-route-test.ts", { TRANSF_CHAIN_ID: "31337" }],
+    // A company payout's row and its statement line written under the account's lock.
+    ["scripts/org-monerium-payouts-test.ts"],
+    ["scripts/beleg-test.ts", { TRANSF_CHAIN_ID: "31337" }],
   ];
   const { spawn } = await import("node:child_process");
   const { freePort } = await import("./_free-port.js");

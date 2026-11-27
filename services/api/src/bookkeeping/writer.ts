@@ -36,7 +36,7 @@ import { invoicePayments, mergeStatementLines, projectStatementLines, type Invoi
 import { describeCause } from "../http/log-cause.js";
 import { withoutConversionOutputs } from "../transfers/activity.js";
 import type { MoneyInHolder } from "./money-in.js";
-import type { Account } from "../domain/types.js";
+import type { Account, CompanyBankPayout } from "../domain/types.js";
 import { liveCryptoSend } from "../wallet/org-debit.js";
 import { filterSeq, findSeq, mapSeq } from "../seq.js";
 
@@ -241,6 +241,33 @@ export async function writeAccountStatementLines(account: Account, rows: Rows = 
   });
 }
 
+/**
+ * The statement lines of these company payouts alone, now. For a payout row
+ * about to leave the account's capped history: once its row is gone the
+ * sweep cannot book it, so a payout Monerium carried out is booked first.
+ * Lines are matched by key, so booking one the sweep already wrote is a no-op.
+ */
+export async function writeCompanyPayoutLines(account: Account, payouts: CompanyBankPayout[]): Promise<{ added: number; updated: number }> {
+  return store.tx(async () => {
+    const inp: StatementInputs = {
+      orgId: account.orgId,
+      accountId: account.id,
+      safeAddress: account.address!,
+      timeZone: await zoneOf(account.orgId),
+      transfers: [],
+      deposits: [],
+      issueOrders: [],
+      sweeps: [],
+      invoices: [],
+      paymentRequests: [],
+      cryptoSends: [],
+      companyPayouts: payouts,
+      swapsHaveExecuted: false,
+    };
+    return await writeProjected(inp, undefined, storeRows);
+  });
+}
+
 async function writeProjected(inp: StatementInputs, since: string | undefined, rows: Rows): Promise<{ added: number; updated: number }> {
   return store.tx(async () => {
     // Every ledger writer of the org takes this lock before it reads the rows it changes.
@@ -273,8 +300,9 @@ export async function writeStatementLines(): Promise<{ added: number; updated: n
     let added = 0;
     let updated = 0;
     // One file write per sweep: a write per user re-serialised the whole store
-    // once for every user with a new line. The sweep reads only the store,
-    // and store.tx writes on the way out even if a user's projection throws.
+    // once for every user with a new line. Each user's and account's writer
+    // opens its own nested store.tx, a savepoint on Postgres, so one that
+    // throws undoes only its own lines and the sweep commits the rest.
     await store.tx(async () => {
       const rows = await groupedRows();
       for (const u of (await store.list("users"))) {

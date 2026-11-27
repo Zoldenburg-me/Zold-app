@@ -101,7 +101,8 @@ function payoutsHtml(payouts, on, keysOk) {
         ? `<div class="z-list z-card">${payoutRows(payouts).map((p) => `<div class="z-row" style="display:block">
             <div style="display:flex;justify-content:space-between;gap:12px"><span class="z-row__title">${esc(p.title)}</span><b>${esc(p.state)}</b></div>
             <span class="z-row__sub z-mono">${esc(p.sub)}</span>
-            ${p.note ? `<span class="z-row__sub">${esc(p.note)}</span>` : ""}</div>`).join("")}</div>`
+            ${p.note ? `<span class="z-row__sub">${esc(p.note)}</span>` : ""}
+            ${p.clearable && roleCan(org.role, "sign") ? `<div class="zb-actions"><button type="button" class="z-btn z-btn--sm" data-act="org-payout-clear" data-id="${esc(p.id)}">I checked Monerium: no order</button></div>` : ""}</div>`).join("")}</div>`
         : `<p class="zb-hint">No payouts yet.</p>`;
   return `<div id="om-payouts"><p class="zb-hint">Bank payouts from the company’s IBAN, newest first. Only “Sent” means Monerium carried it out.</p>${off}${add}${body}</div>`;
 }

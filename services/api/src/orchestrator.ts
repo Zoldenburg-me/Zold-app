@@ -25,6 +25,7 @@ import { MONERIUM_NOT_CONNECTED, moneriumLiveFor } from "./adapters/monerium-con
 import { verifyTypedData } from "viem";
 import { AnchorPaymentUncertainError, isTransientAnchorError } from "./stellar/anchor.js";
 import { store, type Transfer, type TransferState, type User } from "./store.js";
+import { sliceChars } from "./store/text.js";
 import { redeemToIban } from "./adapters/monerium-sandbox.js";
 import { isMoneriumOrderId, MoneriumAccessError, MoneriumApiError } from "./adapters/monerium-client.js";
 import { redeemMessageStale } from "./sepa.js";
@@ -1171,7 +1172,7 @@ export async function executeTransfer(
       // Fail closed: a failed real payout must not masquerade as success.
       return await failAndCompensate(
         transfer.id,
-        new Error(`anchor payout failed: ${redactedMessage(err).slice(0, 200)}`),
+        new Error(`anchor payout failed: ${sliceChars(redactedMessage(err), 200)}`),
         txs,
       );
     }
@@ -1301,7 +1302,7 @@ export async function executeSepaTransfer(
         if (!refused) {
           return await store.updateTransfer(transfer.id, {
             state: "MANUAL_REVIEW",
-            error: `redeem order outcome unknown: ${redactedMessage(err).slice(0, 200)}; Monerium may have accepted it, so no automatic refund`,
+            error: `redeem order outcome unknown: ${sliceChars(redactedMessage(err), 200)}; Monerium may have accepted it, so no automatic refund`,
             txs,
           });
         }
@@ -1310,7 +1311,7 @@ export async function executeSepaTransfer(
           transfer.id,
           err instanceof MoneriumAccessError
             ? new Error("Monerium refused Zold's access to your Monerium account, so no payment was sent. Connect Monerium again, then send it again.")
-            : new Error(`redeem order failed: ${redactedMessage(err).slice(0, 200)}`),
+            : new Error(`redeem order failed: ${sliceChars(redactedMessage(err), 200)}`),
           txs,
         );
       }
@@ -1429,13 +1430,13 @@ async function refreshPayoutUnlocked(
       return await store.updateTransfer(transfer.id, {
         state: "MANUAL_REVIEW",
         error:
-          `anchor settlement unresolved: ${redactedMessage(err).slice(0, 200)}; ` +
+          `anchor settlement unresolved: ${sliceChars(redactedMessage(err), 200)}; ` +
           `a Stellar payment may already have been sent, so no automatic refund; ${STELLAR_REVIEW_STEP}`,
       });
     }
     return await failAndCompensate(
       transfer.id,
-      new Error(`anchor settlement failed: ${redactedMessage(err).slice(0, 200)}`),
+      new Error(`anchor settlement failed: ${sliceChars(redactedMessage(err), 200)}`),
       transfer.txs,
     );
   }

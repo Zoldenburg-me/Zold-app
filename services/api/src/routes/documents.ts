@@ -52,6 +52,8 @@ import { belegPdf, belegFileName } from "../bookkeeping/beleg.js";
 import { belegRecordsAgree } from "../bookkeeping/issue.js";
 import { CEILINGS, ceilingRefusal } from "../domain/ceilings.js";
 import { redactedMessage } from "../http/log-cause.js";
+import { roleCan } from "../domain/roles.js";
+import { orgEntity } from "../domain/org-entity.js";
 
 export interface DocumentsDeps {
   requireUserSession: (req: express.Request, res: express.Response, userId: string) => Promise<unknown>;
@@ -280,6 +282,22 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     return user;
   };
 
+  /** A Beleg belongs to its company's books: the person it is filed under
+   *  lists or revokes it only while an active member who may read them. */
+  const mayHold = (user: User, doc: StoredDocument, asked = new Map<string, Promise<boolean>>()): Promise<boolean> => {
+    const orgId = doc.orgId;
+    if (!orgId) return Promise.resolve(true);
+    // A list asks once per company, not once per document.
+    if (!asked.has(orgId)) {
+      asked.set(orgId, (async () => {
+        const org = await store.findOrganisation(orgId);
+        const member = (await store.membersOf(orgId)).find((m) => m.userId === user.id && m.status === "active");
+        return !!org && !!member && roleCan(member.role, "ledger.read", orgEntity(org));
+      })());
+    }
+    return asked.get(orgId)!;
+  };
+
   /** Checked before any chain read: a statement is about fifty of them. */
   const underDocumentCeiling = async (user: User, res: express.Response): Promise<boolean> => {
     const since = Date.now() - 24 * 60 * 60_000;
@@ -324,9 +342,11 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
     wrap(async (req, res) => {
       const user = await userFor(req, res);
       if (!user) return;
+      const held = [];
+      const asked = new Map<string, Promise<boolean>>();
+      for (const d of await store.documentsForUser(user.id)) if (await mayHold(user, d, asked)) held.push(d);
       res.json({
-        documents: (await store
-          .documentsForUser(user.id))
+        documents: held
           .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
           .map((d) => ({ ...publicDocument(d), snapshot: undefined, summary: summarise(d) })),
       });
@@ -488,7 +508,7 @@ export function createDocumentsRouter(deps: DocumentsDeps) {
       const user = await userFor(req, res);
       if (!user) return;
       const doc = await store.findDocumentByCode(normaliseCode(req.params.code));
-      if (!doc || doc.userId !== user.id) return res.status(404).json({ error: "document not found" });
+      if (!doc || doc.userId !== user.id || !(await mayHold(user, doc))) return res.status(404).json({ error: "document not found" });
       await store.updateDocument(doc.id, { revokedAt: new Date().toISOString() });
       res.json({ revoked: true });
     }),

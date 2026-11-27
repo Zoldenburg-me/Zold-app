@@ -2,3 +2,5 @@
 # The published example Estonian IBAN (IBAN registry / ECBS), used as a fixture
 # in tests and the local preview seed. Not an account anyone holds.
 ^EE382200221020145685$
+# The German fixture IBAN in scripts/beleg-test.ts. Not an account anyone holds.
+^DE02100100109307118603$

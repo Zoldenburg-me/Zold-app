@@ -139,10 +139,13 @@ await check("tax and registration numbers saved on the business profile are what
   assert.equal(p.data.profile.registerCourt, "RCCM Libreville");
 });
 
-await check("a German entity's numbers are checked as German on the business profile too", async () => {
-  const bad = await call("PATCH", "/api/orgs/org_de", "u_owner", { taxNumber: "12" });
-  assert.equal(bad.status, 400, JSON.stringify(bad.data));
-  assert.equal(bad.data.field, "taxNumber");
+await check("a German entity's tax fields take free text; a real VAT ID is stored normalised", async () => {
+  const note = "Steuernummer beantragt. Eine korrigierte Rechnung wird nach Erhalt der Steuernummer nachgereicht.";
+  const r = await call("PATCH", "/api/orgs/org_de", "u_owner", { taxNumber: note, vatId: "beantragt" });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  const inv = (await store.findOrganisation("org_de"))!.invoicing;
+  assert.equal(inv?.taxNumber, note);
+  assert.equal(inv?.vatId, "beantragt", "a note is kept as written, not uppercased");
   const ok = await call("PATCH", "/api/orgs/org_de", "u_owner", { vatId: "de 123 456 789" });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
   assert.equal((await store.findOrganisation("org_de"))!.invoicing?.vatId, "DE123456789");
@@ -200,21 +203,12 @@ await check("an EU VAT ID must be the issuer's own country's", async () => {
   assert.equal(prof.status, 400, "the invoicing profile checks the same");
 });
 
-await addOrg("org_move_tax", "DE", { invoicing: { taxNumber: "12/345/67890" } });
-await check("moving country re-checks a stored tax number the save does not replace", async () => {
-  const r = await call("PATCH", "/api/orgs/org_move_tax", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" } });
-  assert.equal(r.status, 200, "a German Steuernummer is still one line of digits under EU rules");
-  const back = await call("PATCH", "/api/orgs/org_move_tax", "u_owner", { address: { line1: "1 Str", postalCode: "10115", city: "Berlin", country: "DE" }, taxNumber: "12" });
-  assert.equal(back.status, 400, JSON.stringify(back.data));
-  assert.equal(back.data.field, "taxNumber");
-});
-
-await addOrg("org_move", "GA", { invoicing: { vatId: "GA-NIF 123456 X" } });
+await addOrg("org_move", "DE", { invoicing: { vatId: "DE123456789" } });
 await check("moving country re-checks a stored VAT ID the save does not replace", async () => {
   const r = await call("PATCH", "/api/orgs/org_move", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" } });
   assert.equal(r.status, 400, JSON.stringify(r.data));
   assert.equal(r.data.field, "vatId");
-  assert.equal((await store.findOrganisation("org_move"))!.address?.country, "GA", "nothing is saved");
+  assert.equal((await store.findOrganisation("org_move"))!.address?.country, "DE", "nothing is saved");
   const ok = await call("PATCH", "/api/orgs/org_move", "u_owner", { address: { line1: "1 Rue", postalCode: "75001", city: "Paris", country: "FR" }, vatId: "FR40303265045" });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
   assert.equal((await store.findOrganisation("org_move"))!.invoicing?.vatId, "FR40303265045");

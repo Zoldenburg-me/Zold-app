@@ -233,6 +233,11 @@ await check("without a key ring a Monerium token refresh refuses before it spend
   try {
     await assert.rejects(() => moneriumAccessToken(user), EncryptionUnavailableError);
     assert.equal(called, 0, "Monerium was asked to refresh with nowhere to store the result");
+    // Through the client too: the caller answers 503 ENCRYPTION_UNAVAILABLE, not a Monerium failure.
+    const { MoneriumClient } = await import("../services/api/src/adapters/monerium-client.js");
+    const viaClient = new MoneriumClient({ baseUrl: "http://127.0.0.1:9", tokenProvider: () => moneriumAccessToken(user) } as any);
+    await assert.rejects(() => viaClient.getOrder("ord_1"), EncryptionUnavailableError);
+    assert.equal(called, 0);
   } finally {
     process.env.DATA_ENCRYPTION_KEYS = ring;
     globalThis.fetch = realFetch;
