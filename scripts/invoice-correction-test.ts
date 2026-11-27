@@ -310,6 +310,23 @@ await check("the VAT per rate cannot move under the same total; a mixed-rate inv
   assert.equal(fixed.data.invoice.issued.vatCents, r.data.invoice.issued.vatCents);
 });
 
+await check("lines made from wallet receipts may be reworded, not reordered: each keeps its receipt", async () => {
+  const two = { ...reverseCharge, lines: [{ description: "May, receipt 1", quantity: "1", unitPriceNet: "60.00" }, { description: "May, receipt 2", quantity: "1", unitPriceNet: "40.00" }] };
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", two);
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const inv = (await store.findInvoice(r.data.invoice.id))!;
+  await store.updateInvoice(inv.id, { lines: inv.lines.map((l, i) => ({ ...l, receipt: { txHash: `0x${String(i + 1).repeat(64)}` } })) } as any);
+  const swapped = await correct(inv.id, "u_owner", { acceptWarnings: true, lines: [two.lines[1], two.lines[0]] });
+  assert.equal(swapped.status, 422, JSON.stringify(swapped.data));
+  assert.equal((await store.findInvoice(inv.id))!.state, "SUBMITTED");
+  const reworded = await correct(inv.id, "u_owner", { acceptWarnings: true, lines: [
+    { description: "Delegation pay, May (1)", quantity: "1", unitPriceNet: "60.00" },
+    { description: "Delegation pay, May (2)", quantity: "1", unitPriceNet: "40.00" },
+  ] });
+  assert.equal(reworded.status, 201, JSON.stringify(reworded.data));
+  assert.deepEqual(reworded.data.invoice.lines.map((l: any) => l.receipt?.txHash), [`0x${"1".repeat(64)}`, `0x${"2".repeat(64)}`]);
+});
+
 await check("an amount that no longer matches is refused, not issued", async () => {
   const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
   // The correction is built from the original's own lines and treatment, so
