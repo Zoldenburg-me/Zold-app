@@ -773,6 +773,68 @@ check("a typed due date wins over payment terms, and cannot precede the invoice 
   assert.throws(() => invoiceDueDate("13.10.2026", "2026-09-29", undefined), /not a due date/);
 });
 
+console.log("\nAudit fixes: Directive content, euro limit, line rates, sole traders");
+
+const frIssuer = { name: "Atelier SARL", addressLine: "1 rue X", postalCode: "75001", city: "Paris", country: "FR", vatId: "FR40303265045" };
+const frDraft = (over: Partial<InvoiceDraft> = {}) =>
+  draft({ issuer: frIssuer, recipient: { ...recipient, vatId: "DE123456789" }, recipientIsBusiness: true, treatment: { kind: "exempt", reason: "reverse_charge_eu" }, ...over });
+
+check("an EU issuer gets the Directive's content checks, citing the Directive", () => {
+  assert.ok(checkCompliance(frDraft(), jurisdictionFor("FR")).ok, "a complete French reverse-charge invoice passes");
+  const bare = checkCompliance(
+    frDraft({ issuer: { ...frIssuer, vatId: undefined }, recipient: { name: "B", country: "DE" }, supplyDate: undefined, lines: [{ description: "", quantity: "1", unitPriceNet: "1000" }] }),
+    jurisdictionFor("FR"),
+  );
+  const fields = bare.errors.map((e) => e.field);
+  for (const f of ["issuer.vatId", "recipient.vatId", "recipient.address", "supplyDate", "lines"]) assert.ok(fields.includes(f), f);
+  assert.ok(bare.errors.every((e) => !/UStG/.test(e.legalBasis ?? "")), "no German paragraph at a French issuer");
+  const priv = checkCompliance(frDraft({ recipientIsBusiness: false }), jurisdictionFor("FR"));
+  assert.ok(priv.errors.some((e) => e.field === "recipient.isBusiness"));
+  const invalid = checkCompliance(frDraft({ recipientVatCheck: { vatId: "DE123456789", status: "invalid", checkedAt: "2026-11-27" } }), jurisdictionFor("FR"));
+  assert.ok(invalid.errors.some((e) => e.field === "recipient.vatId"));
+});
+
+check("German-only rules stay German: an EU issuer may charge 23% and needs no Steuernummer", () => {
+  const pl = checkCompliance(
+    draft({ issuer: { ...frIssuer, country: "PL", vatId: undefined }, treatment: { kind: "standard", rate: 23 } }),
+    jurisdictionFor("PL"),
+  );
+  assert.ok(pl.ok, pl.errors.map((e) => e.message).join("; "));
+});
+
+check("§ 33 UStDV's €250 is judged in euro on a foreign-currency invoice", () => {
+  const lines = [{ description: "x", quantity: "1", unitPriceNet: "200", vatRate: 19 }];
+  const totals = computeTotals(lines, { kind: "standard", rate: 19 });
+  const conversion = convertTotals(totals, "GBP", 0.84, "ecb", "2026-11-27");
+  const r = checkCompliance(draft({ lines, recipient: {}, currency: "GBP", conversion }), jurisdictionFor("DE"));
+  assert.notEqual(r.regime, "kleinbetrag", "£238 is about €283");
+  assert.ok(r.errors.some((e) => e.field === "recipient.name"));
+});
+
+check("every German line's rate is checked, not only the invoice default", () => {
+  const off = checkCompliance(draft({ lines: [{ description: "x", quantity: "1", unitPriceNet: "100", vatRate: 16 }] }), jurisdictionFor("DE"));
+  assert.ok(off.errors.some((e) => /16% is not a German rate/.test(e.message)));
+  const zero = checkCompliance(draft({ lines: [
+    { description: "x", quantity: "1", unitPriceNet: "100", vatRate: 19 },
+    { description: "y", quantity: "1", unitPriceNet: "100", vatRate: 0 },
+  ] }), jurisdictionFor("DE"));
+  assert.ok(zero.errors.some((e) => /0% is not a German rate/.test(e.message)));
+  const mixed = checkCompliance(draft({ lines: [
+    { description: "x", quantity: "1", unitPriceNet: "100", vatRate: 19 },
+    { description: "y", quantity: "1", unitPriceNet: "100", vatRate: 7 },
+  ] }), jurisdictionFor("DE"));
+  assert.ok(mixed.ok);
+});
+
+check("a sole trader with only a trading name is asked for their own name; GENERIC is not", () => {
+  const de = checkCompliance(draft({ issuerNameIsTradingName: true }), jurisdictionFor("DE"));
+  assert.ok(de.errors.some((e) => e.field === "issuer.legalName" && /§ 14 Abs. 4 Nr. 1/.test(e.legalBasis ?? "")));
+  const fr = checkCompliance(frDraft({ issuerNameIsTradingName: true }), jurisdictionFor("FR"));
+  assert.ok(fr.errors.some((e) => e.field === "issuer.legalName" && /Art. 226/.test(e.legalBasis ?? "")));
+  const inIssuer = checkCompliance(draft({ issuer: { ...issuer, country: "IN" }, issuerNameIsTradingName: true }), jurisdictionFor("IN"));
+  assert.ok(!inIssuer.errors.some((e) => e.field === "issuer.legalName"));
+});
+
 console.log(`\n${passed} checks passed${process.exitCode ? " (with failures above)" : ""}\n`);
 console.log("NOT COVERED: XRechnung / ZUGFeRD (EN 16931) e-invoicing. German B2B must already");
 console.log("be able to RECEIVE e-invoices; the obligation to ISSUE them phases in from 2027.\n");

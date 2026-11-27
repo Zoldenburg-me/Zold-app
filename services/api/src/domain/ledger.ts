@@ -627,6 +627,8 @@ export const LEDGER_EXPORT_COLUMNS = [
   "fiatCurrency",
   "fiatValue",
   "fiatRate",
+  "netValue",
+  "vatValue",
   "counterparty",
   "accountCode",
   "tags",
@@ -635,8 +637,38 @@ export const LEDGER_EXPORT_COLUMNS = [
   "chainId",
 ] as const;
 
-export function ledgerExportRows(entries: LedgerEntry[]): Record<string, unknown>[] {
-  return entries.map((e) => ({
+/** An issued invoice's euro figures, as `vatSplit` reads them. */
+export interface IssuedEuroTotals {
+  grossCents: number;
+  vatCents: number;
+}
+
+/**
+ * The net and VAT inside an invoice payment, so revenue is not booked with the
+ * VAT in it. Pro rata to the invoice's euro gross: a part payment carries its
+ * share of the tax. Undefined for anything that is not a payment received
+ * against an issued invoice.
+ */
+export function vatSplit(
+  e: LedgerEntry,
+  invoices: ReadonlyMap<string, IssuedEuroTotals>,
+): { netCents: number; vatCents: number } | undefined {
+  const s = e.statement;
+  const inv = s?.links.invoiceId ? invoices.get(s.links.invoiceId) : undefined;
+  if (!s || !inv || e.txType !== "invoice_payment" || s.amountCents <= 0 || inv.grossCents <= 0) return undefined;
+  const vatCents = Math.round((inv.vatCents * s.amountCents) / inv.grossCents);
+  return { netCents: s.amountCents - vatCents, vatCents };
+}
+
+const euro = (cents: number) => (cents / 100).toFixed(2);
+
+export function ledgerExportRows(
+  entries: LedgerEntry[],
+  invoices: ReadonlyMap<string, IssuedEuroTotals> = new Map(),
+): Record<string, unknown>[] {
+  return entries.map((e) => {
+    const split = vatSplit(e, invoices);
+    return {
     date: e.at,
     direction: e.direction,
     asset: e.asset,
@@ -644,11 +676,14 @@ export function ledgerExportRows(entries: LedgerEntry[]): Record<string, unknown
     fiatCurrency: e.fiatCurrency ?? "",
     fiatValue: e.fiatValue ?? "",
     fiatRate: e.fiatRate ?? "",
+    netValue: split ? euro(split.netCents) : "",
+    vatValue: split ? euro(split.vatCents) : "",
     counterparty: e.counterparty?.name ?? e.counterparty?.address ?? "",
     accountCode: bookedCode(e) ?? "",
     tags: e.tags.join(";"),
     note: e.note ?? "",
     txHash: e.txHash ?? "",
     chainId: e.chainId ?? "",
-  }));
+    };
+  });
 }
