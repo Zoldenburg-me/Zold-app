@@ -447,7 +447,10 @@ await check("the passkey signs in on the admin origin and nowhere else; a strang
   const wrongOrigin = await kit.passkey.assert(c1.body.challenge, "http://localhost:3000", "localhost");
   assert.equal((await req("POST", "/api/admin/auth/login", wrongOrigin)).status, 401);
   // On the admin origin but for the app's RP ID: the passkey a user-app page could ask for.
-  assert.equal((await req("POST", "/api/admin/auth/login", await kit.passkey.assert(c1.body.challenge, ADMIN, "localhost"))).status, 401, "the app's RP ID");
+  const wrongRp = await req("POST", "/api/admin/auth/login/challenge", {});
+  const refusedRp = await req("POST", "/api/admin/auth/login", await kit.passkey.assert(wrongRp.body.challenge, ADMIN, "localhost"));
+  assert.equal(refusedRp.status, 401, "the app's RP ID");
+  assert.match(refusedRp.body.error, /rpId/, "refused for the RP ID, not a spent challenge");
   const stranger = await SoftPasskey.create();
   const c2 = await req("POST", "/api/admin/auth/login/challenge", {});
   assert.equal((await req("POST", "/api/admin/auth/login", await stranger.assert(c2.body.challenge, ADMIN, "admin.test"))).status, 401);

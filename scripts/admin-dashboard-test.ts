@@ -25,6 +25,8 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-adm
 // No real partner credentials in a test, and a key so a token can be stored.
 for (const k of ["MONERIUM_CLIENT_ID", "MONERIUM_CLIENT_SECRET", "MONERIUM_OAUTH_CLIENT_ID"]) process.env[k] = "";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "admin-test-encryption-key-0123456789abcdef";
+// The dashboard on the local API's origin, whatever ADMIN_ORIGIN a developer's .env holds.
+process.env.ADMIN_ORIGIN = "";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
