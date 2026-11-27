@@ -16,6 +16,7 @@ import {
 } from "./core.js";
 import { META, RENDER, invoiceActions, linkBtn, primary, secondary, settlementRows, shortTx, staleBeleg, table } from "./views.js";
 import { runLink } from "./payment.js";
+import { lineWho } from "./home-model.js";
 
 const note = (text, icon = "info", tone = "") => `<div class="zb-note${tone ? ` zb-note--${tone}` : ""}">${Z.icon(icon)}<span>${text}</span></div>`;
 const empty = (text) => `<div class="z-card"><p class="empty">${text}</p></div>`;
@@ -403,7 +404,7 @@ RENDER.books = async () => {
   const mayMark = roleCan(org.role, "categorise");
   const rows = [...d.lines].sort((a, b) => b.valueDate.localeCompare(a.valueDate)).map((l) => {
     const inbound = l.amountCents >= 0;
-    const who = l.counterparty?.name || (inbound ? "Money in" : "Payment");
+    const who = lineWho(l);
     const cat = l.ownTransfer
       ? `Between my own accounts<span class="zb-sub2">Not income or an expense</span>${mayMark ? `<button type="button" class="zb-memo" data-act="bk-own" data-id="${esc(l.id)}" data-own="false">Undo<span class="z-sr">: ${esc(who)} is not between my own accounts</span></button>` : ""}`
       : chart

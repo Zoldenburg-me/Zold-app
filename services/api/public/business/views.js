@@ -11,7 +11,7 @@
  * what exists. Every renderer reads the live `org` from core.js.
  */
 import { isOwnCompanyOrg } from "./access-model.js";
-import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
+import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd, zipMode } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -506,7 +506,7 @@ RENDER.organisation = async () => {
       <label for="s-addr2" class="z-sr">Address line 2</label>
       <input id="s-addr2" name="address-line2" autocomplete="address-line2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)…" style="margin-top:8px" />
       <div class="zb-addr3">
-        <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
+        <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" inputmode="${zipMode(org.address?.country)}" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
         <div><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" value="${esc(org.address?.city || "")}" /></div>
         <div><label for="s-country">Country</label>${countrySelect("s-country", org.address?.country)}</div>
       </div>
@@ -520,14 +520,21 @@ RENDER.organisation = async () => {
           <input id="s-tz" name="timezone" list="z-tz" autocomplete="off" value="${esc(org.reporting.timeZone)}" />
           <datalist id="z-tz">${(Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []).map((z) => `<option value="${esc(z)}"></option>`).join("")}</datalist></div>
       </div>
+      <div class="zb-actions">${primary("Save", 'data-act="save-org"')}</div>
     </form>`,
   // The field names follow the country as it is picked; what was typed stays.
-  bind: () => $("#s-country")?.addEventListener("change", (e) => {
+  bind: () => {
+    // Typed and not saved: a reload (a pull down on a phone) asks first.
+    $("#org-form")?.addEventListener("input", (e) => { e.currentTarget.dataset.dirty = "1"; });
+    $("#s-country")?.addEventListener("change", (e) => {
+    $("#s-zip").inputMode = zipMode(e.target.value);
     const typed = Object.fromEntries(["s-vatid", "s-taxno", "s-court", "s-reg", "s-gf"].map((id) => [id, $("#" + id)?.value ?? ""]));
     $("#s-issuer").outerHTML = issuerFieldsHtml(e.target.value);
     for (const [id, v] of Object.entries(typed)) $("#" + id).value = v;
-  }) };
+    });
+  } };
 };
+window.addEventListener("beforeunload", (e) => { if ($("#org-form")?.dataset.dirty) e.preventDefault(); });
 
 /* ==========================================================================
    The invoicing profile

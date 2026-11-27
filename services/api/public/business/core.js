@@ -20,6 +20,9 @@ export const countrySelect = (id, current) =>
   `<select id="${id}" name="country" autocomplete="country">${Z.countries(current).map((o) =>
     `<option value="${esc(o.value)}"${o.value === (current || "") ? " selected" : ""}${o.disabled ? " disabled" : ""}>${esc(o.label)}</option>`).join("")}</select>`;
 
+/** The keyboard for a postcode: the number pad where postcodes are digits only. */
+export const zipMode = (country) => (["DE", "AT", "CH", "FR", "IT", "ES", "BE", "DK", "FI", "NO"].includes(country) ? "numeric" : "text");
+
 /* The issuer's tax identifiers as invoices print them. The server fills in
    the signup tax id until the profile names one, and only if it passes. */
 export function issuerIds(o) {
@@ -170,6 +173,8 @@ export function when(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   if (d.toDateString() === new Date().toDateString()) {
+    // A calendar day (ymd) has no time of day to show.
+    if (/^\d{4}-\d{2}-\d{2}(T12:00:00)?$/.test(String(iso))) return "Today";
     return `Today ${new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(d)}`;
   }
   const y = new Date(); y.setDate(y.getDate() - 1);
@@ -198,7 +203,7 @@ export const safeAddressHtml = (s) => {
     <span class="z-mono" translate="no">${esc(value)}</span>
     <button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="copy-text" data-text="${esc(value)}" data-said="${said}">${Z.icon("content_copy")}<span>Copy</span></button></div>`;
   return `${name ? row(name, "Name copied") : ""}${row(s.address, "Address copied")}
-  <p class="zb-hint">Send only EURe${testMode === true ? " on Base Sepolia, the test network" : testMode === false ? " on Base" : ""} to this ${name ? "name or address: both reach the same account" : "address"}.</p>`;
+  <p class="zb-hint">Send only EURe${testMode === true ? (chainId === 84532 ? " on Base Sepolia, the test network" : " on the test network") : testMode === false ? " on Base" : ""} to this ${name ? "name or address: both reach the same account" : "address"}.</p>`;
 };
 
 /* Role names; what each may do is role-table.js. */

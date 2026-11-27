@@ -14,7 +14,7 @@
  * editor offers none. Zold sends no emails: the link is shared by you, and it
  * opens the invoice with its Pay button.
  */
-import { $, Z, api, countrySelect, esc, org } from "./core.js";
+import { $, Z, api, countrySelect, esc, org, zipMode } from "./core.js";
 import { INVOICE_LANGUAGE_OPTIONS, META, RENDER, jurisdictionBanner } from "./views.js";
 
 export let invoiceDraft = null;
@@ -174,7 +174,7 @@ RENDER["invoice-new"] = async () => {
       </div>
       <div class="zb-row zb-row--3">
         ${f("inv-r-addr", "Street and number", r.addressLine)}
-        ${f("inv-r-zip", "Postcode", r.postalCode, 'spellcheck="false"')}
+        ${f("inv-r-zip", "Postcode", r.postalCode, `spellcheck="false" inputmode="${zipMode(r.country || org.address?.country)}"`)}
         ${f("inv-r-city", "City", r.city)}
       </div>
       <div class="zb-row zb-row--3">

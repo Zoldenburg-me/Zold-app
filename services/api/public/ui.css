@@ -732,6 +732,17 @@ button.z-side__org:hover { border-color: var(--z-line-hover); }
 .z-tbl__link:focus-visible { outline: none; }
 .z-tbl__link:focus-visible::after { outline: 2px solid var(--z-pink); outline-offset: -2px; border-radius: var(--z-radius-sm); }
 .z-tbl .z-amount { font-size: 15px; }
+/* A phone has no room for columns: each row is one wrapped line of its cells, the amount at the right.
+   shortcut: the column names are hidden here, switch to labelled cells if a table's values stop explaining themselves. */
+@media (max-width: 759px) {
+  .z-tbl, .z-tbl tbody { display: block; }
+  .z-tbl thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .z-tbl tbody tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px var(--z-space-3); padding: var(--z-space-3) var(--z-space-4); border-bottom: 1px solid var(--z-line); }
+  .z-tbl tbody tr:last-child { border-bottom: 0; }
+  .z-tbl td { display: block; height: auto; min-width: 0; padding: 0; border: 0; }
+  .z-tbl td:empty { display: none; }
+  .z-tbl td.z-tbl__num { margin-left: auto; }
+}
 
 /* Search (Cmd or Ctrl K): a dialog near the top, input first. */
 .z-scrim--top { align-items: flex-start; padding-top: 110px; }
@@ -804,6 +815,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; heig
    its speech bubble and its effects: narwhal/narwhal.css. */
 /* The conversation sits a little above the middle, replies under the question; only the chat bar docks. */
 .ob-chat { gap: var(--z-space-5); justify-content: center; padding-bottom: 6vh; }
+/* On a phone the keyboard takes half the screen: a centred conversation would scroll its question under the status bar. */
+@media (max-width: 600px) { .ob-chat:has(.ob-composer__input:focus) { justify-content: flex-start; padding-bottom: 0; } }
 .ob-host { --nw-size: 104px; min-height: 120px; }
 /* The bubble speaks in the screen's own text size, not narwhal.css's 17px. */
 .ob-say { margin-bottom: 28px; font: inherit; }
@@ -819,7 +832,8 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; z-index: 210; heig
 /* A plain reply (Yes, No) is a short pill; one with a line under it is a card. */
 .ob-choice:not(:has(span)) { flex: 0 1 auto; min-width: 96px; padding: 9px 22px; border-radius: var(--z-radius-pill); text-align: center; }
 .ob-choice span { display: block; font-size: 12.5px; font-weight: 400; color: var(--z-dim); }
-.ob-choice:hover, .ob-choices .z-provider:hover { background: var(--z-pink-tint); }
+/* Hover only where there is a pointer: on touch it sticks to the last answer tapped. */
+@media (hover: hover) { .ob-choice:hover, .ob-choices .z-provider:hover { background: var(--z-pink-tint); } }
 .ob-choices .z-provider { flex: 1 1 140px; justify-content: flex-start; min-height: 0; padding: 9px 14px; border: 1.5px solid var(--z-text); border-radius: 14px; background: var(--z-surface); color: var(--z-text); font: 500 15px var(--z-font); }
 .ob-composer { display: flex; align-items: center; gap: 8px; padding: 5px 5px 5px 16px; border: 2px solid var(--z-text); border-radius: 22px; background: var(--z-surface); }
 .ob-composer:focus-within { box-shadow: 0 0 0 3px var(--z-pink-tint); }

@@ -801,7 +801,8 @@ await check("/business: a refused write keeps its report on screen: later reads 
 await check("/business: the no-organisation form's prefill is a default, so it does not read as typed work", async () => {
   const shellSource = read("business/shell.js");
   assert.match(shellSource, /"#new-org-name"\)\.defaultValue = u\.name/);
-  assert.match(shellSource, /"#new-org-country"\)\.defaultValue = u\.country/);
+  // The country is a select, which the typed-work check does not read.
+  assert.match(shellSource, /"#new-org-country"\)\.outerHTML = countrySelect\("new-org-country", u\?\.country\)/);
 });
 
 await check("no screen shown after a failed start-up says nothing was sent: Zold cannot know that", async () => {
