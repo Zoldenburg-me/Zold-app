@@ -37,11 +37,12 @@ export function publicPayout(p: CompanyBankPayout) {
   };
 }
 
-/** The payouts to show, newest first. */
+/** The payouts to show, newest first: the latest `limit`, and every older
+ *  unresolved one, which still holds money and may need an owner. */
 export const recentPayouts = (payouts: CompanyBankPayout[] | undefined, limit = 20): CompanyBankPayout[] =>
   [...(payouts ?? [])]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, limit);
+    .filter((p, i) => i < limit || p.state === "pending" || p.state === "unknown");
 
 /** The rows to keep on the account. An unresolved payout (`pending` or
  *  `unknown`) reserves money, so it is never dropped by the history cap: only

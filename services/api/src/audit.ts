@@ -100,7 +100,8 @@ export type AuditKind =
   | "org_payout.placed"
   | "org_payout.sent"
   | "org_payout.refused"
-  | "org_payout.unknown";
+  | "org_payout.unknown"
+  | "org_payout.cleared";
 
 export interface AuditEntry {
   id: string;
