@@ -334,7 +334,9 @@ function obClearDraft() {
 
 const obFullName = () => `${obDraft.given} ${obDraft.family}`.replace(/\s+/g, " ").trim();
 const obCompany = () => obDraft.legalName || user?.companyName || "the company";
-const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+/* The server's rule (src/domain/email.ts emailLooksValid): 254 characters at
+   most, no empty domain label, so the field refuses what signup would. */
+const EMAIL_RE = /^(?=.{1,254}$)[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$/;
 
 /* Every ISO 3166-1 alpha-2 country, not the ones we serve: which countries
    are served is the server's rule, and a filtered list is that rule shipped

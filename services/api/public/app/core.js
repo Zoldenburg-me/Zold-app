@@ -19,7 +19,6 @@ let sessionToken = localStorage.getItem("zold-session")
   // browser is not silently signed out.
   || localStorage.getItem("zoll-session")
   || null;
-let privacyCatalog = null;
 let recoveryInfo = null;
 let activeView = "dashboard";
 let txFilter = "all";

@@ -1,6 +1,6 @@
 /**
  * The account, the older phone screens app/phone.js has not replaced yet (the
- * card, the Privacy Bundle, settings), their routing, and converting a received
+ * card, settings), their routing, and converting a received
  * digital-dollar payment.
  */
 /* ---------- account ---------- */
@@ -35,7 +35,6 @@ function renderUser(u) {
   }
   renderFundingActions(u);
   renderFundCard();
-  renderPrivacyBundle();
   renderShellPages();
   renderMobile(u);
 }
@@ -45,7 +44,7 @@ function renderUser(u) {
    --------------------------------------------------------------------------
    Home, Activity, Send, Add money, Get paid, Contacts and More are
    app/phone.js. What stays here: the older screens it has not replaced yet
-   (the card, the Privacy Bundle, settings and what hangs off it) and their routing.
+   (the card, settings and what hangs off it) and their routing.
    ========================================================================== */
 
 function renderMobile(u = user) {
@@ -70,18 +69,12 @@ function mobileNav(target) {
 /** Routing of the older screens. `msub` names the sub-screen. */
 function mobileNavLegacy(target) {
   const shell = $("dashboard");
-  // There is no Plus tier: an old #plus link opens the bundle, and the bundle
-  // lands on Settings where it would be empty: the offer is off or the account
-  // may not subscribe yet, and it holds none.
-  if (target === "plus") target = "bundle";
-  if (target === "bundle" && !(caps.privacyBundle && kycApproved(user)) && !bundleSubscribed(user)) return phGo("settings", null, { replace: true });
-  const sub = { bundle: "bundle", payment: "payment", share: "share", card: "card",
+  const sub = { payment: "payment", share: "share", card: "card",
     monerium: "monerium", recovery: "recovery", documents: "documents", signers: "signers" }[target];
   if (!sub) return phGo("settings");
   shell.dataset.msub = sub;
   switchView("dashboard");
   if (sub === "payment") { $("m-subtitle").textContent = "Payment page"; renderHandle(user?.paymentPage); }
-  if (sub === "bundle") $("m-subtitle").textContent = "Privacy Bundle";
   if (sub === "card") renderCardScreen();
   if (sub === "share") renderShareScreen();
   if (sub === "monerium") renderMoneriumScreen();

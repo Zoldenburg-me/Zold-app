@@ -82,8 +82,8 @@ export async function checkConnection() {
 
 /** Look up the issued IBAN for an address, if any yet — on the user's own
  *  credentials when they have some, since that is where their IBAN lives.
- *  An IBAN that names a profile other than the user's connected one is not
- *  theirs, whatever address it pays. */
+ *  An IBAN that names a profile other than the user's connected one, or
+ *  names none, is not theirs, whatever address it pays. */
 export async function findIban(address: string, user?: User): Promise<string | undefined> {
   const res = await (user ? moneriumClientFor(user) : getClient()).ibans();
   return ownIbanIn(Array.isArray(res) ? res : (res?.ibans ?? []), address, user);
@@ -96,7 +96,7 @@ function ownIbanIn(list: any[], address: string, user?: User): string | undefine
     (i: any) =>
       paysInto(i, address) &&
       i.iban &&
-      !(profileId && typeof i.profile === "string" && i.profile !== profileId),
+      (!profileId || i.profile === profileId),
   );
   return hit?.iban;
 }
@@ -167,8 +167,17 @@ export async function applyIbanBinding(user0: User, ibans: any[]): Promise<User>
   });
 }
 
-/** When each user's IBAN was last re-read by verifyIbanBinding. */
+/** When each user's IBANs were last re-read for the account read. */
 const ibanCheckedAt = new Map<string, number>();
+
+/** True, and the clock started, when this user is due a re-read: at most once
+ *  per MONERIUM.ibanCheckMs per user. */
+function ibanCheckDue(userId: string): boolean {
+  const last = ibanCheckedAt.get(userId);
+  if (last !== undefined && Date.now() - last < MONERIUM.ibanCheckMs) return false;
+  ibanCheckedAt.set(userId, Date.now());
+  return true;
+}
 
 /**
  * Re-read the user's IBANs at Monerium on their own credentials and apply
@@ -177,9 +186,7 @@ const ibanCheckedAt = new Map<string, number>();
  */
 export async function verifyIbanBinding(user: User): Promise<User> {
   if (user.funding?.status !== "active" || !user.iban || !hasOwnMoneriumCredentials(user)) return user;
-  const last = ibanCheckedAt.get(user.id);
-  if (last !== undefined && Date.now() - last < MONERIUM.ibanCheckMs) return user;
-  ibanCheckedAt.set(user.id, Date.now());
+  if (!ibanCheckDue(user.id)) return user;
   let ibans: any[];
   try {
     ibans = ibanList(await moneriumClientFor(user).ibans());
@@ -321,6 +328,12 @@ export function pendingIbanElsewhere(user: User, ibans: any[]): User["moneriumIb
   };
 }
 
+/** refreshPendingIban for the account read the app polls every few seconds:
+ *  throttled like verifyIbanBinding. The poller checks every tick. */
+export async function refreshPendingIbanThrottled(user: User): Promise<User> {
+  return user.funding?.status === "iban_pending" && ibanCheckDue(user.id) ? await refreshPendingIban(user) : user;
+}
+
 /** Re-check a user whose IBAN was still pending. For an account Zold may not
  *  bank the poller does not finish an activation the routes refuse: the
  *  account stops waiting on an IBAN and says why. */
@@ -385,8 +398,10 @@ export async function refreshPendingIban(user: User): Promise<User> {
         });
       });
     }
-  } catch {
-    // transient — keep pending
+  } catch (err: any) {
+    // Kept pending, and said: a store error here would otherwise leave the
+    // account waiting on an IBAN with nothing in the log.
+    console.warn(`monerium: pending IBAN check for ${user.id} failed: ${moneriumFailureReason(err)}`);
   }
   return user;
 }
