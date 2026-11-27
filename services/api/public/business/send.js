@@ -144,10 +144,14 @@ function summary(form, accounts, contacts, approvers, net, rows) {
     <h2 class="zb-h3" style="margin-top:20px">What happens next</h2>${nextSteps(account, approvers, crypto)}`;
 }
 
-/** One picked payee of a bank payment: their amount and note. */
+/** One picked payee of a bank payment: their amount and note. `c` is the
+ *  contact as saved now: gone, or without an IBAN, when it changed while the
+ *  form was open, and the row says so until it is removed. */
 function payeeLine(c, r, i) {
+  const b = bankOf(c);
+  c = { id: r.contactId, name: c?.name || "A contact no longer saved" };
   return `<div class="zb-payee" data-line="${esc(c.id)}">
-    <div class="zb-payee__name"><span class="z-row__title">${esc(c.name)}</span><span class="z-row__sub z-mono">${esc(last4(bankOf(c).iban))}</span></div>
+    <div class="zb-payee__name"><span class="z-row__title">${esc(c.name)}</span><span class="z-row__sub z-mono">${b ? esc(last4(b.iban)) : "No IBAN saved: remove to save"}</span></div>
     <div><label for="pl-${i}-a">Amount in euros<span class="z-sr"> for ${esc(c.name)}</span></label><input id="pl-${i}-a" data-lf="amount" inputmode="decimal" autocomplete="off" placeholder="250.00…" value="${esc(r.amount)}" /></div>
     <div><label for="pl-${i}-n">Note <span class="desc">(for you; not sent to the bank)</span></label><input id="pl-${i}-n" data-lf="note" autocomplete="off" maxlength="140" placeholder="October timber…" value="${esc(r.note)}" /></div>
     <button type="button" class="z-iconbtn zb-payee__drop" data-drop="${esc(c.id)}" aria-label="Remove ${esc(c.name)}">${Z.icon("close")}</button></div>`;
@@ -250,7 +254,7 @@ RENDER.send = async () => {
         const list = box.querySelector("#send-lines");
         if (!list) return;
         list.innerHTML = rows.length
-          ? rows.map((r, i) => payeeLine(payable.find((c) => c.id === r.contactId), r, i)).join("")
+          ? rows.map((r, i) => payeeLine(contacts.find((c) => c.id === r.contactId), r, i)).join("")
           : '<p class="z-dim">Pick one or more contacts above.</p>';
         // Full: no more contacts can be picked until one is removed.
         const full = rows.length >= max;

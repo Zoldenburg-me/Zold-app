@@ -235,6 +235,20 @@ await check("New payment: Add a contact keeps the payees entered, and the form's
   picks[0].checked = true;
   on.change({ target: picks[0] });
   assert.deepEqual(lines(), [["c3", "7", ""], ["c1", "", ""]]);
+
+  // A payee who lost their IBAN while Add a contact was open is still in the
+  // form with what was typed, marked, and removable: never dropped unseen.
+  saved[1].bankAccounts = [];
+  sendState.rows = [{ contactId: "c1", amount: "80", note: "" }, { contactId: "c2", amount: "125", note: "rent" }];
+  (await RENDER.send()).bind(box);
+  assert.deepEqual(lines(), [["c1", "80", ""], ["c2", "125", "rent"], ["c3", "", ""]]);
+  assert.match(el["#send-lines"].innerHTML, /Weber[\s\S]*?No IBAN saved: remove to save/);
+  on.click({ target: { closest: () => ({ dataset: { drop: "c2" } }) } });
+  assert.deepEqual(lines(), [["c1", "80", ""], ["c3", "", ""]]);
+  // A New payment opened after that carries no payee from before; the contact
+  // added last is still ticked, with nothing typed (sendState.contactId).
+  (await RENDER.send()).bind(box);
+  assert.deepEqual(lines(), [["c3", "", ""]]);
   payees = [payeeRow("c1", "250")];
 });
 

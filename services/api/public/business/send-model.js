@@ -40,12 +40,14 @@ export function payeesTotal(rows) {
 
 /**
  * The payees a bank payment's form opens with: those carried across Add a
- * contact that can still be paid, then the contact picked before the form
- * opened, while there is room.
+ * contact, then the contact picked before the form opened, while there is
+ * room. A carried payee who can no longer be paid stays, with what was typed:
+ * bankLines refuses the payment until they are removed, so nobody drops out
+ * of it unseen.
  */
 export function openingRows(carried, picked, payable, max) {
   const can = (id) => payable.some((c) => c.id === id);
-  const rows = (carried || []).filter((r) => can(r.contactId)).slice(0, max);
+  const rows = (carried || []).slice(0, max);
   if (picked && can(picked.contactId) && rows.length < max && !rows.some((r) => r.contactId === picked.contactId)) rows.push(picked);
   return rows;
 }

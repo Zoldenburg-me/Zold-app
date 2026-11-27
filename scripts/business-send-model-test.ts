@@ -150,7 +150,10 @@ check("the form opens with the payees entered before Add a contact, then the new
   assert.deepEqual(m.openingRows(carried, row("c4", ""), payable, 10), carried, "a new contact saved without an IBAN is not a payee");
   assert.deepEqual(m.openingRows(carried, row("c3", ""), payable, 2), carried, "no room: the payees entered stay, the new one is not added");
   assert.deepEqual(m.openingRows(carried, row("c1", ""), payable, 10), carried, "never the same contact twice");
-  assert.deepEqual(m.openingRows([row("gone", "5"), row("c1", "80")], undefined, payable, 10), [row("c1", "80")], "a carried payee no longer payable is dropped");
+  const stale = m.openingRows([row("c4", "125", "rent"), row("c1", "80")], row("c2", ""), payable, 10);
+  assert.deepEqual(stale, [row("c4", "125", "rent"), row("c1", "80"), row("c2", "")], "a carried payee who lost their IBAN stays, with what was typed");
+  assert.match(m.bankLines(stale, contacts).error, /Name c4 has no IBAN saved/, "and the payment is not saved without them unseen");
+  assert.match(m.bankLines(m.openingRows([row("gone", "5"), row("c1", "80")], undefined, payable, 10), contacts).error, /no longer saved/);
   assert.deepEqual(m.openingRows([], row("c1", "250", "rent"), payable, 10), [row("c1", "250", "rent")], "a contact's Pay button");
   assert.deepEqual(m.openingRows([], undefined, payable, 10), []);
 });
