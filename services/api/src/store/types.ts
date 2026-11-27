@@ -691,7 +691,12 @@ export interface CryptoDeposit {
     nonce?: string;
     /** Who took gas in USDC, so a later settle does not count it as swap input. */
     paymaster?: string;
-    quote: { provider: string; rate: string; minOut: string };
+    quote: { provider: string; rate: string; minOut: string; expiresAt?: string };
+    /** A company Safe's conversion: the org Safe queue op its owners sign. */
+    safeOpId?: string;
+    /** That op's transaction once relayed: the scanner holds back its EURe
+     *  until settling names the output logs (companyConversionInFlight). */
+    txHash?: string;
   };
   creditedEur?: number;
   /** USDC the account holds from this deposit; cleared once converted

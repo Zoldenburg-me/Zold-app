@@ -27,6 +27,7 @@ import { createPaymentLinkRoutes } from "./business/payment-links.js";
 import { createOrgPaymentPageRoutes } from "./business/org-payment-page.js";
 import { createSafeOpRoutes } from "./business/safe-ops.js";
 import { createOrgSafeRoutes } from "./business/org-safe.js";
+import { createOrgCryptoDepositRoutes } from "./business/org-crypto-deposits.js";
 import { createOrgRecoveryRoutes } from "./business/org-recovery.js";
 import { createOrgMoneriumRoutes } from "./business/org-monerium.js";
 import { createOrgMoneriumIbanRoutes } from "./business/org-monerium-iban.js";
@@ -57,6 +58,7 @@ export function createBusinessRouter(
   r.use(createOrgPaymentPageRoutes(deps));
   r.use(createSafeOpRoutes(deps));
   r.use(createOrgSafeRoutes(deps));
+  r.use(createOrgCryptoDepositRoutes(deps));
   r.use(createOrgRecoveryRoutes(deps));
   r.use(createOrgMoneriumRoutes(deps));
   r.use(createOrgMoneriumIbanRoutes(deps));

@@ -137,7 +137,9 @@ async function finish(orgId: string, plan: OrgSafePlan, accountId: string, membe
     await store.setOrgSafePlan(orgId, { ...plan, status: "active" });
     await store.updateMember(memberId, { signerAddress: ownerAddressOfStored(plan.owners[0]) });
     const account = (await store.findAccount(accountId))!;
-    if (!account.address) await store.updateAccount(accountId, { address: plan.address });
+    // A Safe Zold deploys is the company's from when it was planned: money can
+    // reach the address before the deployment (domain/safe-books.ts).
+    if (!account.address) await store.updateAccount(accountId, { address: plan.address, backedSince: plan.createdAt });
     return (await store.findAccount(accountId))!;
   });
 }

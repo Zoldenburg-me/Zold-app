@@ -94,7 +94,7 @@ for (const p of ["anna", "otto", "adam", "pia"] as const) {
   await store.addMember({ id: `m_${p}`, orgId: "org_co", userId: `u_${p}`, email: "", role, status: "active", invitedAt: now, acceptedAt: now } as any);
 }
 await store.addMember({ id: "m_st", orgId: "org_st", userId: "u_anna", email: "", role: "owner", status: "active", invitedAt: now, acceptedAt: now } as any);
-await store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: hex(keys.anna.jwk.x!), y: hex(keys.anna.jwk.y!) }], createdAt: now } as any);
+await store.setOrgSafePlan("org_co", { kind: "org", status: "active", address: SAFE, owners: [{ x: hex(keys.anna.jwk.x!), y: hex(keys.anna.jwk.y!) }], createdAt: "2026-01-01T00:00:00.000Z" } as any); // planned before any payout below: the books start there
 await store.addAccount({
   id: "acc_co", orgId: "org_co", currency: "EUR", label: "EUR", status: "active", provider: null,
   identifier: { iban: IBAN }, address: SAFE,

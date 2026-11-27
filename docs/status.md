@@ -76,6 +76,13 @@ Say this plainly rather than letting the surface imply otherwise:
   intent left by a crash only in `convert-crash-test`. Automatic
   conversion with "ask me" off has never run. The receipt and disposal
   statement lines have not been reviewed by a Steuerberater.
+- **Converting USDC on a company's own Safe has never run on a chain.**
+  `POST /orgs/:orgId/crypto-deposits/:id/convert` queues the swap on the org
+  Safe queue and the owners sign it there; there is no auto-convert.
+  `org-crypto-in:test` plays the queue, the venue and the chain: no company
+  swap has been quoted by a venue, relayed, or measured from its logs, and
+  the settle after relay is the person's code (`settleUnconfirmedConversions`),
+  run for a company only up to "no receipt yet".
 - **The cash rail has never opened.** Bridge live mode is entirely unexercised,
   CCTP has never executed live, and the anchor-attribution half of the Stellar
   payout has never run — only the on-ledger payment half is proven (tx
