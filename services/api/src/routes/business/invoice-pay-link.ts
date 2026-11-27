@@ -60,6 +60,13 @@ export async function openLinkPath(invoice: Pick<Invoice, "id" | "orgId">): Prom
   return handle ? `/pay/${encodeURIComponent(handle)}/${displayCode(link.code)}` : undefined;
 }
 
+/** The owner's view of a link, under the address it opens at now: a company
+ *  link follows the company's current handle, as the payer side does. */
+export async function ownerLink(link: PaymentRequest, baseUrl: string) {
+  const handle = link.accountId ? (await companyPageHandle(link.userId, link.orgId, link.accountId)) : undefined;
+  return ownerPaymentRequest(handle ? { ...link, handle } : link, baseUrl);
+}
+
 /** The invoice had a link and it ran out: the page says so instead of the
  *  Pay button silently going missing. */
 export async function payLinkLapsed(invoice: Pick<Invoice, "id" | "orgId">): Promise<boolean> {
@@ -247,7 +254,7 @@ export async function payLinkForInvoice(ctx: OrgContext, invoice: Invoice, baseU
 async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: string): Promise<InvoicePayLink> {
   const existing = await openLinkFor(invoice);
   if (existing) {
-    return { ok: true, url: ownerPaymentRequest(existing, baseUrl).url, amountEur: existing.amountEur, reused: true };
+    return { ok: true, url: (await ownerLink(existing, baseUrl)).url, amountEur: existing.amountEur, reused: true };
   }
   const user = await store.findUser(ctx.userId);
   if (!user) return { ok: false, code: "NO_USER", reason: "Your session has no account behind it." };
@@ -256,7 +263,7 @@ async function payLinkUnlocked(ctx: OrgContext, invoice: Invoice, baseUrl: strin
   const methods = await linkMethodsFor(ctx.org, found, user);
   const input = validateCreate({ invoiceId: invoice.id, methods, expiresAt: linkExpiry(invoice.dueDate) }, linkSubject(found));
   const link = await createLink(found, user, input, ctx.org.id);
-  return { ok: true, url: ownerPaymentRequest(link, baseUrl).url, amountEur: link.amountEur, reused: false };
+  return { ok: true, url: (await ownerLink(link, baseUrl)).url, amountEur: link.amountEur, reused: false };
 }
 
 /** What validateCreate judges methods against: the payee, or the company account's IBAN. */
