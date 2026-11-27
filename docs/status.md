@@ -335,8 +335,10 @@ Say this plainly rather than letting the surface imply otherwise:
 - **No corrected invoice has been issued outside the test suite.** `POST
   /api/orgs/:org/invoices/:id/correct` (routes/business/invoicing.ts) has run
   only in `scripts/invoice-correction-test.ts`: no customer has received one,
-  no tax adviser has read the printed reference, and no payment has yet
-  settled a correction through a replaced invoice's number or deposit.
+  no tax adviser has read the printed reference or judged which recipient
+  changes a correction may carry, no payment has yet settled a correction
+  through a replaced invoice's number or deposit, and the editor's
+  correction mode (public/business/invoice.js) has not been clicked through.
 - **Invoices made from wallet receipts have run only against local hardhat**
   (2026-10-03: a payer rule saved, one EURe receipt of €300.00 collected into
   a draft, two unlisted-token receipts listed as not included, and the draft

@@ -103,10 +103,29 @@ function drawSuggestion(sug) {
 const plusDays = (ymdStr, n) => { const d = new Date(`${ymdStr}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 
 META["invoice-new"] = () => ({
-  title: "New invoice",
+  title: invoiceDraft?._correcting ? `Correct invoice ${invoiceDraft._correcting.number}` : "New invoice",
   sub: "The preview follows the invoice’s language, not the app’s.",
   actions: "",
 });
+
+/** The editor's draft for a correction of `i` (ownerInvoiceView): what it
+ *  printed, to edit. The VAT treatment, currency and total stay the
+ *  original's (POST …/correct), so the editor does not offer them. */
+export function correctionDraft(i) {
+  const d = i.issued;
+  return {
+    _correcting: { id: i.id, number: d.number },
+    issueDate: today(),
+    recipient: { ...d.recipient, isBusiness: d.recipientIsBusiness === true },
+    lines: i.lines.map((l) => ({ description: l.description, quantity: String(l.quantity), unitPriceNet: String(l.unitPrice) })),
+    language: d.language || "en",
+    supplyKind: d.supplyKind || "services",
+    supplyDate: d.supplyDate || "",
+    purchaseOrder: d.purchaseOrder || "",
+    currency: d.currency || "EUR",
+    vat: d.vatTreatment.kind === "standard" ? { kind: "standard", rate: d.vatTreatment.rate } : { kind: "exempt", reason: d.vatTreatment.reason, note: d.vatTreatment.note },
+  };
+}
 
 RENDER["invoice-new"] = async () => {
   const [d, { contacts }] = await Promise.all([
@@ -155,10 +174,12 @@ RENDER["invoice-new"] = async () => {
   const de = d.jurisdiction.ruleSet === "DE";
   const currency = invoiceDraft.currency || "EUR";
   const picked = reasons.find((x) => x.id === v.reason);
+  const fixing = invoiceDraft._correcting;
   const f = (id, label, value, extra = "") => `<div><label for="${id}">${label}</label><input id="${id}" name="${id}" autocomplete="off" value="${esc(value ?? "")}" ${extra} /></div>`;
 
   const html = `<div class="zb-editor">
     <form class="zb-editor__form" id="inv-form" novalidate data-z-nosubmit>
+      ${fixing ? `<div class="zb-note" style="margin-bottom:6px">${Z.icon("info")}<span>Change what was wrong: the customer’s name, address or VAT ID, the descriptions, the service date. It gets the next number and today’s date, says it replaces ${esc(fixing.number)}, and carries your business details as they are now. The total and the VAT stay as they were; to change those, issue a new invoice.</span></div>` : ""}
       ${missing.length ? `<div class="zb-note zb-note--a" style="margin-bottom:6px">${Z.icon("badge")}<span>Your business profile is missing ${esc(missing.join(" and "))}. Add it once and it goes on every invoice. <a href="?view=organisation" data-view-link="organisation">Business profile</a></span></div>` : ""}
       <div class="zb-row zb-row--2">
         <div><label for="inv-r-name">Customer</label><input id="inv-r-name" name="customer" autocomplete="off" value="${esc(r.name || "")}" placeholder="Customer or company name…" list="inv-contacts" /></div>
@@ -178,9 +199,9 @@ RENDER["invoice-new"] = async () => {
         ${f("inv-r-city", "City", r.city)}
       </div>
       <div class="zb-row zb-row--3">
-        ${f("inv-issue", "Invoice date", invoiceDraft.issueDate || today(), 'type="date"')}
+        ${fixing ? "" : f("inv-issue", "Invoice date", invoiceDraft.issueDate || today(), 'type="date"')}
         ${f("inv-supply", "Service date", invoiceDraft.supplyDate || today(), 'type="date"')}
-        ${f("inv-due", "Due", invoiceDraft.dueDate || "", 'type="date"')}
+        ${fixing ? "" : f("inv-due", "Due", invoiceDraft.dueDate || "", 'type="date"')}
       </div>
       <fieldset><legend>Lines</legend>
         <div id="inv-lines">${invoiceDraft.lines.map((l, i) => `<div class="zb-row zb-row--line">
@@ -191,7 +212,7 @@ RENDER["invoice-new"] = async () => {
         </div>`).join("")}</div>
         <button type="button" class="z-link-btn" data-act="inv-add-line" style="margin-top:10px">${Z.icon("add")}Add line</button>
       </fieldset>
-      <fieldset><legend>VAT</legend>
+      ${fixing ? "" : `<fieldset><legend>VAT</legend>
         <div class="zb-seg" role="group" aria-label="What you are invoicing" style="margin-bottom:10px">
           <button type="button" class="zb-pill" data-act="inv-supply" data-kind="services" aria-current="${invoiceDraft.supplyKind !== "goods"}">Services</button>
           <button type="button" class="zb-pill" data-act="inv-supply" data-kind="goods" aria-current="${invoiceDraft.supplyKind === "goods"}">Goods</button>
@@ -209,18 +230,18 @@ RENDER["invoice-new"] = async () => {
              <select id="inv-reason" name="reason">${picked ? "" : `<option value="" selected disabled>Choose a reason…</option>`}${reasons.map((x) => `<option value="${esc(x.id)}" ${v.reason === x.id ? "selected" : ""}>${esc(x.label)}${x.legalBasis ? `: ${esc(x.legalBasis)}` : ""}</option>`).join("")}</select>
              <p class="zb-hint" style="margin-top:6px">${esc(picked?.hint || "")}</p>
              ${picked?.requiresFreeText ? `<label for="inv-note">Note printed on the invoice</label><input id="inv-note" name="note" autocomplete="off" value="${esc(v.note || "")}" placeholder="${de ? "Steuerfrei nach § 4 Nr. … UStG" : "Why no tax is charged, and the law it rests on"}…" />` : ""}`}
-      </fieldset>
+      </fieldset>`}
       <details class="zb-more" style="margin-top:16px"${currency === "EUR" ? "" : " open"}><summary style="cursor:pointer;font-weight:600">More: currency, order number</summary>
         <div class="zb-row zb-row--2">
           ${f("inv-po", "Order number", invoiceDraft.purchaseOrder)}
         </div>
-        ${f("inv-currency", "Currency", currency, 'maxlength="3" style="max-width:120px;text-transform:uppercase"')}
-        <p class="zb-hint" style="margin-top:6px">Any currency with a published exchange rate. The Pay link and bank details ask for the euro amount, at the rate on the day it’s issued; the rate is printed on the invoice.</p>
+        ${fixing ? "" : `${f("inv-currency", "Currency", currency, 'maxlength="3" style="max-width:120px;text-transform:uppercase"')}
+        <p class="zb-hint" style="margin-top:6px">Any currency with a published exchange rate. The Pay link and bank details ask for the euro amount, at the rate on the day it’s issued; the rate is printed on the invoice.</p>`}
       </details>
       <div id="inv-check" class="zb-issues" aria-live="polite"></div>
       <div class="zb-actions">
-        <button type="button" class="z-btn z-btn--secondary" data-act="inv-save">Save draft</button>
-        <button type="button" class="z-btn z-btn--primary" data-act="inv-issue">${Z.icon("ios_share")}<span>Create and share</span></button>
+        ${fixing ? "" : `<button type="button" class="z-btn z-btn--secondary" data-act="inv-save">Save draft</button>`}
+        <button type="button" class="z-btn z-btn--primary" data-act="inv-issue">${Z.icon("ios_share")}<span>${fixing ? "Issue corrected invoice" : "Create and share"}</span></button>
         <button type="button" class="z-link-btn" data-act="inv-cancel">Cancel</button>
       </div>
       <p class="zb-hint" style="margin-top:12px">You get one link to send: it opens the invoice, with a Pay button when your account can take payments. Zold doesn’t send emails. A saved draft stays in this browser.</p>
@@ -245,15 +266,17 @@ export function readInvoiceEditor() {
     isBusiness,
   };
   invoiceDraft.language = val("inv-lang") || "en";
-  invoiceDraft.issueDate = val("inv-issue");
+  invoiceDraft.issueDate = val("inv-issue") || invoiceDraft.issueDate;
   invoiceDraft.supplyDate = val("inv-supply");
   invoiceDraft.dueDate = val("inv-due") || undefined;
   invoiceDraft.purchaseOrder = val("inv-po");
-  invoiceDraft.currency = val("inv-currency").toUpperCase() || "EUR";
+  if ($("#inv-currency")) invoiceDraft.currency = val("inv-currency").toUpperCase() || "EUR";
   $("#inv-lines")?.querySelectorAll("input").forEach((el) => {
     // A decimal comma ("980,00") in a number; the description keeps its own.
     invoiceDraft.lines[Number(el.dataset.li)][el.dataset.lf] = el.dataset.lf === "description" ? el.value : el.value.trim().replace(",", ".");
   });
+  // A correction keeps the original's treatment, and the editor shows no VAT field.
+  if (invoiceDraft._correcting) return;
   if (invoiceDraft.vat.kind === "standard") {
     // No silent default: a missing rate is refused by the check, never
     // quietly read as Germany's 19.

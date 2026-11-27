@@ -317,10 +317,12 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
 
   /**
    * Issue a correction of an issued invoice (§ 31 Abs. 5 UStDV): a new number
-   * printing "corrects invoice N of date", with the issuer's details as the
-   * profile has them now, in place of the original. The original is kept as
-   * REPLACED, never deleted; its payments move with it and its open link is
-   * cancelled. The amount cannot change here.
+   * printing "corrects invoice N of date", in place of the original. The body
+   * may change the customer's details, the lines' wording and split, the
+   * service date, order number, terms and notes (correctionBody); the issuer's
+   * details are the profile's now. The original is kept as REPLACED, never
+   * deleted; its payments and open link move to the correction. The amount
+   * and VAT treatment cannot change here.
    */
   r.post("/:orgId/invoices/:invoiceId/correct", wrap(async (req, res) => {
     const ctx = await ctxOf(req, res);
@@ -338,7 +340,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
           : "Only an open or paid invoice you issued can be corrected here.",
       });
     }
-    const answer = await issueOutgoing(ctx, correctionBody(original, req.body?.acceptWarnings === true), undefined, undefined, original);
+    const answer = await issueOutgoing(ctx, correctionBody(original, req.body && typeof req.body === "object" ? req.body : {}), undefined, undefined, original);
     const issuedId = answer.status === 201 ? (answer.body.invoice as { id?: string } | undefined)?.id : undefined;
     const issued = issuedId ? (await store.findInvoice(issuedId)) : undefined;
     if (!issued) return res.status(answer.status).json(answer.body);

@@ -103,10 +103,10 @@ await check("an invoice issued with 'USt-IdNr. beantragt' has its pay link", asy
   first = r.data;
 });
 
-await check("no correction while the VAT ID is still a note: nothing changes", async () => {
-  const r = await correct(first.invoice.id);
-  assert.equal(r.status, 422, JSON.stringify(r.data));
-  assert.match(r.data.error, /VAT ID itself/);
+await check("a correction still carrying the VAT ID note asks for its warnings first: nothing changes", async () => {
+  const r = await correct(first.invoice.id, "u_owner", {});
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.ok(r.data.warnings.some((w: any) => w.field === "issuer.vatId"), JSON.stringify(r.data.warnings));
   assert.equal((await store.findInvoice(first.invoice.id))!.state, "SUBMITTED");
   assert.equal((await links(first.invoice.id))[0].state, "OPEN");
 });
@@ -259,6 +259,27 @@ await check("a part-paid invoice whose link lapsed gets no new full-amount link"
   assert.equal(fixed.data.invoice.settlements.length, 1, "the 40 carries over");
   assert.equal(fixed.data.payment, undefined);
   assert.equal((await store.list("paymentRequests")).length, before);
+});
+
+await check("the customer's details and the lines' wording can be corrected; the total cannot", async () => {
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
+  const changedTotal = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, lines: [{ description: "Consulting", quantity: "3", unitPriceNet: "50.00" }] });
+  assert.equal(changedTotal.status, 422, JSON.stringify(changedTotal.data));
+  assert.equal((await store.findInvoice(r.data.invoice.id))!.state, "SUBMITTED");
+  const fixed = await correct(r.data.invoice.id, "u_owner", {
+    acceptWarnings: true,
+    recipient: { ...reverseCharge.recipient, name: "Kund Sverige AB", addressLine: "Nya gatan 7" },
+    lines: [{ description: "Consulting, May", quantity: "1", unitPriceNet: "60.00" }, { description: "Travel", quantity: "1", unitPriceNet: "40.00" }],
+    // Not correctable: the treatment stays the original's.
+    vat: { kind: "standard", rate: 19 },
+  });
+  assert.equal(fixed.status, 201, JSON.stringify(fixed.data));
+  const c = fixed.data.invoice;
+  assert.equal(c.issued.recipient.name, "Kund Sverige AB");
+  assert.equal(c.issued.recipient.addressLine, "Nya gatan 7");
+  assert.deepEqual(c.lines.map((l: any) => l.description), ["Consulting, May", "Travel"]);
+  assert.equal(c.issued.vatTreatment.kind, "exempt");
+  assert.equal(c.issued.grossCents, r.data.invoice.issued.grossCents);
 });
 
 await check("an amount that no longer matches is refused, not issued", async () => {

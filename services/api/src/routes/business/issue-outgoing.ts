@@ -11,8 +11,8 @@
  * the request says: the receipts are in the past, the invoice is not.
  *
  * A correction (§ 31 Abs. 5 UStDV) is issued here too: the next number of
- * today's series, the original's customer, lines, treatment and euro figures,
- * today's issuer details, and a printed reference to the original's number
+ * today's series, the original's treatment, total and euro figures, the
+ * customer and lines as edited (correctionBody), today's issuer details, and a printed reference to the original's number
  * and date. The original moves to REPLACED in the same transaction, with its
  * payments carried over and its open payment link handed to the correction.
  */
@@ -123,14 +123,14 @@ export async function issueOutgoing(
     );
   }
   if (correcting) {
-    // The point of the correction is the number the original lacked: a note
-    // in its place again would need a correction of its own.
-    if (report.warnings.some((w) => w.field === "issuer.vatId")) {
-      return refusal(422, "A corrected invoice prints your VAT ID itself. Enter the number you were given in the business profile, then correct the invoice. Nothing was issued.", { ...report });
-    }
     // Same amount, so the payments carry over as they are. A different amount
-    // is a cancellation and a new invoice, which this does not do.
+    // is a cancellation and a new invoice, which this does not do. Both the
+    // printed total and the euro one: the conversion is the original's, so
+    // edited lines in another currency would otherwise pass on its euros.
     const euroCents = draft.conversion?.grossCents ?? report.totals.grossCents;
+    if (report.totals.grossCents !== correcting.issued!.grossCents) {
+      return refusal(422, `The corrected invoice would total ${fromCents(report.totals.grossCents)} ${draft.currency ?? SETTLEMENT_CURRENCY}, not the original's ${fromCents(correcting.issued!.grossCents)}. Change what is billed with a new invoice; a correction keeps the amount. Nothing was issued.`);
+    }
     if (euroCents !== Math.round((payableEur(correcting) ?? NaN) * 100)) {
       return refusal(422, `The corrected invoice would total ${fromCents(euroCents)} EUR, not the original's ${fromCents(Math.round((payableEur(correcting) ?? 0) * 100))} EUR. Nothing was issued.`);
     }
@@ -350,11 +350,18 @@ async function issueDraft(draft: Invoice, document: Partial<Invoice>, linkTokenH
 export const correctable = (i: Invoice) =>
   i.direction === "outgoing" && !!i.issued && !i.replacedBy && (i.state === "SUBMITTED" || i.state === "PAID");
 
+/** What a correction may change, taken from the request; anything left out
+ *  stays as the original printed it. The VAT treatment and currency are
+ *  never taken: changing what tax is shown is a cancellation (§ 14c UStG),
+ *  and the amount is checked to be the original's. The issuer's details come
+ *  from today's profile. */
+const CORRECTABLE = ["recipient", "lines", "supplyKind", "supplyDate", "supplyPeriod", "language", "purchaseOrder", "paymentTerms", "notes"] as const;
+
 /** The request a correction is issued from: the original's own document,
- *  so only the issuer's details (read from today's profile) can differ. */
-export function correctionBody(original: Invoice, acceptWarnings: boolean): Record<string, unknown> {
+ *  with the edits the request carries (CORRECTABLE). */
+export function correctionBody(original: Invoice, edits: Record<string, unknown> = {}): Record<string, unknown> {
   const d = original.issued!;
-  return {
+  const base: Record<string, unknown> = {
     recipient: { ...d.recipient, ...(d.recipientIsBusiness !== undefined ? { isBusiness: d.recipientIsBusiness } : {}) },
     ...(d.supplyKind ? { supplyKind: d.supplyKind } : {}),
     supplyDate: d.supplyDate,
@@ -374,6 +381,7 @@ export function correctionBody(original: Invoice, acceptWarnings: boolean): Reco
     // The original's terms as printed; none stays none, not the profile's.
     paymentTerms: d.paymentTerms,
     notes: d.notes,
-    acceptWarnings,
   };
+  for (const k of CORRECTABLE) if (edits[k] !== undefined) base[k] = edits[k];
+  return { ...base, acceptWarnings: edits.acceptWarnings === true };
 }
