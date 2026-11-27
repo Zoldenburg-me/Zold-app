@@ -369,6 +369,8 @@ export interface CompanyBankPayout {
    *  company bank run (routes/business/org-monerium-bank-runs.ts). */
   draftId?: string;
   lineId?: string;
+  /** The invoice that run line pays, if any: the statement line links it. */
+  invoiceId?: string;
   /** Monerium answered the order with a 2xx but no usable id: it holds an
    *  order Zold cannot follow, so the row is never cleared by hand. */
   acceptedWithoutId?: true;

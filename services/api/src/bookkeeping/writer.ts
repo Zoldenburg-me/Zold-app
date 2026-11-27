@@ -258,7 +258,8 @@ export async function writeCompanyPayoutLines(account: Account, payouts: Company
       deposits: [],
       issueOrders: [],
       sweeps: [],
-      invoices: [],
+      // The invoices too: a line's invoice link would otherwise be dropped.
+      invoices: await storeRows.invoicesOf(account.orgId),
       paymentRequests: [],
       cryptoSends: [],
       companyPayouts: payouts,
