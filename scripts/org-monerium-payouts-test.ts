@@ -728,7 +728,7 @@ try {
     assert.equal(row.clearable, true, "the API marked it: an owner may clear it");
     assert.equal(model.payoutRows([{ id: "p2", amountEur: 1, recipientName: "B", recipientIban: OTHER_IBAN, state: "unknown", createdAt: now }])[0].clearable, false, "only a row the API marks is offered a clear");
     assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true, true).text, /pay a bank account from it below/);
-    assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /not built yet/);
+    assert.match(model.ibanPanel({ companyIban: { state: "issued", iban: IBAN } }, true).text, /switched off on this deployment/);
   });
 } finally {
   server.close();

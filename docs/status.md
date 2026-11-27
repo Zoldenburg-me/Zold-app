@@ -154,9 +154,13 @@ Say this plainly rather than letting the surface imply otherwise:
   the company's statement only once Monerium reports it processed. A payout
   Monerium did not confirm stays "unclear" and holds its euros until Monerium
   reports it or, with no order id, an owner clears it after checking Monerium
-  (audited); nothing clears one automatically. A payment
-  run with bank payees, even one, is still refused for a company with
-  `COMPANY_BANK_RUN_NOT_BUILT`.
+  (audited); nothing clears one automatically.
+  A company payment run of bank payees (at most 10) is the same redeem, once
+  per line (`routes/business/org-monerium-bank-runs.ts`, stubs only:
+  `org-monerium-bank-runs:test`). The owner's passkey signs every line before
+  any is sent; the lines then go one at a time and the run stops at the first
+  Monerium does not accept. Lines already accepted stay accepted, so a run is
+  not all-or-nothing (Q9): the draft reads FAILED with each line's state.
   The check gates sending only: invoices and pay links still receive into
   an account whose profile has not been checked.
 - **The VIES lookup of a customer's VAT ID** (`adapters/vies.ts`) has run
