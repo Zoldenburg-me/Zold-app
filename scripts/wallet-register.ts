@@ -31,6 +31,7 @@ export const WALLET_SETTINGS: { names: string[]; kind: "address" | "key" }[] = [
   { names: ["ORCHESTRATOR_KEY", "DEPLOY_ORCHESTRATOR_KEY"], kind: "key" },
   { names: ["RAMP_KEY", "DEPLOY_RAMP_KEY"], kind: "key" },
   { names: ["RELAY_KEY"], kind: "key" },
+  { names: ["DOCUMENT_SIGNING_KEY"], kind: "key" },
   { names: ["DEPLOYER_KEY", "DEPLOY_DEPLOYER_KEY"], kind: "key" },
   { names: ["ENS_GATEWAY_KEY"], kind: "key" },
   { names: ["FAUCET_KEY"], kind: "key" },

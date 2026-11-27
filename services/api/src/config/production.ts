@@ -118,6 +118,16 @@ function checkDataKeys(fail: Fail) {
   }
 }
 
+/** Account documents are signed with their own key; the orchestrator key
+ *  moves money and must not double as the attestation key (documents.ts). */
+function checkDocumentKey(fail: Fail) {
+  const key = (process.env.DOCUMENT_SIGNING_KEY ?? "").trim();
+  if (!key) return fail("DOCUMENT_SIGNING_KEY is required in production: account documents are signed with it");
+  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) return fail("DOCUMENT_SIGNING_KEY is not a 32-byte hex private key");
+  const orchestrator = (process.env.ORCHESTRATOR_KEY ?? "").trim().toLowerCase();
+  if (orchestrator && key.toLowerCase() === orchestrator) fail("DOCUMENT_SIGNING_KEY must not be the orchestrator key");
+}
+
 function checkBridge(fail: Fail) {
   if (!BRIDGE.live) return;
   if (!BRIDGE.apiKey) fail("BRIDGE_API_KEY is required when BRIDGE_LIVE=1");
@@ -198,7 +208,7 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail: Fail = (message) => problems.push(message);
-  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkDataKeys, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
+  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkDataKeys, checkDocumentKey, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
     check(fail);
   }
   if (problems.length) {

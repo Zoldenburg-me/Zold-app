@@ -39,6 +39,7 @@ key lives, and its backup, is in the owner's private notes.
 | Orchestrator: receives fees, submits payout steps | `ORCHESTRATOR_KEY` / `DEPLOY_ORCHESTRATOR_KEY` | server | both |
 | Ramp | `RAMP_KEY` / `DEPLOY_RAMP_KEY` | server | both |
 | Relay: pays gas for calls anyone may make, holds nothing else | `RELAY_KEY` | server | both |
+| Document signer: signs account documents (EIP-191), holds nothing. Each document stores its signer, so a new key leaves older documents verifying; on Base mainnet those issued before 2026-11-28 name the orchestrator | `DOCUMENT_SIGNING_KEY` | server; production refuses to start without it, or with the orchestrator key | Base mainnet; off production the orchestrator key stands in |
 | ENS gateway signer | `ENS_GATEWAY_KEY` | server | where ENS is on |
 | Testnet faucet and zUSD owner ("the vanity account") | `FAUCET_KEY` | server; refused on a real-money chain | Base Sepolia |
 | Contract deployer and admin | `DEPLOYER_KEY` / `DEPLOY_DEPLOYER_KEY` | owner; the deploy machine, never the server off the local chain | where we deploy contracts |
