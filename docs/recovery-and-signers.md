@@ -67,6 +67,13 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   Shell: air-gapped, QR only, held in MetaMask/Rabby as a QR account), either in
   Safe Cover (Candide's open-source recovery UI; not on Base Sepolia) or in
   /admin → Recoveries via eth_signTypedData_v4 with the relay key (`RELAY_KEY`) paying the gas.
+  On Base mainnet, from the Oracle cut-over, the guardian is a Safe whose
+  only signer is that hardware wallet (`0x222222222211B5eB5be634822404F66f1A3adB00`,
+  `wallets.json`). /admin checks a 65-byte ECDSA signature and refuses
+  a contract guardian, so every mainnet recovery is confirmed from the Safe
+  in Safe Cover, outside the console's gate: the operator checks the ID and
+  bank steps below by hand before signing. The same Safe is the Candide
+  custodial withdrawer.
   **The API never holds the guardian key**, recomputes the digest from the
   module before accepting a signature, and moves a request only on what the
   chain shows. Zoldenburg alone can START a takeover of an opted-in Safe; the
