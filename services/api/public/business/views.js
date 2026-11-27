@@ -11,7 +11,7 @@
  * what exists. Every renderer reads the live `org` from core.js.
  */
 import { isOwnCompanyOrg } from "./access-model.js";
-import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, mayPayInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd } from "./core.js";
+import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, mayPayInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd, zipMode } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -218,15 +218,15 @@ RENDER.assets = async () => {
   const lotRow = (l) => `<tr>
       <td class="z-dim">${esc(day(l.acquiredAt))}</td>
       <td>${esc(walletName[l.walletId] || l.walletId || "Account")}${l.walletProofState && l.walletProofState !== "proven" ? ` ${Z.tag(PROOF_WORD[l.walletProofState] || l.walletProofState, "amber")}` : ""}</td>
-      <td class="z-tbl__num">${esc(l.quantity)}</td><td class="z-tbl__num">${esc(l.remaining)}</td>
-      <td class="z-tbl__num">${l.costCents === undefined ? "no value" : cents(l.costCents)}</td>
+      <td class="z-tbl__num" data-label="Quantity">${esc(l.quantity)}</td><td class="z-tbl__num" data-label="Left">${esc(l.remaining)}</td>
+      <td class="z-tbl__num" data-label="Cost">${l.costCents === undefined ? "no value" : cents(l.costCents)}</td>
       <td class="z-mono z-dim" translate="no">${esc(shortHex(l.txHash))}</td></tr>`;
   const positionsHtml = d.positions.length
     ? d.positions.map((p) => `<section class="z-card" style="margin-bottom:12px" aria-label="${esc(p.asset)}">
         <div class="z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Token</th><th scope="col" class="z-tbl__num">Held</th><th scope="col" class="z-tbl__num">Cost of what is held</th><th scope="col" class="z-tbl__num">Realised to date</th></tr></thead><tbody><tr>
-          <td>${holdingCell(p)}</td><td class="z-tbl__num">${esc(p.quantity)}</td>
-          <td class="z-tbl__num">${cents(p.costBasisCents)}${p.uncostedQuantity !== "0" ? `<span class="zb-sub2">and ${esc(p.uncostedQuantity)} with no known cost</span>` : ""}</td>
-          <td class="z-tbl__num">${signedCents(p.realisedCents)}${p.unmeasured ? `<span class="zb-sub2">${p.unmeasured} sale${p.unmeasured === 1 ? "" : "s"} not measurable</span>` : ""}</td></tr></tbody></table></div>
+          <td>${holdingCell(p)}</td><td class="z-tbl__num" data-label="Held">${esc(p.quantity)}</td>
+          <td class="z-tbl__num" data-label="Cost of what is held">${cents(p.costBasisCents)}${p.uncostedQuantity !== "0" ? `<span class="zb-sub2">and ${esc(p.uncostedQuantity)} with no known cost</span>` : ""}</td>
+          <td class="z-tbl__num" data-label="Realised to date">${signedCents(p.realisedCents)}${p.unmeasured ? `<span class="zb-sub2">${p.unmeasured} sale${p.unmeasured === 1 ? "" : "s"} not measurable</span>` : ""}</td></tr></tbody></table></div>
         <details style="padding:0 16px 12px"><summary>${p.lots.length} lot${p.lots.length === 1 ? "" : "s"}</summary>
           <div class="z-tbl-wrap"><table class="z-tbl"><thead><tr><th scope="col">Acquired</th><th scope="col">Wallet</th><th scope="col" class="z-tbl__num">Quantity</th><th scope="col" class="z-tbl__num">Left</th><th scope="col" class="z-tbl__num">Cost</th><th scope="col">Transaction</th></tr></thead><tbody>${p.lots.map(lotRow).join("")}</tbody></table></div></details>
       </section>`).join("")
@@ -506,7 +506,7 @@ RENDER.organisation = async () => {
       <label for="s-addr2" class="z-sr">Address line 2</label>
       <input id="s-addr2" name="address-line2" autocomplete="address-line2" value="${esc(org.address?.line2 || "")}" placeholder="Address line 2 (optional)…" style="margin-top:8px" />
       <div class="zb-addr3">
-        <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
+        <div><label for="s-zip">Postcode</label><input id="s-zip" name="postal-code" autocomplete="postal-code" inputmode="${zipMode(org.address?.country)}" spellcheck="false" value="${esc(org.address?.postalCode || "")}" /></div>
         <div><label for="s-city">City</label><input id="s-city" name="city" autocomplete="address-level2" value="${esc(org.address?.city || "")}" /></div>
         <div><label for="s-country">Country</label>${countrySelect("s-country", org.address?.country)}</div>
       </div>
@@ -520,14 +520,29 @@ RENDER.organisation = async () => {
           <input id="s-tz" name="timezone" list="z-tz" autocomplete="off" value="${esc(org.reporting.timeZone)}" />
           <datalist id="z-tz">${(Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []).map((z) => `<option value="${esc(z)}"></option>`).join("")}</datalist></div>
       </div>
+      <div class="zb-actions">${primary("Save", 'data-act="save-org"')}</div>
     </form>`,
   // The field names follow the country as it is picked; what was typed stays.
-  bind: () => $("#s-country")?.addEventListener("change", (e) => {
+  bind: () => {
+    // Typed and not saved: a reload (a pull down on a phone) asks first.
+    $("#org-form")?.addEventListener("input", (e) => { e.currentTarget.dataset.dirty = "1"; });
+    $("#s-country")?.addEventListener("change", (e) => {
+    $("#s-zip").inputMode = zipMode(e.target.value);
     const typed = Object.fromEntries(["s-vatid", "s-taxno", "s-court", "s-reg", "s-gf"].map((id) => [id, $("#" + id)?.value ?? ""]));
     $("#s-issuer").outerHTML = issuerFieldsHtml(e.target.value);
     for (const [id, v] of Object.entries(typed)) $("#" + id).value = v;
-  }) };
+    });
+  } };
 };
+window.addEventListener("beforeunload", (e) => { if ($("#org-form")?.dataset.dirty) e.preventDefault(); });
+// A tap on another screen never leaves the document, so it asks here, before the link's own handler.
+// shortcut: Back and search results are not asked, keep the typed profile across views if that loses work.
+document.addEventListener("click", (e) => {
+  // A modifier-click opens a tab and the form stays.
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (e.target.closest?.("a[data-view], a[data-view-link]") && $("#org-form")?.dataset.dirty
+    && !confirm("Leave without saving your changes?")) { e.preventDefault(); e.stopPropagation(); }
+}, true);
 
 /* ==========================================================================
    The invoicing profile

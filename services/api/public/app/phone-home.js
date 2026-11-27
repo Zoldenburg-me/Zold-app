@@ -50,7 +50,7 @@ function phChecklist(u) {
       : []),
     // Decides what the account may hold: until then it has its key and nothing else.
     ...(residenceAsked(u)
-      ? [{ title: "Where you live", sub: "Two questions. Needed before money comes in.", done: false, action: { id: "ph-ck-residence", label: "Answer" } }]
+      ? [{ title: "Where you live", sub: "A few questions. Needed before money comes in.", done: false, action: { id: "ph-ck-residence", label: "Answer" } }]
       : []),
     // A wallet account has no bank step: the checklist ends at the account.
     ...(bankOffered(u) ? [

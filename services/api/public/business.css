@@ -24,6 +24,9 @@ input, select, textarea {
   border: 1px solid var(--z-line-strong); background: var(--z-field); color: var(--z-text);
   font: 400 16px/1.3 var(--z-font);
 }
+/* iOS gives a date input an intrinsic width that pushes it out of a narrow column. */
+input[type="date"] { -webkit-appearance: none; appearance: none; min-width: 0; max-width: 100%; }
+input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 textarea { min-height: 88px; padding: 12px 14px; resize: vertical; }
 select { padding-right: 36px; }
 input::placeholder, textarea::placeholder { color: var(--z-dim); }
@@ -53,7 +56,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 #sea-far { filter: blur(3px); }
 .has-sea .zb { position: relative; z-index: 1; }
 /* a phone has no room to keep the middle clear, so the narwhals swim behind the text, dimmed */
-@media (max-width: 759px) { .zb-sea { opacity: .32; } }
+@media (max-width: 759px) { .zb-sea { opacity: .32; } .has-sea :is(.zb-h-chip, .zb-h-cmd__chip) { background-color: var(--z-bg); } }
 @media print { .zb-sea { display: none !important; } }
 /* The sidebar's lower part. A plain part of the sidebar on a desktop; on a
    phone it is what Menu opens. */
@@ -107,7 +110,8 @@ a.zb-topchip[aria-current="page"] { border-color: var(--z-pink-border); }
    the main stops are a tab bar at the bottom as in the app, and Menu opens
    everything else as a full-screen panel. */
 @media (max-width: 1023px) {
-  .zb { grid-template-columns: minmax(0, 1fr); }
+  /* Rows: top bar, page, tab bar. Without them a short page shares the spare height out and the tab bar floats. */
+  .zb { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto; }
   .zb .zb-side { position: sticky; top: 0; z-index: 30; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; height: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--z-line); background: var(--z-sunk); overflow: visible; }
   .zb .zb-side .z-side__brand { padding: 0 4px; }
   .zb #side-org .z-side__org { min-height: var(--z-touch); padding: 4px 8px; }
@@ -125,6 +129,8 @@ a.zb-topchip[aria-current="page"] { border-color: var(--z-pink-border); }
   .zb #plan-banner .banner { flex-wrap: wrap; }
   .zb #plan-banner .banner > span:not(.z-ic) { flex: 1 1 calc(100% - 40px); }
   #tabs { position: sticky; bottom: 0; z-index: 20; }
+  /* While the keyboard is up the sticky bar would sit over the form. */
+  .zb:has(:is(input:not([type="checkbox"], [type="radio"], [type="date"]), textarea):focus) #tabs { display: none; }
   .zb .zb-note { flex-wrap: wrap; }
   .zb .zb-note > span:not(.z-ic) { flex: 1 1 calc(100% - 40px); }
   .zb .z-side__search .z-kbd { display: none; }

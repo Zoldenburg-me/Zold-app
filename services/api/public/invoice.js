@@ -52,7 +52,9 @@ const L = {
         terms: "Zahlungsbedingungen", bank: "Bankverbindung", po: "Bestellnummer", due: "Fällig am",
         from: "Rechnungssteller", to: "Rechnungsempfänger",
         converted: "Umrechnungskurs:", payIn: "Zahlbar in",
-        convBasis: "Der Steuerbetrag ist gemäß § 16 Abs. 6 UStG zusätzlich in Euro angegeben." },
+        convBasis: "Der Steuerbetrag ist gemäß § 16 Abs. 6 UStG zusätzlich in Euro angegeben.",
+        paid: "Bezahlt", awaiting: "Zahlung ausstehend", pay: "Bezahlen",
+        payNote: "Die Zahlungsart wählen Sie auf der nächsten Seite. Die Rechnung gilt als bezahlt, sobald das Geld eingegangen ist." },
   en: { invoice: "Invoice", number: "Invoice number", issueDate: "Invoice date",
         supplyDate: "Date of supply", supplyPeriod: "Period of supply", vatId: "VAT ID",
         taxNumber: "Tax number", description: "Description", qty: "Qty", unit: "Unit price",
@@ -60,7 +62,9 @@ const L = {
         terms: "Payment terms", bank: "Bank details", po: "Purchase order", due: "Due",
         from: "From", to: "To",
         converted: "Rate of exchange:", payIn: "Payable in",
-        convBasis: "The tax amount is also stated in euro, as § 16 Abs. 6 UStG requires." },
+        convBasis: "The tax amount is also stated in euro, as § 16 Abs. 6 UStG requires.",
+        paid: "Paid", awaiting: "Awaiting payment", pay: "Pay",
+        payNote: "You choose how to pay on the next page. This invoice is marked paid when the money arrives." },
   fr: { invoice: "Facture", number: "Numéro de facture", issueDate: "Date de facture",
         supplyDate: "Date de livraison", supplyPeriod: "Période de prestation", vatId: "N° de TVA",
         taxNumber: "Numéro fiscal", description: "Désignation", qty: "Qté", unit: "Prix unitaire",
@@ -68,7 +72,9 @@ const L = {
         terms: "Conditions de paiement", bank: "Coordonnées bancaires", po: "N° de commande", due: "Échéance",
         from: "Émetteur", to: "Destinataire",
         converted: "Taux de change :", payIn: "Payable en",
-        convBasis: "Le montant de la taxe est également indiqué en euros, conformément au § 16 Abs. 6 UStG." },
+        convBasis: "Le montant de la taxe est également indiqué en euros, conformément au § 16 Abs. 6 UStG.",
+        paid: "Payée", awaiting: "En attente de paiement", pay: "Payer",
+        payNote: "Vous choisissez le mode de paiement sur la page suivante. La facture est marquée comme payée dès réception des fonds." },
   es: { invoice: "Factura", number: "Número de factura", issueDate: "Fecha de factura",
         supplyDate: "Fecha de prestación", supplyPeriod: "Período de prestación", vatId: "NIF-IVA",
         taxNumber: "NIF", description: "Descripción", qty: "Cant.", unit: "Precio unitario",
@@ -76,7 +82,9 @@ const L = {
         terms: "Condiciones de pago", bank: "Datos bancarios", po: "N.º de pedido", due: "Vencimiento",
         from: "Emisor", to: "Destinatario",
         converted: "Tipo de cambio:", payIn: "Pagadero en",
-        convBasis: "El importe del impuesto también se indica en euros, conforme al § 16 Abs. 6 UStG." },
+        convBasis: "El importe del impuesto también se indica en euros, conforme al § 16 Abs. 6 UStG.",
+        paid: "Pagada", awaiting: "Pendiente de pago", pay: "Pagar",
+        payNote: "Elija la forma de pago en la página siguiente. La factura se marca como pagada cuando llega el dinero." },
 };
 
 // The country is printed unless it is the issuer's own: a cross-border
@@ -130,8 +138,9 @@ function renderIssued(inv) {
   const cur = d.currency ?? "EUR";
   const conv = d.conversion;
 
-  // The sheet is typeset in the invoice's language; the chrome around it stays
-  // English, so the language is declared on the sheet rather than on <html>.
+  // The sheet, and the status and Pay button under it, are in the invoice's
+  // language: both speak to the customer. The rest of the chrome stays
+  // English, so the language is declared on those parts rather than on <html>.
   return `
   <div class="sheet" id="sheet" lang="${sheetLang}">
     <div class="sheet-head">
@@ -215,12 +224,12 @@ function renderIssued(inv) {
   </div>
 
   <div class="panel pay-card no-print">
-    <div class="await${settled ? " ok" : ""}">${esc(settled ? "Paid" : "Awaiting payment")}</div>
+    <div class="await${settled ? " ok" : ""}" role="heading" aria-level="2" lang="${sheetLang}">${esc(settled ? t.paid : t.awaiting)}</div>
     <div class="pay-total">${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</div>
     <p class="lead">${esc([d.issuer?.name, !settled && inv.dueDate ? `due ${day(inv.dueDate)}` : ""].filter(Boolean).join(" · "))}</p>
     ${sign ? `<div class="pay-actions">
         <button class="soft" id="sign-open" type="button">Sign invoice</button>
-        ${pay ? `<a class="pay-btn" href="${esc(pay)}">Pay ${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</a>` : ""}
+        ${pay ? `<a class="pay-btn" lang="${sheetLang}" href="${esc(pay)}">${esc(t.pay)} ${esc(amount(conv ? conv.grossCents : d.grossCents, conv ? conv.to : cur))}</a>` : ""}
       </div>
       <dialog id="sign-dlg" aria-labelledby="sign-title">
         <div class="grab" aria-hidden="true"></div>
@@ -256,7 +265,7 @@ function renderIssued(inv) {
           </div>
         </div>
       </dialog>` : ""}
-    ${pay ? `<div class="note">You choose how to pay on the next page. This invoice is marked paid when the money arrives.</div>` : ""}
+    ${pay ? `<div class="note" lang="${sheetLang}">${esc(t.payNote)}</div>` : ""}
     ${!settled && !own && !pay && inv.payLinkLapsed ? `<div class="note">The Pay link for this invoice has expired. ${inv.bank ? "You can still pay by bank transfer to the details on the invoice, or ask" : "Ask"} ${esc(d.issuer?.name || "the issuer")} for a new link.</div>` : ""}
     <div class="note">${esc(complianceNote(d.jurisdiction))} Zold is not a tax
       adviser — whether a supply is exempt, and which exemption applies, is the issuer's determination.${d.jurisdiction?.ruleSet === "DE" ? `
@@ -501,8 +510,13 @@ function render(inv) {
   if (inv.issued) {
     const settled = inv.state === "PAID" || inv.state === "RECONCILED";
     document.title = `${inv.issued.number} · ${(L[inv.issued.language] || L.en).invoice}`;
-    $("#actions").innerHTML = `${!settled && !own && inv.payPath ? `<a class="pay-btn" href="${esc(inv.payPath)}">Pay</a> ` : ""}<button class="ghost" id="print">Print / PDF</button>`;
+    $("#actions").innerHTML = `${!settled && !own && inv.payPath ? `<a class="pay-btn" lang="${L[inv.issued.language] ? inv.issued.language : "en"}" href="${esc(inv.payPath)}">${esc((L[inv.issued.language] || L.en).pay)}</a> ` : ""}<button class="ghost" id="print">Print / PDF</button>`;
     $("#print").addEventListener("click", () => window.print());
+    // The payment page offers the way back here (pay-request.js); kept for this tab only.
+    document.addEventListener("click", (e) => {
+      const a = e.target.closest?.("a.pay-btn");
+      if (a) try { sessionStorage.setItem("zold-pay-from", JSON.stringify([a.pathname, location.pathname])); } catch { /* no way back offered */ }
+    });
     $("#content").innerHTML = renderIssued(inv);
     if ($("#sign-open")) wireSigning();
     return;

@@ -79,6 +79,11 @@ function render(p) {
   // execution on a page a stranger opened to pay someone. The server now drops
   // a non-http(s) URL before storing it; this also covers rows stored before
   // that guard existed.
+  // Opened from an invoice's Pay button (invoice.js remembers it for this tab): the way back to it.
+  let from = [];
+  try { from = JSON.parse(sessionStorage.getItem("zold-pay-from") || "[]"); } catch { /* none */ }
+  // $("invoice-back") is missing from a cached pay-request.html.
+  if (from[0] === location.pathname && /^\/invoice\/[\w-]+$/.test(from[1]) && $("invoice-back")) { $("invoice-back").href = from[1]; show("invoice-back"); }
   const back = safeUrl(p.returnUrl), off = safeUrl(p.cancelUrl);
   if (back && p.state === "PAID") { $("return").href = back; show("return"); } else hide("return");
   if (off && open) { $("cancel").href = off; show("cancel"); } else hide("cancel");
