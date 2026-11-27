@@ -108,6 +108,21 @@ export async function issueOutgoing(
       { ...report },
     );
   }
+  if (correcting) {
+    // Before the warnings, so a total that cannot be issued is said before
+    // the issuer accepts them. Same amount, so the payments carry over as
+    // they are; a different amount is a cancellation and a new invoice, which
+    // this does not do. Both the printed total and the euro one: the
+    // conversion is the original's, so edited lines in another currency
+    // would otherwise pass on its euros.
+    const euroCents = draft.conversion?.grossCents ?? report.totals.grossCents;
+    if (report.totals.grossCents !== correcting.issued!.grossCents) {
+      return refusal(422, `The corrected invoice would total ${fromCents(report.totals.grossCents)} ${draft.currency ?? SETTLEMENT_CURRENCY}, not the original's ${fromCents(correcting.issued!.grossCents)}. Change what is billed with a new invoice; a correction keeps the amount. Nothing was issued.`);
+    }
+    if (euroCents !== Math.round((payableEur(correcting) ?? NaN) * 100)) {
+      return refusal(422, `The corrected invoice would total ${fromCents(euroCents)} EUR, not the original's ${fromCents(Math.round((payableEur(correcting) ?? 0) * 100))} EUR. Nothing was issued.`);
+    }
+  }
   // A receipt month the wallets may not have delivered in full is confirmed in
   // the same answer as the compliance warnings, so one acceptance covers only
   // what the issuer was shown.
@@ -121,19 +136,6 @@ export async function issueOutgoing(
         : "There are warnings on this invoice. Re-send with acceptWarnings: true to issue it anyway.",
       { ...report, warnings: [...receiptWarnings, ...report.warnings] },
     );
-  }
-  if (correcting) {
-    // Same amount, so the payments carry over as they are. A different amount
-    // is a cancellation and a new invoice, which this does not do. Both the
-    // printed total and the euro one: the conversion is the original's, so
-    // edited lines in another currency would otherwise pass on its euros.
-    const euroCents = draft.conversion?.grossCents ?? report.totals.grossCents;
-    if (report.totals.grossCents !== correcting.issued!.grossCents) {
-      return refusal(422, `The corrected invoice would total ${fromCents(report.totals.grossCents)} ${draft.currency ?? SETTLEMENT_CURRENCY}, not the original's ${fromCents(correcting.issued!.grossCents)}. Change what is billed with a new invoice; a correction keeps the amount. Nothing was issued.`);
-    }
-    if (euroCents !== Math.round((payableEur(correcting) ?? NaN) * 100)) {
-      return refusal(422, `The corrected invoice would total ${fromCents(euroCents)} EUR, not the original's ${fromCents(Math.round((payableEur(correcting) ?? 0) * 100))} EUR. Nothing was issued.`);
-    }
   }
   if (fromDraft) {
     // The invoice must bill exactly what arrived, or it would be issued as

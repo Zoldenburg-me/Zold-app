@@ -263,7 +263,8 @@ await check("a part-paid invoice whose link lapsed gets no new full-amount link"
 
 await check("the customer's details and the lines' wording can be corrected; the total cannot", async () => {
   const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
-  const changedTotal = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, lines: [{ description: "Consulting", quantity: "3", unitPriceNet: "50.00" }] });
+  // Refused before the warnings are asked about.
+  const changedTotal = await correct(r.data.invoice.id, "u_owner", { lines: [{ description: "Consulting", quantity: "3", unitPriceNet: "50.00" }] });
   assert.equal(changedTotal.status, 422, JSON.stringify(changedTotal.data));
   assert.equal((await store.findInvoice(r.data.invoice.id))!.state, "SUBMITTED");
   const fixed = await correct(r.data.invoice.id, "u_owner", {

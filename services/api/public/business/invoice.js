@@ -244,7 +244,7 @@ RENDER["invoice-new"] = async () => {
         <button type="button" class="z-btn z-btn--primary" data-act="inv-issue">${Z.icon("ios_share")}<span>${fixing ? "Issue corrected invoice" : "Create and share"}</span></button>
         <button type="button" class="z-link-btn" data-act="inv-cancel">Cancel</button>
       </div>
-      <p class="zb-hint" style="margin-top:12px">You get one link to send: it opens the invoice, with a Pay button when your account can take payments. Zold doesn’t send emails. A saved draft stays in this browser.</p>
+      <p class="zb-hint" style="margin-top:12px">You get one link to send: it opens the invoice, with a Pay button when your account can take payments. Zold doesn’t send emails.${fixing ? "" : " A saved draft stays in this browser."}</p>
       ${jurisdictionBanner(d.jurisdiction, d.disclaimer, d.notVerified)}
     </form>
     <div class="zb-editor__paper" id="inv-paper" aria-live="polite"><div class="zb-paper"><p>Add a customer and a line to see the invoice.</p></div></div>
