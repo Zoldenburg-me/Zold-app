@@ -200,14 +200,14 @@ Human testing on zoldhq.com follows `docs/test-round.md`.
 ## Postgres
 
 Every deployment runs the JSON store (`data/db.json`). The Postgres backend
-(`docs/postgres-store-design.md`) runs in the suites and nowhere else: no
-Oracle host, cluster, backup or cut-over exists yet. The host's scripts and
-runbook are written (`scripts/oracle-host/`, `docs/oracle-host.md`) and have
-not run on a host (§8 rows S7b, S8).
+(`docs/postgres-store-design.md`) serves no deployment yet: mainnet's cluster
+is provisioned on the Oracle host with its backups, and holds no data until
+the cut-over (`docs/oracle-host.md`, §8 row S8).
 
 - `STORE_BACKEND=postgres` with `DATABASE_URL` (and `DATABASE_CA` for a TLS
-  host) puts the API on it. Config refuses it on a real-money chain until
-  the cut-over. The API takes the one-process start lock and checks that
+  host) puts the API on it, on any chain. On a real-money chain a host
+  other than a unix socket or loopback needs `sslmode=verify-full` and
+  `DATABASE_CA`. The API takes the one-process start lock and checks that
   every migration is applied; it never migrates. The deploy migrates:
   `DATABASE_URL=<as the owner role> APP_ROLE=<app role> npm run db:migrate -- apply`
   runs `migrate()` and then `SELECT zold_grant_app('<app role>')`; `status`

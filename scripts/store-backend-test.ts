@@ -515,10 +515,12 @@ console.log("ok - store suite on the JSON backend");
   const typo = run({ STORE_BACKEND: "pg" });
   assert.notEqual(typo.status, 0);
   assert.match(typo.stderr, /STORE_BACKEND must be json or postgres/);
+  // A real-money chain takes Postgres; the pool's TLS rule above guards a host
+  // that is not this machine (pgPoolConfig with realMoney).
   for (const chain of [undefined, "8453", "100"]) {
     const real = run({ STORE_BACKEND: "postgres", DATABASE_URL: url, TRANSF_CHAIN_ID: chain });
-    assert.notEqual(real.status, 0, `chain ${chain ?? "default"}`);
-    assert.match(real.stderr, /refused on a real-money chain until the cut-over/);
+    assert.equal(real.status, 0, `chain ${chain ?? "default"}: ${real.stderr}`);
+    assert.match(run({ STORE_BACKEND: "postgres", TRANSF_CHAIN_ID: chain }).stderr, /needs DATABASE_URL/);
   }
   const noUrl = run({ STORE_BACKEND: "postgres", TRANSF_CHAIN_ID: "84532" });
   assert.notEqual(noUrl.status, 0);
@@ -526,5 +528,5 @@ console.log("ok - store suite on the JSON backend");
   const testnet = run({ STORE_BACKEND: "postgres", DATABASE_URL: url, TRANSF_CHAIN_ID: "84532" });
   assert.equal(testnet.status, 0, testnet.stderr);
   assert.equal(run({ STORE_BACKEND: "json" }).status, 0);
-  console.log("ok - STORE_BACKEND: json or postgres; postgres needs DATABASE_URL and is refused on a real-money chain until the cut-over");
+  console.log("ok - STORE_BACKEND: json or postgres; postgres needs DATABASE_URL, on any chain");
 }

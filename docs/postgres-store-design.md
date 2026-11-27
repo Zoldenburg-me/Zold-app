@@ -537,9 +537,8 @@ Mechanical order for S2 (each step leaves `npm run check` green):
 ## 4. Backends and tests
 
 - **One interface, two backends** until cut-over: `STORE_BACKEND=json`
-  (default until S8) or `postgres` with `DATABASE_URL`. Until S8 `postgres`
-  is refused on a real-money chain (`config/env.ts`); it runs for the suites
-  and on testnet. On `postgres` the API takes the start lock (§2) before it
+  (default until S8) or `postgres` with `DATABASE_URL`, on any chain; on a
+  real-money chain the pool's TLS rule below decides which hosts it takes. On `postgres` the API takes the start lock (§2) before it
   reads the store, then checks the schema (`assertSchemaCurrent`,
   `store/pg/migrate.ts`): every migration file applied and unchanged, none
   applied that it has no file for. It never migrates. The Postgres backend
