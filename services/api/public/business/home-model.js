@@ -13,6 +13,9 @@ export const countedLines = (lines) => lines.filter((l) => !l.ownTransfer);
 
 /** Accounts a payment can be drafted from: the ones the send form offers. */
 export const fundableAccounts = (accounts) => accounts.filter((a) => a.status === "active" && a.backingUserId && a.profile?.status !== "needs_check");
+/** A company's euro account a bank run pays from: live, on its own Safe,
+ *  with its IBAN issued. It has no backer (a company never does). */
+export const companyBankAccounts = (accounts) => accounts.filter((a) => a.status === "active" && !a.backingUserId && a.address && a.identifier?.iban);
 /** Contacts a payment can go to: a saved IBAN. */
 export const payableContacts = (contacts) => contacts.filter((c) => (c.bankAccounts || []).some((b) => b.iban));
 /** An account here that receives bank transfers. */

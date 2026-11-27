@@ -77,8 +77,8 @@ export function ibanPanel(m, maySign, payoutsOn = false) {
   // Checking an issued IBAN reads Monerium on the company's keys: offered only while they are connected.
   if (st === "issued") return {
     text: payoutsOn
-      ? "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). An owner can pay a bank account from it below."
-      : "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). Paying a bank account from it is not built yet.",
+      ? "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). An owner can pay a bank account from it below, or send a bank payment saved in New payment from Payments."
+      : "Bank transfers to this IBAN arrive on the company’s Safe as euros (EURe). Paying a bank account from it is switched off on this deployment.",
     iban: m.companyIban.iban,
     ...(m.status !== "not_connected" ? { action: "check" } : {}),
   };
@@ -111,6 +111,26 @@ export function payoutNotice(p) {
   if (st === "failed") return p.error || "Not sent. Monerium refused the payout.";
   if (st === "unknown") return "Unclear: Monerium did not confirm the payout. Check Monerium before sending it again.";
   return "Payout started.";
+}
+
+/** What a company bank run did, after the owner signed it
+ *  (routes/business/org-monerium-bank-runs.ts). `view` is the draft as the
+ *  API returns it, with `bankRun.lines`. Placed is never said as sent: a line
+ *  is sent once Monerium processes it. */
+export function bankRunNotice(view) {
+  const lines = view?.bankRun?.lines || [];
+  const n = lines.length;
+  if (!n) return { text: "The payment run was not sent.", error: true };
+  if (lines.every((l) => l.state === "sent")) return { text: `Sent: Monerium processed all ${n} bank payment${n === 1 ? "" : "s"}.` };
+  const stopped = lines.some((l) => ["failed", "unknown", "not_sent"].includes(l.state));
+  if (!stopped) {
+    return { text: `Monerium has ${n} bank payment${n === 1 ? "" : "s"}. They are not sent until Monerium processes them; each is booked then.` };
+  }
+  const unclear = lines.some((l) => l.state === "unknown");
+  return {
+    text: `${unclear ? "The run stopped at a payment Monerium did not confirm." : "The run stopped at a payment Monerium did not accept."} ${view.failureReason || ""}`.trim(),
+    error: true,
+  };
 }
 
 /** The payouts Settings lists, newest first: a line each, with the state in

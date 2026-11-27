@@ -14,7 +14,7 @@ import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceD
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
 import { approvalProgress, showProgress, signedLineOutcome, signedRunToast, signingWarning } from "./payment-model.js";
-import { ibanNotice, keyNotice, payoutNotice } from "./org-monerium-model.js";
+import { bankRunNotice, ibanNotice, keyNotice, payoutNotice } from "./org-monerium-model.js";
 
 /** A file the API serves behind the bearer header, which a navigation
  *  cannot carry: fetch it, then hand the bytes to the browser as a download. */
@@ -142,9 +142,12 @@ function manageHtml(d) {
   if (!mayEdit(d) && !mayCancel(d)) return "";
   const again = ["PENDING_REVIEW", "REVIEWED"].includes(d.state) && reviewOn()
     ? " It goes back to Draft and has to be approved again; as its editor, you can’t approve it." : "";
+  // A company's bank line that pays an invoice pays all of it, or the run
+  // refuses the line (org-monerium-bank-runs.ts planLines): the amount is fixed.
+  const fixed = (l) => org.entity === "company" && l.invoiceId && l.destination.kind === "bank";
   const lineInputs = d.lines.map((l, i) => `<fieldset class="zb-fieldset"><legend>${esc(l.destination.displayName)}</legend>
-      <label for="dr-amt-${i}">Amount${/^EUR/i.test(l.asset) ? " in euros" : ` in ${esc(l.asset)}`}</label>
-      <input id="dr-amt-${i}" inputmode="decimal" autocomplete="off" value="${esc(l.amount)}" />
+      <label for="dr-amt-${i}">Amount${/^EUR/i.test(l.asset) ? " in euros" : ` in ${esc(l.asset)}`}${fixed(l) ? ' <span class="desc">(fixed: a company pays an invoice in full. If this is not the invoice total, cancel this run and pay the invoice again from Invoices.)</span>' : ""}</label>
+      <input id="dr-amt-${i}" inputmode="decimal" autocomplete="off" value="${esc(l.amount)}"${fixed(l) ? " readonly" : ""} />
       <label for="dr-note-${i}">Note <span class="desc">(optional)</span></label>
       <input id="dr-note-${i}" autocomplete="off" maxlength="500" value="${esc(l.note || "")}" /></fieldset>`).join("");
   return `<div id="dr-manage">
@@ -370,6 +373,41 @@ function openDocument(d) {
  * moves exactly that token and amount to exactly that address, then the API
  * checks the payee once more and submits it (routes/crypto-sends.ts).
  */
+/**
+ * A company bank run from its own IBAN (routes/business/org-monerium-bank-runs.ts):
+ * one passkey prompt per line, each over Monerium's message for that amount
+ * and IBAN. Nothing is sent until every line is signed; then the server sends
+ * them one at a time and stops at the first Monerium does not accept.
+ */
+function signCompanyBankRun(startTo) {
+  return dialog("Sign the bank payments", `
+      <p class="desc">Each payment leaves the company’s Safe as its own Monerium order, so your ${Z.passkeyName()} signs each one: amount and IBAN. Nothing is sent until you have signed them all.</p>
+      <p class="desc">They are then sent one at a time. If Monerium does not accept one, the run stops there: payments before it stay sent, later ones are not sent.</p>
+      <p class="desc" id="dlg-progress" role="status"></p>`,
+    async () => {
+      const start = await api(startTo, { method: "POST" });
+      const lib = await deviceLib();
+      const assertions = [];
+      for (const [i, l] of start.lines.entries()) {
+        showProgress(`Signing ${i + 1} of ${start.lines.length}: €${Number(l.amountEur).toFixed(2)} to ${l.recipientName}.`, $("#dlg"), $("#dlg-progress"), toast);
+        try {
+          assertions.push({ requestId: l.requestId, ...(await lib.passkeyAssertion({ credentialId: start.credentialId, challenge: l.challenge, rpId: start.rpId })) });
+        } catch (e) {
+          throw new Error(e.name === "NotAllowedError" ? `${Z.byDevice("Face ID was cancelled.", "The passkey prompt was cancelled.")} Nothing was sent.` : e.message);
+        }
+      }
+      try {
+        const r = await api(start.submitTo, { method: "POST", body: { runId: start.runId, assertions } });
+        const done = bankRunNotice(r.draft);
+        setTimeout(() => toast(done.text, done.error), 0);
+      } catch (e) {
+        // Lines may have reached Monerium: say what each did, from the draft.
+        if (e.draft) { const done = bankRunNotice(e.draft); setTimeout(() => toast(done.text, true), 0); return; }
+        throw e;
+      }
+    }, { okLabel: "Sign and send" });
+}
+
 async function signCryptoRun(sends) {
   const lib = await deviceLib();
   const out = [];
@@ -1216,6 +1254,12 @@ export const ACTIONS = {
     });
     sendState.contactId = null;
     sendState.mode = "bank";
+    // A company's bank payment has no review step: an owner sends it (Q8).
+    if (org.entity === "company" && !crypto) {
+      ap.tab = "drafts";
+      toast(roleCan(org.role, "sign") ? `Saved. Send it from the list with your ${Z.passkeyName()}.` : "Saved. An owner sends it with their passkey.");
+      return setView("payments");
+    }
     if (reviewOn()) {
       try {
         await api(`/api/orgs/${org.id}/drafts/${r.draft.id}/submit`, { method: "POST" });
@@ -1272,7 +1316,14 @@ export const ACTIONS = {
    * expire without moving anything.
    */
   async "exec-draft"(el) {
-    const r = await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/execute`, { method: "POST" });
+    let r;
+    try {
+      r = await api(`/api/orgs/${org.id}/drafts/${el.dataset.id}/execute`, { method: "POST" });
+    } catch (e) {
+      // A company's bank run: the owner signs each line with their passkey.
+      if (e.code === "COMPANY_BANK_RUN_SIGN" && e.startTo) return signCompanyBankRun(e.startTo);
+      throw e;
+    }
 
     if (r.unsigned) {
       return dialog("Approve in your own wallet",
