@@ -582,6 +582,7 @@ try {
   check("a bank run edited to pay less than its invoice is refused; the untouched one reaches the quote", () => {
     assert.equal(underpaid.status, 422, JSON.stringify(underpaid.data));
     assert.match(underpaid.data.problems[0].reason, /exactly what it bills, €10\.00/);
+    assert.match(underpaid.data.error, /exactly what it bills, €10\.00.*pay the invoice again/, "the screen shows only the error text");
     assert.equal(exact.status, 409, JSON.stringify(exact.data));
     assert.equal(exact.data.code, "MONERIUM_NOT_CONNECTED");
   });

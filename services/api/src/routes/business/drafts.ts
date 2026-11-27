@@ -690,7 +690,9 @@ export function createDraftRoutes(
 
     if (problems.length) {
       return res.status(422).json({
-        error: `${problems.length} of ${checked.lines.length} line(s) cannot be paid. Nothing was created.`,
+        // The screen shows only this text: one refusal is said in its own words.
+        error: problems.length === 1 ? `${problems[0].reason} Nothing was created.`
+          : `${problems.length} of ${checked.lines.length} line(s) cannot be paid. Nothing was created.`,
         problems,
       });
     }
