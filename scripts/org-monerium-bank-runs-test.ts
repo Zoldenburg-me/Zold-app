@@ -593,6 +593,31 @@ try {
     assert.equal(held.data.availableEur, 70);
   });
 
+  await check("an owner clears a run's unclear line: the run line follows its row, and the invoice it paid waits for payment again", async () => {
+    await reset();
+    await store.addInvoice({ id: "inv_clear", orgId: "org_co", direction: "incoming", linkTokenHash: "h_inv_clear", state: "SUBMITTED", supplier: { name: "Bob GmbH", invoiceNumber: "inv_clear" }, lines: [], currency: "EUR", total: "25.00", payTo: { kind: "bank", bank: { iban: PAYEES[0].iban } }, createdByMemberId: "m_pia", createdAt: now, updatedAt: now } as any);
+    const d = await call("POST", "/org_co/drafts", "u_pia", { source: { kind: "account", accountId: "acc_co" }, lines: [{ contactId: "c_bob", invoiceId: "inv_clear", destination: { kind: "bank", bankAccountId: "c_bob_b", displayName: "Bob GmbH" }, asset: "EUR", amount: "25" }] });
+    const id = d.data.draft.id as string;
+    await store.updateInvoice("inv_clear", { state: "PAYING", payment: { draftId: id } } as any);
+    mon.failAt = { n: 1, err: new MoneriumApiError("Monerium POST /orders failed (503)", 503) };
+    assert.equal((await run(id)).data.code, "MONERIUM_UNSURE");
+    const { syncInvoicePayment } = await import("../services/api/src/routes/business/state.js");
+    const invoice = async () => (await syncInvoicePayment((await store.findInvoice("inv_clear"))!)).state;
+    assert.equal(await invoice(), "PAYING", "an unclear line may still pay it");
+    const [row] = await payouts();
+    // Too recent: Monerium may still place the order, so the line stays unclear.
+    assert.equal((await call("POST", `/org_co/monerium/payouts/${row.id}/clear`, "u_anna", { checkedMonerium: true })).data.code, "PAYOUT_TOO_RECENT");
+    assert.equal((await draft(id)).bankRun.lines[0].state, "unknown");
+    await store.updateAccount("acc_co", { moneriumPayouts: (await payouts()).map((p) => ({ ...p, issuedAt: new Date(Date.now() - 3600_000).toISOString() })) } as any);
+    const r = await call("POST", `/org_co/monerium/payouts/${row.id}/clear`, "u_anna", { checkedMonerium: true });
+    assert.equal(r.status, 200, r.text);
+    const after = await draft(id);
+    assert.equal(after.state, "FAILED");
+    assert.equal(after.bankRun.lines[0].state, "failed");
+    assert.match(after.bankRun.lines[0].error, /owner cleared/);
+    assert.equal(await invoice(), "SUBMITTED");
+  });
+
   await check("a process that stopped mid-run: past the window a signed line is not sent and a sending line is unclear", () => {
     const issuedAt = new Date(Date.now() - 60 * 60_000).toISOString();
     const runRow = { accountId: "acc_co", safeAddress: SAFE, signedByMemberId: "m_anna", issuedAt, lines: [

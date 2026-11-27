@@ -146,7 +146,7 @@ function manageHtml(d) {
   // refuses the line (org-monerium-bank-runs.ts planLines): the amount is fixed.
   const fixed = (l) => org.entity === "company" && l.invoiceId && l.destination.kind === "bank";
   const lineInputs = d.lines.map((l, i) => `<fieldset class="zb-fieldset"><legend>${esc(l.destination.displayName)}</legend>
-      <label for="dr-amt-${i}">Amount${/^EUR/i.test(l.asset) ? " in euros" : ` in ${esc(l.asset)}`}${fixed(l) ? ' <span class="desc">(the invoice total; it is paid in full)</span>' : ""}</label>
+      <label for="dr-amt-${i}">Amount${/^EUR/i.test(l.asset) ? " in euros" : ` in ${esc(l.asset)}`}${fixed(l) ? ' <span class="desc">(fixed: a company pays an invoice in full. If this is not the invoice total, cancel this run and pay the invoice again from Invoices.)</span>' : ""}</label>
       <input id="dr-amt-${i}" inputmode="decimal" autocomplete="off" value="${esc(l.amount)}"${fixed(l) ? " readonly" : ""} />
       <label for="dr-note-${i}">Note <span class="desc">(optional)</span></label>
       <input id="dr-note-${i}" autocomplete="off" maxlength="500" value="${esc(l.note || "")}" /></fieldset>`).join("");
