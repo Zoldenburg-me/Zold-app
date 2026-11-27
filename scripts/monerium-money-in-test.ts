@@ -340,13 +340,20 @@ await check("USDC that arrived while no rate could be read is valued later at it
     issued: { number: "RE-UNRATED", issueDate: at.slice(0, 10), netCents: 10000, vatCents: 0, grossCents: 10000, currency: "EUR" },
   } as any);
   const inv = await store.addCryptoDeposit(row("co-unrated-inv", 918, { invoiceId: "inv_co_unrated" }) as any);
+  // A person's pay-link payment, matched and settled with no euro value yet.
+  await store.addPaymentRequest({
+    id: "pr_unrated", code: "UNRATEDCODE2345", userId: "u_owner", orgId: "org_owner", handle: "owner", amountEur: 100, currency: "EUR", methods: ["crypto"], state: "PAID",
+    cryptoQuotes: [], source: { kind: "app" }, expiresAt: at, createdAt: at, updatedAt: at,
+    payments: [{ id: "pay_unrated", method: "crypto", ref: "u-unrated-link", depositId: "u-unrated-link", amountEur: 100, amountUsdc: 110, kind: "full", settledAsset: "USDC", at }],
+  } as any);
+  await store.addCryptoDeposit(row("u-unrated-link", 919, { accountId: undefined, userId: "u_owner", paymentAddress: addr("a"), paymentRequestId: "pr_unrated" }) as any);
   const { recordInvoiceSettlement } = await import("../services/api/src/adapters/crypto-deposits.js");
   await recordInvoiceSettlement(inv);
   assert.equal((await store.findInvoice("inv_co_unrated"))!.state, "SUBMITTED", "a €0 payment leaves it open");
   const before = process.env.TRANSF_RATES_FIXED;
   process.env.TRANSF_RATES_FIXED = JSON.stringify({ USD: 1.1, KES: 147.53 });
   try {
-    assert.equal(await valueUnratedReceipts(), 2);
+    assert.equal(await valueUnratedReceipts(), 3);
     assert.equal(await valueUnratedReceipts(), 0, "stamped once");
   } finally {
     if (before === undefined) delete process.env.TRANSF_RATES_FIXED; else process.env.TRANSF_RATES_FIXED = before;
@@ -363,6 +370,8 @@ await check("USDC that arrived while no rate could be read is valued later at it
   const paidInv = (await store.findInvoice("inv_co_unrated"))!;
   assert.equal(paidInv.state, "PAID", "the valued payment covers the invoice");
   assert.deepEqual(paidInv.settlements!.map((s) => [s.ref, s.amountEur]), [["deposit:co-unrated-inv", 100]], "rewritten in place, not a second payment");
+  const link = (await store.findPaymentRequest("pr_unrated"))!;
+  assert.deepEqual(link.payments.map((p) => [p.id, p.settledEur]), [["pay_unrated", 100]], "the pay link's payment now holds its euro value, once");
   await writeStatementLines();
   const line = (await store.ledgerOf("org_co")).find((e) => e.statement?.key === "deposit:co-unrated:held");
   assert.equal(line?.statement?.amountCents, 10000, "the books get the receipt they lacked");
@@ -390,6 +399,16 @@ await check("USDC that arrived while no rate could be read is valued later at it
   assert.equal(kept.txType, "transfer_in");
   assert.equal(kept.accountCode, "4100");
   assert.equal(kept.accountCodeAuto, false);
+});
+
+await check("an invoice is paid when its payments, in the order they arrived, first cover it: a receipt valued late does not backdate it", async () => {
+  const { settlementUpdate } = await import("../services/api/src/domain/invoices.js");
+  const invoice: any = { direction: "outgoing", state: "SUBMITTED", issued: { grossCents: 10000 },
+    settlements: [{ ref: "bank:tue", method: "bank", amountEur: 40, at: "2026-10-13T09:00:00.000Z" }, { ref: "deposit:mon", method: "crypto", amountEur: 0, at: "2026-10-12T09:00:00.000Z" }] };
+  const u = settlementUpdate(invoice, { ref: "deposit:mon", method: "crypto", amountEur: 60, at: "2026-10-12T09:00:00.000Z" } as any);
+  assert.equal(u.state, "PAID");
+  assert.equal(u.payment!.paidAt, "2026-10-13T09:00:00.000Z", "covered on Tuesday, when the second payment arrived");
+  assert.equal(settlementUpdate({ ...invoice, settlements: [] }, { ref: "deposit:mon", method: "crypto", amountEur: 60, at: "2026-10-12T09:00:00.000Z" } as any).state, undefined, "€60 of €100 leaves it open");
 });
 
 await check("a SEPA credit to a person's Safe is booked under the user, on their personal books (unchanged)", async () => {
