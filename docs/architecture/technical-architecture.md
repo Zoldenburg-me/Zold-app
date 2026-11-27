@@ -1275,6 +1275,8 @@ only self-hosted fonts.
     redirect.
   - Store: `ALLOW_PLAINTEXT_STORE` missing on the JSON store.
   - Bridge: live without a key.
+  - Documents: no `DOCUMENT_SIGNING_KEY`, a malformed one, or the
+    orchestrator key.
   - Candide: a CANDIDE chain that differs from the app chain, a recovery
     signer without https or a token, the 3-minute recovery module, or no
     no recovery guardian when hosted.

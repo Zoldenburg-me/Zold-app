@@ -124,8 +124,9 @@ function checkDocumentKey(fail: Fail) {
   const key = (process.env.DOCUMENT_SIGNING_KEY ?? "").trim();
   if (!key) return fail("DOCUMENT_SIGNING_KEY is required in production: account documents are signed with it");
   if (!/^0x[0-9a-fA-F]{64}$/.test(key)) return fail("DOCUMENT_SIGNING_KEY is not a 32-byte hex private key");
-  const orchestrator = (process.env.ORCHESTRATOR_KEY ?? "").trim().toLowerCase();
-  if (orchestrator && key.toLowerCase() === orchestrator) fail("DOCUMENT_SIGNING_KEY must not be the orchestrator key");
+  // The same names, in the same order, that config/keys.ts reads the orchestrator key from.
+  const orchestrator = ["ORCHESTRATOR_KEY", "DEPLOY_ORCHESTRATOR_KEY"].map((n) => process.env[n]?.trim()).find(Boolean);
+  if (orchestrator && key.toLowerCase() === orchestrator.toLowerCase()) fail("DOCUMENT_SIGNING_KEY must not be the orchestrator key");
 }
 
 function checkBridge(fail: Fail) {

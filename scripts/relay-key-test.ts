@@ -127,11 +127,18 @@ await check("production refuses to start without its own document key", () => {
   const boot = (extra: Record<string, string>) =>
     load({ ...SEPOLIA, RELAY_KEY: RELAY, TRANSF_PRODUCTION: "1", ...extra }, 'await import("./services/api/src/config.js")');
   assert.match(boot({}).stderr, /DOCUMENT_SIGNING_KEY is required in production/);
-  assert.match(boot({ DOCUMENT_SIGNING_KEY: "0x1234" }).stderr, /DOCUMENT_SIGNING_KEY is not a 32-byte hex private key/);
+  const malformed = boot({ DOCUMENT_SIGNING_KEY: ORCHESTRATOR.slice(0, -2) });
+  assert.match(malformed.stderr, /DOCUMENT_SIGNING_KEY is not a 32-byte hex private key/);
+  assert.deepEqual(secretsIn(malformed.stderr), [], "the value is never printed");
   const same = boot({ DOCUMENT_SIGNING_KEY: ORCHESTRATOR });
   assert.match(same.stderr, /DOCUMENT_SIGNING_KEY must not be the orchestrator key/);
   assert.deepEqual(secretsIn(same.stderr), [], "the value is never printed");
-  assert.doesNotMatch(boot({ DOCUMENT_SIGNING_KEY: fake("e5") }).stderr, /DOCUMENT_SIGNING_KEY/);
+  // The alias config/keys.ts also reads the orchestrator key from.
+  const alias = boot({ ORCHESTRATOR_KEY: "", DEPLOY_ORCHESTRATOR_KEY: fake("f6"), DOCUMENT_SIGNING_KEY: ` ${fake("f6").toUpperCase().replace("0X", "0x")} ` });
+  assert.match(alias.stderr, /DOCUMENT_SIGNING_KEY must not be the orchestrator key/);
+  const own = boot({ DOCUMENT_SIGNING_KEY: fake("e5") });
+  assert.match(own.stderr, /production configuration is incomplete/, "the other checks ran");
+  assert.doesNotMatch(own.stderr, /DOCUMENT_SIGNING_KEY/);
 });
 
 console.log("the relay wallet");
