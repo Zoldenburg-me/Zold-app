@@ -25,5 +25,10 @@ export function hasUnstorableText(v: unknown): boolean {
   return false;
 }
 
+/** `s` with each NUL dropped and each lone surrogate replaced by U+FFFD, for
+ *  text we did not write (a partner's error body) on its way into a row. */
+export const storableText = (s: string): string =>
+  s.replace(new RegExp(UNSTORABLE.source, "g"), (m) => (m === "\u0000" ? "" : "\uFFFD"));
+
 /** The first `n` characters of `s`, never half of one (an emoji is two UTF-16 units). */
 export const sliceChars = (s: string, n: number): string => Array.from(s).slice(0, n).join("");
