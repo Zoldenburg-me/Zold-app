@@ -258,6 +258,12 @@ const total = () => formatCents(formTotalCents(lines));
 function renderForm(inv) {
   // Dollars are paid as USDC to a wallet; euro by SEPA, or as EURe to a wallet.
   const usd = inv.currency === "USD";
+  // A dollar link where no wallet can be paid has nothing to fill in.
+  if (usd && !chains.length) {
+    $("#content").innerHTML = `<div class="panel"><h2>Invoice requested by ${esc(inv.payor.name)}</h2>
+      <div class="note">This invoice is in US dollars, paid to a wallet, and ${esc(inv.payor.name)} can’t pay to a wallet right now. Ask them for a new link in euro.</div></div>`;
+    return;
+  }
   const walletFields = `<label for="f-wallet">Wallet address</label><input id="f-wallet" placeholder="0x…" />
         <label for="f-chain">Network</label><select id="f-chain">${chains.map((c) =>
           `<option value="${esc(c.chainId)}">${esc(c.name)}</option>`).join("")}</select>`;

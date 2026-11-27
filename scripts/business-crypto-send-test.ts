@@ -382,16 +382,22 @@ try {
     await setWallet(ALICE);
   });
 
-  await t("a run sent back and released from its invoice cannot be sent again: the invoice is paid from Invoices", async () => {
+  await t("a run sent back keeps its invoice and can be sent again; cancelled, it frees the invoice and can never pay it", async () => {
     const { inv, draft } = await paidInvoice("EUR");
     await call("POST", `/orgs/org_1/drafts/${draft.id}/submit`, "u_owner");
     assert.equal((await call("POST", `/orgs/org_1/drafts/${draft.id}/review`, "u_admin", { approve: false, note: "add a note" })).status, 200);
-    const listed = (await call("GET", "/orgs/org_1/invoices", "u_owner")).data.invoices.find((i: any) => i.id === inv);
-    assert.equal(listed.state, "SUBMITTED", "reading the list released it");
+    const listed = async () => (await call("GET", "/orgs/org_1/invoices", "u_owner")).data.invoices.find((i: any) => i.id === inv);
+    assert.equal((await listed()).state, "PAYING", "reading the list does not release it: no second Pay beside the sent-back run");
     assert.equal((await call("PATCH", `/orgs/org_1/drafts/${draft.id}`, "u_owner", {})).status, 200);
-    const s = await call("POST", `/orgs/org_1/drafts/${draft.id}/submit`, "u_owner");
+    assert.equal((await approve(draft.id)).status, 200);
+    assert.equal((await call("POST", `/orgs/org_1/drafts/${draft.id}/cancel`, "u_owner")).status, 200);
+    assert.equal((await listed()).state, "SUBMITTED");
+    // A second run stamped with the freed invoice's id is not its payment.
+    const d = await call("POST", "/orgs/org_1/drafts", "u_owner", { source: { kind: "account", accountId: "acc_1" }, lines: [walletLine({ invoiceId: inv, amount: "10.00" })] });
+    const s = await call("POST", `/orgs/org_1/drafts/${d.data.draft.id}/submit`, "u_owner");
     assert.equal(s.status, 422, JSON.stringify(s.data));
     assert.match(s.data.error, /no longer pays its invoice/);
+    await call("POST", `/orgs/org_1/drafts/${d.data.draft.id}/cancel`, "u_owner");
   });
 
   await t("an expired approval reads FAILED, cannot be submitted, and the run says so", async () => {
