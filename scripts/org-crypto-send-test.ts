@@ -21,8 +21,9 @@
  *   - an executed send is booked on the company account's statement, never on
  *     the queuing member's own books;
  *   - a bank run from a company account with its IBAN issued is never built
- *     here as transfers: execute answers COMPANY_BANK_RUN_SIGN and names
- *     where an owner signs it (org-monerium-bank-runs:test covers the run).
+ *     here as transfers: with payouts off execute answers ORG_PAYOUTS_OFF;
+ *     on, COMPANY_BANK_RUN_SIGN and where an owner signs it
+ *     (org-monerium-bank-runs:test covers the run).
  *
  * The sole-trader and personal paths are covered unchanged by
  * business-crypto-send:test and crypto-send:test.
@@ -392,7 +393,13 @@ try {
       const ops = (await store.safeOpsOf("org_1")).length;
       const transfers = (await store.list("transfers")).length;
       // noSepa throws if a transfer were built: the refusal comes first.
-      const x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
+      // Payouts off (the default): said before any sign dialog.
+      const off = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer");
+      assert.equal(off.status, 409, JSON.stringify(off.data));
+      assert.equal(off.data.code, "ORG_PAYOUTS_OFF");
+      process.env.MONERIUM_ORG_PAYOUTS = "on";
+      let x;
+      try { x = await call("POST", `/orgs/org_1/drafts/${id}/execute`, "u_payer"); } finally { delete process.env.MONERIUM_ORG_PAYOUTS; }
       assert.equal(x.status, 409, JSON.stringify(x.data));
       assert.equal(x.data.code, "COMPANY_BANK_RUN_SIGN");
       assert.equal(x.data.startTo, `/api/orgs/org_1/drafts/${id}/bank-run/start`);
