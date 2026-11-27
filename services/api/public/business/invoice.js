@@ -117,9 +117,10 @@ export function correctionDraft(i) {
     _correcting: { id: i.id, number: d.number },
     issueDate: today(),
     recipient: { ...d.recipient, isBusiness: d.recipientIsBusiness === true },
-    lines: i.lines.map((l) => ({ description: l.description, quantity: String(l.quantity), unitPriceNet: String(l.unitPrice) })),
+    // vatRate kept: without it a mixed-rate invoice re-taxes every line at one rate.
+    lines: i.lines.map((l) => ({ description: l.description, quantity: String(l.quantity), unitPriceNet: String(l.unitPrice), ...(l.vatRate !== undefined ? { vatRate: l.vatRate } : {}) })),
     language: d.language || "en",
-    supplyKind: d.supplyKind || "services",
+    supplyKind: d.supplyKind,
     supplyDate: d.supplyDate || "",
     purchaseOrder: d.purchaseOrder || "",
     currency: d.currency || "EUR",
@@ -258,7 +259,9 @@ export function readInvoiceEditor() {
   const val = (id) => $("#" + id)?.value?.trim() ?? "";
   const before = invoiceDraft.recipient || {};
   const isBusiness = before.isBusiness === true;
+  // Spread first: fields the editor does not show (taxNumber, email) are kept.
   invoiceDraft.recipient = {
+    ...before,
     name: val("inv-r-name"), addressLine: val("inv-r-addr"), postalCode: val("inv-r-zip"),
     city: val("inv-r-city"), country: val("inv-r-country").toUpperCase(),
     // A private customer's VAT ID is not asked for and not sent.

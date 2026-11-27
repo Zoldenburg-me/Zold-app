@@ -122,6 +122,14 @@ export async function issueOutgoing(
     if (euroCents !== Math.round((payableEur(correcting) ?? NaN) * 100)) {
       return refusal(422, `The corrected invoice would total ${fromCents(euroCents)} EUR, not the original's ${fromCents(Math.round((payableEur(correcting) ?? 0) * 100))} EUR. Nothing was issued.`);
     }
+    // The same gross can hide a different VAT (net moved between a 19% and a
+    // 7% line): the tax shown per rate must stay the original's (§ 14c UStG).
+    const perRate = (b: { rate: number; netCents: number; vatCents: number }[] | undefined, vatCents: number | undefined) =>
+      JSON.stringify(b ? [...b].sort((x, y) => x.rate - y.rate).map(({ rate, netCents, vatCents }) => [rate, netCents, vatCents]) : vatCents);
+    const was = correcting.issued!;
+    if (perRate(report.totals.buckets, report.totals.vatCents) !== perRate(was.buckets, was.vatCents)) {
+      return refusal(422, `The corrected invoice would show different VAT than the original (${fromCents(report.totals.vatCents)} instead of ${fromCents(was.vatCents)}, or split differently across rates). A correction keeps the tax; change it with a cancellation and a new invoice. Nothing was issued.`);
+    }
   }
   // A receipt month the wallets may not have delivered in full is confirmed in
   // the same answer as the compliance warnings, so one acceptance covers only

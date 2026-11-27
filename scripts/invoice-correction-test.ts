@@ -283,6 +283,33 @@ await check("the customer's details and the lines' wording can be corrected; the
   assert.equal(c.issued.grossCents, r.data.invoice.issued.grossCents);
 });
 
+await check("the VAT per rate cannot move under the same total; a mixed-rate invoice keeps its rates", async () => {
+  const domestic = {
+    ...reverseCharge,
+    recipient: { name: "Kunde GmbH", addressLine: "Hauptstr. 1", postalCode: "10115", city: "Berlin", country: "DE", isBusiness: true },
+    lines: [{ description: "Beratung", quantity: "1", unitPriceNet: "100.00", vatRate: 19 }, { description: "Buch", quantity: "1", unitPriceNet: "10.00", vatRate: 7 }],
+    vat: { kind: "standard", rate: 19 },
+  };
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", domestic);
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.invoice.issued.grossCents, 11900 + 1070);
+  // Same gross (117.70 + 12.00 = 129.70), less VAT: net moved from 19% to 7%.
+  const shifted = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, lines: [
+    { description: "Beratung", quantity: "1", unitPriceNet: "110.00", vatRate: 7 },
+    { description: "Buch", quantity: "1", unitPriceNet: "10.08", vatRate: 19 },
+  ] });
+  assert.equal(shifted.status, 422, JSON.stringify(shifted.data));
+  assert.match(shifted.data.error ?? JSON.stringify(shifted.data), /VAT/);
+  assert.equal((await store.findInvoice(r.data.invoice.id))!.state, "SUBMITTED");
+  // Rewording both lines at their own rates is a correction.
+  const fixed = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, lines: [
+    { description: "Beratung, Mai", quantity: "1", unitPriceNet: "100.00", vatRate: 19 },
+    { description: "Fachbuch", quantity: "1", unitPriceNet: "10.00", vatRate: 7 },
+  ] });
+  assert.equal(fixed.status, 201, JSON.stringify(fixed.data));
+  assert.equal(fixed.data.invoice.issued.vatCents, r.data.invoice.issued.vatCents);
+});
+
 await check("an amount that no longer matches is refused, not issued", async () => {
   const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
   // The correction is built from the original's own lines and treatment, so
