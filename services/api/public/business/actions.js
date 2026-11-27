@@ -427,6 +427,13 @@ async function signCryptoRun(sends) {
   toast(out.join(" "), !ok);
 }
 
+/** One picked payee of New payment's bank form, as it stands in the page. */
+const payeeRow = (el) => ({
+  contactId: el.dataset.line,
+  amount: el.querySelector('[data-lf="amount"]').value,
+  note: el.querySelector('[data-lf="note"]').value,
+});
+
 export const ACTIONS = {
   // ── Documents (views.js RENDER.documents) ────────────────────────────────
   async "doc-statement"() {
@@ -598,10 +605,12 @@ export const ACTIONS = {
           }] : [],
         },
       });
-      // From New payment: saving redraws the form, so what was typed rides in sendState. Cancel stores nothing.
+      // From New payment: saving redraws the form, so what was typed and picked rides in sendState. Cancel stores nothing.
       if (fromSend) {
         sendState.amount = $("#d-amt")?.value.trim() || "";
         sendState.note = $("#d-note")?.value.trim() || "";
+        sendState.rows = [...document.querySelectorAll("#send-lines [data-line]")].map(payeeRow);
+        sendState.accountId = $('#send-form input[name="account"]:checked')?.value || null;
         sendState.contactId = r.contact.id;
       }
       toast("Contact added.");
@@ -1246,11 +1255,7 @@ export const ACTIONS = {
       // The contacts are read again: a line is built from the address book as
       // it is now, never from what the form drew.
       const els = [...document.querySelectorAll("#send-lines [data-line]")];
-      const rows = els.map((el) => ({
-        contactId: el.dataset.line,
-        amount: el.querySelector('[data-lf="amount"]').value,
-        note: el.querySelector('[data-lf="note"]').value,
-      }));
+      const rows = els.map(payeeRow);
       const { contacts } = rows.length ? await api(`/api/orgs/${org.id}/contacts`) : { contacts: [] };
       const built = bankLines(rows, contacts, { companyBank: org.entity === "company" });
       if (built.error) {

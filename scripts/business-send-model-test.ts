@@ -7,7 +7,10 @@
  * COMPANY_BANK_RUN_MAX_LINES payees and no two with the same amount at the
  * same IBAN; anyone else's at most CEILINGS.linesPerDraft; the form's limits
  * are the API's; the line has no invoice, so assertOneLinePerInvoice holds;
- * the lines the form builds pass the API's own line validation.
+ * the lines the form builds pass the API's own line validation; ticking and
+ * unticking a contact keeps what was typed for the others and stops at the
+ * limit; the payees entered before Add a contact are the ones the form opens
+ * with again.
  *
  * What this cannot show: the form in a browser, or the API's refusals (those
  * are org-monerium-bank-runs:test and the drafts suites). Offline.
@@ -117,6 +120,39 @@ check("a company bank payment: no two payees with the same amount at the same IB
   assert.ok(m.bankLines([row("c1", "100"), row("c3", "100.01")], contacts, { companyBank: true }).lines, "another amount is another Monerium message");
   assert.ok(m.bankLines([row("c1", "100"), row("c2", "100")], contacts, { companyBank: true }).lines, "another IBAN too");
   assert.ok(m.bankLines([row("c1", "100"), row("c3", "100")], contacts).lines, "only a company bank run signs one message per line");
+});
+
+check("ticking a contact adds a payee, unticking removes only that one, the others keep what was typed", () => {
+  const rows = [row("c1", "80", "October")];
+  assert.equal(m.setPayee(rows, "c2", true, 10), true);
+  assert.deepEqual(rows, [row("c1", "80", "October"), row("c2", "")]);
+  assert.equal(m.setPayee(rows, "c2", true, 10), true, "ticked twice is one payee");
+  assert.equal(rows.length, 2);
+  assert.equal(m.setPayee(rows, "c1", false, 10), false);
+  assert.deepEqual(rows, [row("c2", "")]);
+  assert.equal(m.setPayee(rows, "gone", false, 10), false);
+  assert.equal(rows.length, 1);
+});
+
+check("at the limit a tick is refused, and removing a payee opens the slot again", () => {
+  const rows = [row("c1", "1"), row("c2", "2")];
+  assert.equal(m.setPayee(rows, "c3", true, 2), false, "the box is unticked again");
+  assert.deepEqual(rows, [row("c1", "1"), row("c2", "2")]);
+  m.setPayee(rows, "c1", false, 2);
+  assert.equal(m.setPayee(rows, "c3", true, 2), true);
+  assert.deepEqual(rows, [row("c2", "2"), row("c3", "")]);
+});
+
+check("the form opens with the payees entered before Add a contact, then the new contact", () => {
+  const payable = contacts.filter((c) => c.bankAccounts.length);
+  const carried = [row("c1", "80", "October"), row("c2", "12,5")];
+  assert.deepEqual(m.openingRows(carried, row("c3", ""), payable, 10), [...carried, row("c3", "")]);
+  assert.deepEqual(m.openingRows(carried, row("c4", ""), payable, 10), carried, "a new contact saved without an IBAN is not a payee");
+  assert.deepEqual(m.openingRows(carried, row("c3", ""), payable, 2), carried, "no room: the payees entered stay, the new one is not added");
+  assert.deepEqual(m.openingRows(carried, row("c1", ""), payable, 10), carried, "never the same contact twice");
+  assert.deepEqual(m.openingRows([row("gone", "5"), row("c1", "80")], undefined, payable, 10), [row("c1", "80")], "a carried payee no longer payable is dropped");
+  assert.deepEqual(m.openingRows([], row("c1", "250", "rent"), payable, 10), [row("c1", "250", "rent")], "a contact's Pay button");
+  assert.deepEqual(m.openingRows([], undefined, payable, 10), []);
 });
 
 check("the total counts only valid amounts", () => {

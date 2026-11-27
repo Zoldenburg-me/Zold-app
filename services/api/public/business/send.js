@@ -17,10 +17,11 @@ import { Z, api, cap, chainId, esc, eur, gateHtml, maskIban, me, org, reviewOn, 
 import { loadMembers } from "./screens.js";
 import { META, RENDER, linkBtn } from "./views.js";
 import { companyBankAccounts, fundableAccounts, payableContacts } from "./home-model.js";
-import { bankOf, maxPayees, payeesTotal, sendAmount } from "./send-model.js";
+import { bankOf, maxPayees, openingRows, payeesTotal, sendAmount, setPayee } from "./send-model.js";
 
-/** Picked before the form opens: a contact's Pay button, or what was typed before Add a contact. */
-export const sendState = { contactId: null, amount: "", note: "", mode: "bank" };
+/** Picked before the form opens: a contact's Pay button, or what was typed
+ *  and picked before Add a contact (a bank payment's payees and its account). */
+export const sendState = { contactId: null, amount: "", note: "", mode: "bank", rows: [], accountId: null };
 
 /** A contact's wallet on this deployment's network, or undefined. */
 export const walletOf = (c, net = chainId) => (c.wallets || []).find((w) => w.chainId === net);
@@ -180,6 +181,7 @@ RENDER.send = async () => {
     // Nothing here can use a carried amount: a later New payment starts empty.
     sendState.amount = "";
     sendState.note = "";
+    sendState.rows = [];
     return `<div class="gate"><h3>No account can pay yet</h3><p>${companyBank
       ? `${esc(org.name)}’s IBAN isn’t on its Safe yet. Issue it in Settings → Monerium first.`
       : org.type === "business"
@@ -190,24 +192,28 @@ RENDER.send = async () => {
     return `<div class="gate"><h3>Add who you’re paying</h3><p>A payment goes to a contact with bank details, so a later change to them is caught before sending.</p><div class="zb-actions"><button type="button" class="z-btn z-btn--primary" data-act="new-contact">${Z.icon("person_add")}<span>Add contact</span></button>${cryptoOn ? `<button type="button" class="z-btn z-btn--secondary" data-act="send-mode" data-mode="crypto">${Z.icon("account_balance_wallet")}<span>Pay a crypto wallet</span></button>` : ""}</div></div>`;
   }
   const approvers = (members || []).filter((m) => m.status === "active" && m.id !== org.memberId && roleCan(m.role, "approve"));
-  const first = fundable.find((a) => a.backingUserId === me?.id) || fundable[0];
+  const first = fundable.find((a) => a.id === sendState.accountId) || fundable.find((a) => a.backingUserId === me?.id) || fundable[0];
   const chosen = payable.find((c) => c.id === sendState.contactId)?.id;
   const action = reviewOn() && !companyBank ? "Submit for approval" : "Save payment";
   // What was typed before Add a contact fills the form once; a later New payment starts empty.
   const amount = sendState.amount;
   const note = sendState.note;
+  const max = maxPayees(companyBank);
+  // A bank payment's payees, in the order they were picked: the ones entered
+  // before Add a contact keep their amounts and notes, and what was typed for
+  // one contact goes to that contact.
+  const opening = crypto ? [] : openingRows(sendState.rows, chosen && { contactId: chosen, amount, note }, payable, max);
 
   const addRow = crypto
     ? `<button type="button" class="zb-pick-row zb-pick-row--add" data-act="new-wallet-contact">${Z.iconTile({ icon: "person_add" })}<span class="z-row__main"><span class="z-row__title">Add a wallet contact</span><span class="z-row__sub">An ENS name or 0x address, saved with the contact, so a later change to it is caught before sending.</span></span></button>`
     : `<button type="button" class="zb-pick-row zb-pick-row--add" data-act="new-contact">${Z.iconTile({ icon: "person_add" })}<span class="z-row__main"><span class="z-row__title">Add a contact</span><span class="z-row__sub">A payment goes to a saved contact, so a later change to their bank details is caught before sending.</span></span></button>`;
-  const max = maxPayees(companyBank);
   const tokenPick = (t, label) => `<label class="zb-pick"><input type="radio" name="token" value="${t}"${t === "EURE" ? " checked" : ""} /><span class="zb-pick__title">${esc(label)}</span></label>`;
   const html = `<div class="zb-send">
     <form class="z-card zb-pad zb-stack" id="send-form" style="gap:20px" novalidate>
       <fieldset class="zb-fieldset"><legend>From</legend><div class="zb-picks">${fundable.map((a) => accountCard(a, a === first)).join("")}</div></fieldset>
       <fieldset class="zb-fieldset"><legend>To</legend>
         ${payable.length >= FIND_FROM ? `<label class="z-sr" for="send-find">Find a contact</label><input id="send-find" type="search" autocomplete="off" placeholder="Find a contact…" style="margin-bottom:10px" />` : ""}
-        <div class="z-card zb-pick-list" id="send-contacts">${payable.map((c) => contactRow(c, c.id === chosen, crypto && net)).join("")}
+        <div class="z-card zb-pick-list" id="send-contacts">${payable.map((c) => contactRow(c, crypto ? c.id === chosen : opening.some((r) => r.contactId === c.id), crypto && net)).join("")}
           ${addRow}
         </div></fieldset>
       ${crypto ? `<fieldset class="zb-fieldset"><legend>Send</legend><div class="zb-picks">${tokenPick("EURE", "EURe")}${tokenPick("USDC", usdSymbol)}</div></fieldset>` : ""}
@@ -233,10 +239,10 @@ RENDER.send = async () => {
       // Cleared only by the render that is shown: a superseded one never binds.
       sendState.amount = "";
       sendState.note = "";
+      sendState.rows = [];
+      sendState.accountId = null;
       const form = box.querySelector("#send-form");
-      // A bank payment's payees, in the order they were picked; what was
-      // typed before Add a contact goes to the contact it was typed for.
-      const rows = !crypto && chosen ? [{ contactId: chosen, amount, note }] : [];
+      const rows = opening;
       const draw = () => { box.querySelector("#send-summary").innerHTML = summary(form, fundable, payable, approvers, crypto && net, rows); };
       const drawLines = () => {
         const list = box.querySelector("#send-lines");
@@ -256,10 +262,7 @@ RENDER.send = async () => {
       form.addEventListener("change", (ev) => {
         if (crypto || ev.target.name !== "contact") return;
         const id = ev.target.value;
-        const at = rows.findIndex((r) => r.contactId === id);
-        if (ev.target.checked && at < 0 && rows.length < max) rows.push({ contactId: id, amount: "", note: "" });
-        if (!ev.target.checked && at >= 0) rows.splice(at, 1);
-        ev.target.checked = rows.some((r) => r.contactId === id);
+        ev.target.checked = setPayee(rows, id, ev.target.checked, max);
         drawLines();
         draw();
         if (ev.target.checked) [...box.querySelectorAll("#send-lines [data-line]")].find((el) => el.dataset.line === id)?.querySelector('[data-lf="amount"]').focus();
@@ -267,8 +270,7 @@ RENDER.send = async () => {
       form.addEventListener("click", (ev) => {
         const drop = ev.target.closest?.("[data-drop]");
         if (!drop) return;
-        const at = rows.findIndex((r) => r.contactId === drop.dataset.drop);
-        if (at >= 0) rows.splice(at, 1);
+        setPayee(rows, drop.dataset.drop, false, max);
         const pick = [...box.querySelectorAll('#send-contacts input[name="contact"]')].find((el) => el.value === drop.dataset.drop);
         if (pick) pick.checked = false;
         drawLines();

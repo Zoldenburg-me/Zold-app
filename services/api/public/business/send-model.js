@@ -39,6 +39,30 @@ export function payeesTotal(rows) {
 }
 
 /**
+ * The payees a bank payment's form opens with: those carried across Add a
+ * contact that can still be paid, then the contact picked before the form
+ * opened, while there is room.
+ */
+export function openingRows(carried, picked, payable, max) {
+  const can = (id) => payable.some((c) => c.id === id);
+  const rows = (carried || []).filter((r) => can(r.contactId)).slice(0, max);
+  if (picked && can(picked.contactId) && rows.length < max && !rows.some((r) => r.contactId === picked.contactId)) rows.push(picked);
+  return rows;
+}
+
+/**
+ * A contact ticked or unticked: `rows` gains or loses them, and the others
+ * keep what was typed. Answers whether they are a payee now: a tick past
+ * `max` is not.
+ */
+export function setPayee(rows, contactId, on, max) {
+  const at = rows.findIndex((r) => r.contactId === contactId);
+  if (on && at < 0 && rows.length < max) rows.push({ contactId, amount: "", note: "" });
+  if (!on && at >= 0) rows.splice(at, 1);
+  return rows.some((r) => r.contactId === contactId);
+}
+
+/**
  * The draft's lines for the picked payees, or the first problem.
  *
  * rows: `{ contactId, amount, note }` in the order they were picked.
