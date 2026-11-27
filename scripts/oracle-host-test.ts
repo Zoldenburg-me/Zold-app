@@ -38,8 +38,8 @@ function check(name: string, ok: boolean, detail = ""): void {
   passed++;
   console.log(`  ok  ${name}`);
 }
-const sh = (cmd: string, args: string[], env: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> =>
-  spawnSync(cmd, args, { encoding: "utf8", env: { ...process.env, ...env } });
+const sh = (cmd: string, args: string[], env: NodeJS.ProcessEnv = {}, input?: string): SpawnSyncReturns<string> =>
+  spawnSync(cmd, args, { encoding: "utf8", env: { ...process.env, ...env }, input });
 
 // --- offline ---------------------------------------------------------------------
 const scripts = readdirSync(DIR).filter((f) => f.endsWith(".sh")).map((f) => path.join(DIR, f));
@@ -92,6 +92,15 @@ const lines = (s: string) => s.split("\n").filter((l) => l.trim() && !l.startsWi
   check("provision: drops the Postgres ports, opens none", /--dport 5432:5433 -j DROP/.test(provision) && !/-j ACCEPT/.test(provision));
   check("provision: refuses a public listener but sshd", provision.includes("listening on a public address"));
   check("provision: never sets archive-push-queue-max", !/^\s*echo "archive-push-queue-max/m.test(provision));
+  const ss = [
+    "LISTEN 0 128 127.0.0.1:3000 0.0.0.0:*", "LISTEN 0 128 [::1]:3000 [::]:*", "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*", "LISTEN 0 128 [::]:22 [::]:*",
+    "LISTEN 0 128 127.0.0.53%lo:53 0.0.0.0:*", "LISTEN 0 4096 100.64.0.7%tailscale0:37349 0.0.0.0:*", "LISTEN 0 4096 [fd7a:115c:a1e0::7]%tailscale0:41673 [::]:*",
+    "LISTEN 0 128 0.0.0.0:5432 0.0.0.0:*", "LISTEN 0 128 10.0.0.5:8080 0.0.0.0:*", "LISTEN 0 128 [::]:443 [::]:*",
+  ].join("\n") + "\n";
+  const pub = sh("bash", ["-c", `R=; source "$0"; public_listeners`, path.join(DIR, "lib.sh")], {}, ss);
+  check("public_listeners: loopback, sshd and tailscale0 pass; 0.0.0.0, a VCN address and [::] do not", pub.stdout.trim().split("\n").join(" ") === "0.0.0.0:5432 10.0.0.5:8080 [::]:443", pub.stdout + pub.stderr);
+  check("provision: the public-listener check is public_listeners", provision.includes('public="$(ss -Htln | public_listeners)"'));
+  check("provision: the pgBackRest parents are root's 755 before pg-<dep>'s own directories", provision.indexOf("install -d -o root -g root -m 755 /var/spool/pgbackrest /var/log/pgbackrest") > 0 && provision.indexOf("install -d -o root -g root -m 755 /var/spool/pgbackrest") < provision.indexOf('install -d -o "$PG_USER" -g "$PG_USER" -m 750 "/var/spool/pgbackrest/$DEP"'));
   const host = (endpoint: string) => sh("bash", ["-c", `R=; source "$0"; OCI_NAMESPACE=ns; s3_host "$1" eu-frankfurt-1`, path.join(DIR, "lib.sh"), endpoint]);
   check("s3_host: no endpoint is OCI Object Storage in the region", host("").stdout === "ns.compat.objectstorage.eu-frankfurt-1.oraclecloud.com");
   check("s3_host: an owner's host name is used as it is (R2)", host("0123abcd.r2.cloudflarestorage.com").stdout === "0123abcd.r2.cloudflarestorage.com");

@@ -71,6 +71,13 @@ psql_su() {
 
 die() { echo "$*" >&2; exit 1; }
 
+# public_listeners: from `ss -Htln` on stdin, the local addresses that are
+# neither loopback, nor sshd's port 22, nor bound to the tailnet interface
+# (tailscale0: reachable only from the owner's tailnet, never the internet).
+public_listeners() {
+  awk '{print $4}' | grep -vE '^(127\.[0-9.]+(%[a-z0-9]+)?|\[::1\]|\[::ffff:127\.[0-9.]+\]):[0-9]+$' | grep -vE ':22$' | grep -vE '%tailscale0:[0-9]+$' || true
+}
+
 # opt <NAME>: the deployment's optional host.env value (${P}_NAME), empty if unset.
 opt() { local n="${P}_$1"; printf '%s' "${!n:-}"; }
 

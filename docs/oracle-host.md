@@ -5,12 +5,15 @@ The how of `docs/postgres-store-design.md` §7, §7.1 and §7.2: one OCI Ampere
 cluster per deployment on unix sockets, and the hub in its own database in
 mainnet's cluster. The scripts are in `scripts/oracle-host/`.
 
-**None of this has run on the host.** The scripts and SQL have run only
-against a local Postgres 17 and a throwaway cluster (`npm run check:pg`), and
-on GitHub's linux-arm64 runner (the manual `oracle-host` workflow: the
-toolchain check on `production`, `npm run check`, then `check:pg`). Those
-tests stub `systemctl` and the host, so no unit, timer or runbook step has
-run.
+**Mainnet's half has run on the host; testnet's has not.** `provision.sh
+mainnet` ran on the owner's instance (Ampere A1, Ubuntu 24.04, Frankfurt):
+the cluster on a loop-mounted image, `stanza-create` and `check` against
+`repo1` (OCI Frankfurt) and `repo2` (Cloudflare R2), the database step and
+`check.sql`, the units and timers, a first full backup to each repository,
+WAL archiving, and one daily dump to R2. The API has not run there: its
+environment is staged outside `/etc/zold` and the deploy timer is off until
+the cut-over. Not run yet: each alert firing once, the one-repository-down
+test, a restore drill, testnet, and anything of S8.
 Everything marked S7b below needs the owner's host and account.
 
 ## Files
@@ -117,7 +120,10 @@ adds a drop-in to the cluster's unit (`PIDFile=` in the socket directory,
 `RequiresMountsFor=` the volume; the PID file path is the first thing to
 confirm on the host), installs the
 units and timers, drops TCP 5432-5433 in iptables, and fails if anything
-other than sshd listens on a public address.
+other than sshd listens on a public address (loopback and the `tailscale0`
+interface, the owner's tailnet, are not public). The package makes
+`/var/spool/pgbackrest` and `/var/log/pgbackrest` `postgres:postgres 750`;
+provision makes them root's 755 so `pg-<dep>` can reach its own directory.
 
 Then `cloudflared service install <token>`, with the tunnel's ingress for
 each hostname at `http://127.0.0.1:<API port>`.

@@ -243,6 +243,9 @@ done
 # (or outside OCI: REPO2_ENDPOINT, with its own REPO2_S3_KEY/_SECRET)
 # The passphrase sits only here, 0600, owned by the cluster's OS user, who
 # runs archive_command. The owner holds the off-host copy.
+# The package makes both parents postgres:postgres 750, which pg-<dep> cannot
+# enter; root's 755, and each deployment's own directory inside is 750.
+install -d -o root -g root -m 755 /var/spool/pgbackrest /var/log/pgbackrest
 install -d -o "$PG_USER" -g "$PG_USER" -m 750 "/var/spool/pgbackrest/$DEP" "/var/log/pgbackrest/$DEP"
 v() { local n="${P}_$1"; printf '%s' "${!n}"; }
 {
@@ -353,7 +356,7 @@ for proto in iptables ip6tables; do
   "$proto" -C INPUT -p tcp --dport 5432:5433 -j DROP 2>/dev/null || "$proto" -I INPUT 1 -p tcp --dport 5432:5433 -j DROP
 done
 netfilter-persistent save >/dev/null
-public="$(ss -Htln | awk '{print $4}' | grep -vE '^(127\.[0-9.]+(%[a-z0-9]+)?|\[::1\]|\[::ffff:127\.[0-9.]+\]):[0-9]+$' | grep -vE ':22$' || true)"
+public="$(ss -Htln | public_listeners)"
 [[ -z "$public" ]] || die "listening on a public address: $public"
 
 echo "provisioned $DEP: cluster $PG_MAJOR/$DEP on $PG_SOCKET, checks passed"
