@@ -422,7 +422,7 @@ export const jsonCore = {
     return o;
   },
   findUserByAddress(address: string) {
-    return db.users.find((u) => u.address.toLowerCase() === address.toLowerCase());
+    return db.users.find((u) => u.address?.toLowerCase() === address.toLowerCase());
   },
   findUserByCredential(credentialId: string) {
     return db.users.find((u) => u.passkey?.credentialId === credentialId);
