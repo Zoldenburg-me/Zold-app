@@ -70,7 +70,7 @@ assert.equal(m.securityRows({ noSafe: true }, links), null, "no Safe yet: no car
 }
 {
   const r = m.securityRows({ signers, recovery: rec("set", [{ kind: "social", address: "0xs" }]) }, links);
-  assert.deepEqual([r[1].ok, r[1].text], [true, "Recovery on, with your Google or Apple login"], "the user's own Google/Apple guardian is no stranger");
+  assert.deepEqual([r[1].ok, r[1].text], [true, "Recovery on, with the login you set up"], "the user's own Google/Apple guardian is no stranger");
 }
 {
   const r = m.securityRows({ signers, recovery: rec("pending") }, links);

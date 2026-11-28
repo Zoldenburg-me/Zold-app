@@ -181,8 +181,11 @@ export async function payLinkBlocker(org: Organisation, user: User, forInvoice =
 async function ownCompanyBeforeAccount(org: Organisation, user: User): Promise<boolean> {
   if (user.accountType !== "company" || org.type !== "business" || orgEntity(org) === "company") return false;
   if (user.passkeySafe?.status !== "active") return false;
-  // The link pays the page's deposit address: only when that is the Safe itself.
-  if (user.paymentPage && user.paymentPage.depositAddress.toLowerCase() !== user.passkeySafe.address.toLowerCase()) return false;
+  // No page yet: payLinkPayee answers NO_PAGE. A page must land at this Safe,
+  // directly or through its forwarder (production's Candide address).
+  const safe = user.passkeySafe.address.toLowerCase();
+  const page = user.paymentPage;
+  if (page && page.depositAddress.toLowerCase() !== safe && String(page.forwarder?.recipient ?? "").toLowerCase() !== safe) return false;
   const businesses = (await store.organisationsForUser(user.id)).filter(({ org: o }) => o.type === "business");
   if (businesses.length !== 1 || businesses[0].org.id !== org.id) return false;
   return (await store.membersOf(org.id)).some((m) => m.userId === user.id && m.status === "active" && m.role === "owner");

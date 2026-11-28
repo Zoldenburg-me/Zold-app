@@ -192,6 +192,12 @@ await check("the company login, in its only business with no account connected y
   // A page whose deposit address is not the Safe never takes the company's money.
   await store.updateUser("u_solo", { paymentPage: { handle: "roth", depositAddress: `0x${"ee".repeat(20)}` } } as any);
   assert.equal((await call("GET", "/api/orgs/org_solo/payment-requests", undefined, "u_solo")).body.payLink.allowed, false);
+  // Production's page: a Candide forwarder that lands at the Safe.
+  await store.updateUser("u_solo", { paymentPage: { handle: "roth", depositAddress: `0x${"ee".repeat(20)}`, forwarder: { recipient: SOLO } } } as any);
+  assert.equal((await call("GET", "/api/orgs/org_solo/payment-requests", undefined, "u_solo")).body.payLink.allowed, true, "forwarder to the Safe");
+  // No page yet: the fix offered is the page, not an account.
+  await store.updateUser("u_solo", { paymentPage: undefined } as any);
+  assert.equal((await call("GET", "/api/orgs/org_solo/payment-requests", undefined, "u_solo")).body.payLink.code, "NO_PAGE");
 });
 await check("a company login in more than one business is not taken for the owner of an unconnected one", async () => {
   const u = (await store.findUser("u_co"))!;

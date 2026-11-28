@@ -119,7 +119,7 @@ function orgRecoveryCard(r, yours) {
 
 const guardianItem = (g, safeUrl) => {
   if (g.kind === "zoldenburg") return item({ icon: "verified_user", tone: "m", title: "Zoldenburg UG", sub: "Checks the person against Monerium’s identity check, and approves from a hardware wallet. Zold’s servers never hold that key.", right: Z.tag("On") });
-  if (g.kind === "social") return item({ icon: "account_circle", tone: "m", title: "Your Google or Apple login", sub: `Sign in with it to move the account to a new ${esc(Z.passkeyName())}. ${addrChip(g.address)}`, right: Z.tag("On") });
+  if (g.kind === "social") return item({ icon: "account_circle", tone: "m", title: "Your recovery login", sub: `Sign in with the Google, Apple or email login you set up to move the account to a new ${esc(Z.passkeyName())}. ${addrChip(g.address)}`, right: Z.tag("On") });
   if (g.kind === "codes") return item({ icon: "sms", tone: "m", title: "Email or phone codes", sub: esc(g.channels.map((c) => `${c.channel === "sms" ? "Phone" : "Email"} ${c.target}`).join(", ") || "Codes sent to the registered contacts"), right: Z.tag("On") });
   return item({
     icon: "warning", tone: "a", title: "Unknown recovery address",
