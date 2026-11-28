@@ -37,6 +37,7 @@ import { custodyBlockerBeforeFunding, requireCapability } from "../http/guards.j
 import { pendingMoneriumLinkSignatures, prunePendingMoneriumLinkSignatures } from "../http/pending.js";
 import { publicUser } from "../users/public-user.js";
 import { pickProfileForSignup } from "../domain/monerium-profile.js";
+import { keptSnapshot, ownerOf, safeAddressRecord } from "../adapters/monerium-minimise.js";
 import { passkeySafeChallenge } from "../wallet/passkey-safe-plan.js";
 import {
   isDeployed,
@@ -113,17 +114,19 @@ function pkceChallenge(verifier: string) {
 
 async function readMoneriumAccountSnapshot(user: User, accessToken?: string) {
   accessToken ??= await moneriumAccessToken(user);
-  const [context, profileRes, ibanRes, addressRes] = await Promise.all([
+  const safe = user.address;
+  const [context, profileRes, ibanRes, addressRec] = await Promise.all([
     moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", "/auth/context"),
     moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", "/profiles"),
     moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", "/ibans"),
-    moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", "/addresses"),
+    // Only the Safe's record, never the login's list of every address it linked.
+    /^0x[0-9a-fA-F]{40}$/.test(safe) ? safeAddressRecord(() => moneriumBearerRequest<any>(MONERIUM.baseUrl, accessToken, "GET", `/addresses/${safe}`)) : null,
   ]);
   const profiles = Array.isArray(profileRes) ? profileRes : (profileRes?.profiles ?? []);
   const ibans = Array.isArray(ibanRes) ? ibanRes : (ibanRes?.ibans ?? []);
-  const addresses = Array.isArray(addressRes) ? addressRes : (addressRes?.addresses ?? []);
+  const addresses = addressRec ? [addressRec] : [];
   const accountEmail = typeof context?.email === "string" ? context.email : undefined;
-  return { context, accountEmail, profiles, ibans, addresses };
+  return { accountEmail, profiles, ibans, addresses };
 }
 
 /**
@@ -243,7 +246,7 @@ async function recordMoneriumConnection(
                   ? "the IBAN this account had is not on the Monerium profile now connected; approve IBAN issuance with your passkey"
                   : "own Monerium account connected — approve IBAN issuance with your passkey",
           },
-      monerium: { ...connection, connectedAt: now, profileId, profiles: found.profiles, ibans: found.ibans, addresses: found.addresses },
+      monerium: { ...connection, connectedAt: now, profileId, ...keptSnapshot({ address: fresh.address, profileId }, found) },
     });
     return { updated, ownIban, dropIban, dropped: fresh.iban };
   });
@@ -586,7 +589,11 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
         return res.status(409).json({ error: "no Monerium account is connected to this account — connect one by OAuth or with your own API keys" });
       }
       const snapshot = await readMoneriumAccountSnapshot(user);
-      let updated = await store.patchUserSub(user.id, "monerium", (m) => ({ ...m!, ...snapshot }));
+      let updated = await store.patchUserSub(user.id, "monerium", (m) => {
+        // `context` was stored here once; nothing reads it.
+        const { context: _context, ...kept } = m as NonNullable<User["monerium"]> & { context?: unknown };
+        return { ...kept, accountEmail: snapshot.accountEmail, ...keptSnapshot(ownerOf(user), snapshot) };
+      });
       // The list was just read: check the stored IBAN still pays in here.
       updated = await applyIbanBinding(updated, snapshot.ibans);
       res.json((await publicUser(updated)).monerium);
@@ -1150,7 +1157,7 @@ export function createMoneriumRouter(deps: MoneriumDeps) {
       if (!(await approvesMoneriumChange(user, req.body, res))) return;
       let verified: Awaited<ReturnType<typeof verifyApiKeys>>;
       try {
-        verified = await verifyApiKeys(input.clientId, input.clientSecret);
+        verified = await verifyApiKeys(input.clientId, input.clientSecret, user.address);
       } catch (err: any) {
         if (err instanceof MoneriumApiError && err.status < 500) {
           await store.audit(auditEntry("partner.call_refused", { partner: "monerium", capability: "api_keys", status: err.status }, user.id));

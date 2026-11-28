@@ -16,6 +16,7 @@ import { moneriumVerifiedName, personKey } from "./verified-name.js";
 import { ENS_GATEWAY } from "../config.js";
 import { ensNameOf, shownParent } from "./ens-name.js";
 import { store } from "../store.js";
+import { keptSnapshot, ownerOf } from "../adapters/monerium-minimise.js";
 
 /** The named keys of `obj` that are set, and nothing else. */
 function pick<T extends object, K extends keyof T>(obj: T | undefined, keys: readonly K[]): Pick<T, K> | undefined {
@@ -175,9 +176,8 @@ export const publicUser = async (u: User) => ({
           profileId: u.monerium!.profileId,
           // Which Monerium login this is: the user's own email, shown back to them.
           accountEmail: u.monerium!.accountEmail ?? u.monerium!.apiKeys?.accountEmail,
-          profiles: u.monerium!.profiles,
-          ibans: u.monerium!.ibans,
-          addresses: u.monerium!.addresses,
+          // Only this Safe's entries, even on a row stored before the filter.
+          ...keptSnapshot(ownerOf(u), u.monerium!),
           // Client id, environment and when it was verified. Never the secret,
           // and never its ciphertext.
           ...(u.monerium!.apiKeys ? { apiKeys: publicApiKeys(u.monerium!.apiKeys) } : {}),

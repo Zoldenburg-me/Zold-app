@@ -2,6 +2,7 @@
  * Everything Zold knows from Monerium, for the operator.
  *
  * STORED is what Zold kept: the connect snapshot (profiles, IBANs, addresses),
+ * minimised to this account's Safe (adapters/monerium-minimise.ts),
  * IBAN moves, refusals, the bank facts of issue
  * orders, the redeem orders behind SEPA payouts and the partner audit trail.
  * Never a token or a secret, nor their ciphertext.
@@ -10,7 +11,9 @@
  * Monerium connection (OAuth or API keys), returned and not stored. It is
  * refused for an account without one: the app's credentials would answer with
  * every app-provisioned account's orders, not this person's. Each live read is
- * audited, because it is the operator looking into someone's bank data.
+ * audited, because it is the operator looking into someone's bank data, and
+ * passes the same filter: the login's other wallets and IBANs never reach the
+ * dashboard.
  */
 import { CHAIN_ID, MONERIUM, SECURITY, moneriumOAuthEnabled, moneriumSandboxEnabled } from "../config.js";
 import { store, type User } from "../store.js";
@@ -28,8 +31,7 @@ import { moneriumProfileState } from "./onboarding.js";
 import { maskIdentifier } from "./mask.js";
 import { redactedMessage } from "../http/log-cause.js";
 import { mapSeq } from "../seq.js";
-
-const asList = (v: any, key: string): any[] => (Array.isArray(v) ? v : Array.isArray(v?.[key]) ? v[key] : []);
+import { keptAddresses, keptIbans, keptOrders, keptProfiles, keptSnapshot, ownerOf, safeAddressRecord } from "../adapters/monerium-minimise.js";
 
 /** The Monerium-facing facts of the deployment itself. */
 export function moneriumDeployment() {
@@ -64,8 +66,8 @@ export function moneriumAccountRow(u: User) {
     fundingStatus: u.funding?.status,
     fundingDetail: u.funding?.detail,
     addressUnlinkable: u.funding?.addressUnlinkable,
-    ibans: asList(m?.ibans, "ibans").length,
-    addresses: asList(m?.addresses, "addresses").length,
+    ibans: keptIbans(ownerOf(u), m?.ibans).length,
+    addresses: keptAddresses(ownerOf(u), m?.addresses).length,
     refusal: u.moneriumRefusal,
   };
 }
@@ -116,9 +118,9 @@ export async function storedMonerium(u: User) {
           ...(m.apiKeys ? { apiKeys: publicApiKeys(m.apiKeys) } : {}),
         }
       : null,
-    profiles: asList(m?.profiles, "profiles"),
-    ibans: asList(m?.ibans, "ibans"),
-    addresses: asList(m?.addresses, "addresses"),
+    // Filtered again on read: a row stored before the filter existed shows
+    // only what the filter keeps.
+    ...keptSnapshot(ownerOf(u), m ?? {}),
     funding: u.funding,
     ibanBic: u.ibanBic,
     ibanMoves: u.moneriumIbanMoves ?? [],
@@ -155,13 +157,14 @@ export async function liveMonerium(u: User, operator: string) {
   }
   const client = moneriumClientFor(u);
   const profileId = u.monerium?.profileId ?? u.funding?.moneriumProfileId;
+  const owner = ownerOf(u);
   const [context, profiles, profile, ibans, addresses, orders] = await Promise.all([
-    part(() => client.authContext()),
-    part(() => client.profiles()),
+    part(async () => ({ email: (await client.authContext())?.email })),
+    part(async () => keptProfiles(owner, await client.profiles())),
     profileId ? part(() => client.profile(profileId)) : Promise.resolve<Part>({ ok: false, error: "no connected profile id" }),
-    part(() => client.ibans()),
-    part(() => client.addresses()),
-    part(() => client.orders(profileId)),
+    part(async () => keptIbans(owner, await client.ibans())),
+    part(async () => (/^0x[0-9a-fA-F]{40}$/.test(owner.address) ? keptAddresses(owner, await safeAddressRecord(() => client.address(owner.address))) : [])),
+    part(async () => keptOrders(owner, await client.orders(profileId))),
   ]);
   await store.audit(auditEntry("operator.monerium_read", { partner: "monerium", operator, profileId }, u.id));
   return { available: true as const, readAt: new Date().toISOString(), context, profiles, profile, ibans, addresses, orders };

@@ -504,7 +504,7 @@ try {
   await t("accounts are read on the user's own token, not the app's", async () => {
     const r = await call(`/api/users/${userId}/monerium/accounts`);
     assert.equal(r.status, 200, `accounts failed: ${r.text}`);
-    assert.ok(r.data.ibans.some((i: any) => i.iban === EXISTING_IBAN), "expected the account's pre-existing IBAN");
+    assert.ok(!r.data.ibans.some((i: any) => i.iban === EXISTING_IBAN), "an IBAN paying another wallet is not kept");
     assert.deepEqual([...seen.bearers], [USER_TOKEN], "only the user's token should ever reach the stub");
     assert.ok(!seen.tokenGrants.some((g) => g.clientId === "stub-app-without-secret"), "the app's credentials must not be tried");
   });

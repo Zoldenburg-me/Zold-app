@@ -183,6 +183,8 @@
     "operator:test": "tsx scripts/operator-auth-test.ts",
     "admin:ui:test": "tsx scripts/admin-ui-test.ts",
     "operator:enrol": "tsx services/api/src/operators/enrol-cli.ts",
+    "monerium:minimise": "tsx services/api/src/users/minimise-monerium-cli.ts",
+    "monerium:minimise:test": "tsx scripts/monerium-minimise-test.ts",
     "review-resolution:test": "tsx scripts/review-resolution-test.ts",
     "draft:test": "tsx scripts/draft-execution-test.ts",
     "draft:failure:test": "tsx scripts/draft-batch-failure-test.ts",

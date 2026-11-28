@@ -37,6 +37,7 @@ import {
   refreshAuthorizationToken,
 } from "./monerium-client.js";
 import { errorText } from "../http/log-cause.js";
+import { safeAddressRecord } from "./monerium-minimise.js";
 
 export type MoneriumConnectionMethod = "oauth" | "api_keys";
 
@@ -132,19 +133,20 @@ export interface VerifiedApiKeys {
  * left as the transient it is, so the browser can say "try again" rather than
  * "wrong secret".
  */
-export async function verifyApiKeys(clientId: string, clientSecret: string): Promise<VerifiedApiKeys> {
+export async function verifyApiKeys(clientId: string, clientSecret: string, safe: string): Promise<VerifiedApiKeys> {
   const client = await provenClient(clientId, clientSecret);
-  const [context, profileRes, ibanRes, addressRes] = await Promise.all([
+  const [context, profileRes, ibanRes, addressRec] = await Promise.all([
     client.authContext(),
     client.profiles(),
     client.ibans(),
-    client.addresses(),
+    // Only the Safe's record: the login's other addresses are none of ours.
+    safe ? safeAddressRecord(() => client.address(safe)) : null,
   ]);
   return {
     context,
     profiles: listOf(profileRes, "profiles"),
     ibans: listOf(ibanRes, "ibans"),
-    addresses: listOf(addressRes, "addresses"),
+    addresses: addressRec ? [addressRec] : [],
   };
 }
 

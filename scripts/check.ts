@@ -49,6 +49,7 @@ const scripts = [
   "log-codes:test",
   "monerium:profile:test",
   "monerium:ratelimit:test",
+  "monerium:minimise:test",
   "display-name:test",
   "activity:test",
   "sepa:test",
