@@ -27,7 +27,7 @@ an active IBAN and a sent payment in a real browser without help.
       screen, so a company login never needs `/app`.
 - [ ] Agent-payments brief and scope committed, or dropped.
 - [ ] zoldhq.com's lease running current `production`.
-- [ ] One full browser run on zoldhq.com: signup, passkey, Safe, recovery
+- [x] One full browser run on zoldhq.com: signup, passkey, Safe, recovery
       enrolment, Monerium connect, IBAN, a SEPA send, a payment link paid.
 
 ### M2 — First real euro on Base mainnet

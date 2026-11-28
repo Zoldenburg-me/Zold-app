@@ -8,6 +8,12 @@ Say this plainly rather than letting the surface imply otherwise:
   Access; technical-architecture §18.1). Its operator keys are not yet keys held for
   real customers. Monerium production issues the owner's IBAN on their own
   production API keys (client credentials, not OAuth).
+- **The full testnet path has run in a real browser on zoldhq.com** (Base
+  Sepolia, Monerium sandbox), several times, by the owner and two other
+  testers: signup, passkey, Safe deployed, recovery enrolment, Monerium
+  connect, IBAN issued, a SEPA send, and a payment link paid. This is the
+  owner's statement (recorded 2026-11-28); the run dates, the build each
+  ran on and the accounts used are not recorded here.
 - **One SEPA round in and out has run on mainnet, for the owner only.**
   The bank transfer in (€1,087) and the SEPA payout out (€1,000) are the
   owner's statement; the mints and the burn are read back on chain
