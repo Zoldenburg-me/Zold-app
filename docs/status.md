@@ -96,6 +96,11 @@ Say this plainly rather than letting the surface imply otherwise:
   credentials used are the owner's own API keys (above). The OAuth cookie
   binding and the refresh client-id change are unproven against the real
   server.
+- **`npm run monerium:minimise` has not run on zoldhq.com or app.zoldhq.com.**
+  Until it does, rows connected before the filter still hold the login's other
+  profiles, IBANs and linked addresses (the API and the admin dashboard already
+  show only the Safe's). Tested on the JSON store and PGlite only. Take a
+  backup first: what it removes is kept nowhere.
 - **Moving an existing Monerium IBAN** (`POST /users/:id/monerium/move-iban`,
   `PATCH /ibans/{iban}`) has run only against the fake Monerium in the
   oauth/apikeys suites, never against Monerium's real sandbox. Whether the

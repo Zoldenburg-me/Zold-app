@@ -48,6 +48,7 @@ const PROFILE_ID = "profile-existing-user";
 // moved from it.
 const BUSINESS_PROFILE_ID = "profile-existing-business";
 const EXISTING_IBAN = "GB33BUKB20201555555555";
+const OTHER_LINKED = `0x${"5e".repeat(20)}`;
 const APP_IBAN = "IS140159260076545510730339";
 // A second IBAN on PROFILE_ID, as a sandbox test login can hold.
 const SPARE_IBAN = "DE89370400440532013000";
@@ -71,7 +72,8 @@ const seen = {
   // Monerium issues an IBAN some time after the request, as the sandbox does.
   ibanIssued: false,
   /** address (lowercase) -> the profile it was linked under */
-  links: new Map<string, string>(),
+  // The login already linked another wallet, from another app.
+  links: new Map<string, string>([[OTHER_LINKED, PROFILE_ID]]),
   patches: [] as { iban: string; address: string; chain: string }[],
   // Whether an accepted PATCH shows on the next GET /ibans. When false, the
   // move is accepted but a re-read still shows the old address.
@@ -514,11 +516,19 @@ try {
     assert.equal(me.data.moneriumRefusal, undefined, "a replay must not mark the connected account refused");
   });
 
-  await t("accounts lists the user's existing Monerium IBANs", async () => {
+  await t("accounts keeps only this Safe's entries from the login's lists", async () => {
     const r = await call(`/api/users/${userId}/monerium/accounts`);
     assert.equal(r.status, 200);
-    assert.ok(r.data.ibans.some((i: any) => i.iban === EXISTING_IBAN), "expected the user's pre-existing IBAN");
-    assert.ok(r.data.profiles.some((p: any) => p.id === BUSINESS_PROFILE_ID), "the login's company profile is listed");
+    assert.ok(!r.data.ibans.some((i: any) => i.iban === EXISTING_IBAN), "an IBAN paying another wallet is not kept");
+    assert.deepEqual(r.data.profiles.find((p: any) => p.id === BUSINESS_PROFILE_ID), { id: BUSINESS_PROFILE_ID, kind: "corporate" }, "another profile keeps only its id and kind");
+    assert.equal("context" in r.data, false, "the auth context is not stored");
+    const m = JSON.parse(readFileSync(process.env.TRANSF_DB_PATH!, "utf8")).users.find((u: any) => u.id === userId).monerium;
+    const row = JSON.stringify(m).toLowerCase();
+    for (const other of [EXISTING_IBAN.toLowerCase(), OTHER_LINKED, "0x00000000000000000000000000000000000000ff"]) {
+      assert.ok(!row.includes(other), `${other} stored on the user row`);
+    }
+    assert.equal("context" in m, false);
+    assert.ok(m.profiles.every((p: any) => p.id === m.profileId || Object.keys(p).join() === "id,kind"), "other profiles stored as id and kind only");
     assert.equal(r.data.profileId, PROFILE_ID, "but a personal account stays connected under its personal profile");
   });
 

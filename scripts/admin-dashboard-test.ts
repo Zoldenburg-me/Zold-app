@@ -39,6 +39,7 @@ await initStore();
 const now = new Date().toISOString();
 const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
 const safe = (n: string) => `0x${n.repeat(40)}` as `0x${string}`;
+const OTHER_WALLET = `0x${"7e".repeat(20)}`;
 const pk = { x: "1", y: "2" };
 
 // Connected, IBAN active, Zoldenburg guardian on chain.
@@ -78,11 +79,13 @@ globalThis.fetch = (async (input: any, init?: any) => {
   const p = new URL(url).pathname;
   const body =
     p === "/auth/context" ? { userId: "m-user", email: "live@example.com" }
-    : p === "/profiles" ? { profiles: [{ id: "prof-live", kind: "personal", name: "Live", state: "approved" }] }
+    : p === "/profiles" ? { profiles: [{ id: "prof-live", kind: "personal", name: "Live", state: "approved", perms: ["read"] }, { id: "prof-other", kind: "corporate", name: "Other Co", state: "approved" }] }
     : p === "/profiles/prof-live" ? { id: "prof-live", kind: "personal", state: "approved" }
-    : p === "/ibans" ? { ibans: [{ iban: "DE89370400440532013000", bic: "MONEDEB1", profile: "prof-live", address: safe("a"), chain: "base" }] }
-    : p === "/addresses" ? { addresses: [{ address: safe("a"), profile: "prof-live", chains: ["base"] }] }
-    : p === "/orders" ? { orders: [{ id: "o1", kind: "issue", amount: "5", currency: "eur", state: "processed" }] }
+    // The login also holds an IBAN, an address and orders on another wallet.
+    : p === "/ibans" ? { ibans: [{ iban: "DE89370400440532013000", bic: "MONEDEB1", profile: "prof-live", address: safe("a"), chain: MONERIUM.chain, extra: "x" }, { iban: "DE12500105170648489890", profile: "prof-live", address: OTHER_WALLET, chain: MONERIUM.chain }] }
+    : p === `/addresses/${safe("a")}` ? { address: safe("a"), profile: "prof-live", chains: ["base"] }
+    : p === "/addresses" ? { addresses: [{ address: safe("a"), profile: "prof-live", chains: ["base"] }, { address: OTHER_WALLET, profile: "prof-live", chains: ["gnosis"] }] }
+    : p === "/orders" ? { orders: [{ id: "o1", kind: "issue", amount: "5", currency: "eur", state: "processed", address: safe("a") }, { id: "o2", kind: "issue", amount: "9", currency: "eur", state: "processed", address: OTHER_WALLET }] }
     : null;
   return new Response(JSON.stringify(body ?? { message: "not stubbed" }), { status: body ? 200 : 404, headers: { "content-type": "application/json" } });
 }) as typeof fetch;
@@ -166,6 +169,33 @@ await check("a live read uses the account's own token, stores nothing and is aud
   assert.equal(JSON.stringify(await store.findUser("u_live")), before, "the live read wrote nothing to the account");
   const audit = (await store.auditFor("u_live", 10)).find((e: any) => e.kind === "operator.monerium_read");
   assert.ok(audit && String(audit.data.operator).startsWith("operator:"));
+});
+
+await check("the live read shows only this Safe's IBANs, address and orders, and no other profile's name", async () => {
+  const text = (await get("/api/admin/users/u_live/monerium?live=1")).text;
+  assert.ok(!text.toLowerCase().includes(OTHER_WALLET.toLowerCase()), "another wallet of the login reached the dashboard");
+  assert.ok(!text.includes("DE12500105170648489890") && !text.includes("Other Co"));
+  const { live } = JSON.parse(text);
+  assert.deepEqual(live.ibans.data, [{ iban: "DE89370400440532013000", bic: "MONEDEB1", profile: "prof-live", address: safe("a"), chain: MONERIUM.chain }]);
+  assert.deepEqual(live.addresses.data, [{ address: safe("a"), profile: "prof-live", chains: ["base"] }]);
+  assert.deepEqual(live.orders.data.map((o: any) => o.id), ["o1"]);
+  assert.deepEqual(live.profiles.data, [{ id: "prof-live", kind: "personal", name: "Live", state: "approved" }, { id: "prof-other", kind: "corporate" }]);
+  assert.deepEqual(live.context.data, { email: "live@example.com" });
+  assert.ok(!moneriumCalls.some((c) => new URL(c.url).pathname === "/addresses"), "the login's address list is never fetched");
+});
+
+await check("a row stored before the filter shows only this Safe's entries in the admin JSON", async () => {
+  await store.updateUser("u_live", { monerium: { ...(await store.findUser("u_live"))!.monerium!,
+    ibans: [{ iban: "DE12500105170648489890", profile: "prof-live", address: OTHER_WALLET, chain: "base" }],
+    addresses: [{ address: OTHER_WALLET, profile: "prof-live" }, { address: safe("a"), profile: "prof-live" }] } } as any);
+  for (const path of ["/api/admin/users/u_live/monerium", "/api/admin/users/u_live", "/api/admin/monerium"]) {
+    const text = (await get(path)).text;
+    const at = text.toLowerCase().indexOf(OTHER_WALLET.toLowerCase());
+    assert.ok(at < 0 && !text.includes("DE12500105170648489890"), `another wallet in ${path}: ${text.slice(Math.max(0, at - 300), at + 60)}`);
+  }
+  const stored = JSON.parse((await get("/api/admin/users/u_live/monerium")).text).stored;
+  assert.deepEqual(stored.addresses, [{ address: safe("a"), profile: "prof-live" }]);
+  assert.equal(stored.row.addresses, 1);
 });
 
 await check("third-party IBANs are masked on the Monerium views, as on the transactions list", async () => {
