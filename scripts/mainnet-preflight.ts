@@ -273,7 +273,9 @@ console.log("production config");
     const listed = r.stderr.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
     // A refusal outside the production list (checkout, keys) throws a single Error.
     const single = listed.length ? [] : (r.stderr.match(/^\w*Error: (.+)$/m)?.slice(1) ?? []);
-    for (const p of [...listed, ...single]) fail(`production would refuse to start: ${p}`);
+    // Any URL in a refusal prints as its origin: a URL can carry a key or credentials.
+    const origins = (line: string) => line.replace(/\bhttps?:\/\/[^\s)"',]+/g, (u) => urlForLog(u));
+    for (const p of [...listed, ...single]) fail(`production would refuse to start: ${origins(p)}`);
     if (r.status !== 0 && !listed.length && !single.length) fail(`the production boot check did not run (exit ${r.status})`);
     if (r.status === 0) ok("production boot checks pass");
   }

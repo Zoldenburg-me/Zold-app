@@ -98,12 +98,15 @@ await check("everything matching passes, every call went to a stub, and no .env 
 await check("a real-money deployment env runs the API's boot checks with its own env", () => {
   // Base mainnet app chain, Candide still on the Sepolia stubs, a harness flag
   // the probes drop, no document key, a local checkout origin.
-  const r = preflight({}, { TRANSF_CHAIN_ID: "8453", LOCAL_HARNESS: "1", DOCUMENT_SIGNING_KEY: "", CHECKOUT_SERVICE_ORIGIN: "http://localhost:4000" });
+  const r = preflight({}, { TRANSF_CHAIN_ID: "8453", LOCAL_HARNESS: "1", DOCUMENT_SIGNING_KEY: "", CHECKOUT_SERVICE_ORIGIN: "http://localhost:4000",
+    MONERIUM_BASE_URL: "https://user:pw-secret@api.monerium.dev/path?key=q-secret" });
   assert.equal(r.status, 1, r.out);
   const failed = lines(r.out, "FAIL");
   assert.match(failed, /production would refuse to start: DOCUMENT_SIGNING_KEY is required in production/);
   assert.match(failed, /production would refuse to start: LOCAL_HARNESS=1 is forbidden in production/);
   assert.match(failed, /production would refuse to start: .*CANDIDE/);
+  assert.match(failed, /MONERIUM_BASE_URL must be .* \(got https:\/\/api\.monerium\.dev\)/);
+  assert.ok(!r.out.includes("pw-secret") && !r.out.includes("q-secret"), "a credential in a URL is never printed");
   assert.match(preflight().out, /PASS\s+not a real-money deployment env/);
 });
 await check("an RPC on another chain fails", () => {

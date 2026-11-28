@@ -8,6 +8,7 @@
 import { CHAIN_ID, envNumber, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, LOOKS_LOCAL, PUBLIC_URL, REAL_MONEY_CHAINS, STORE_BACKEND } from "./env.js";
 import { MONERIUM, moneriumOAuthEnabled, moneriumSandboxEnabled } from "./monerium.js";
 import { dataKeyProblems } from "./data-keys.js";
+import { urlForLog } from "../http/log-safe.js";
 import { RECOVERY, RECOVERY_MODULE_3_MINUTES, SECURITY } from "./security.js";
 import { anchorModeEnabled, BRIDGE, isMoneyGramAnchorDomain, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "./cash-rail.js";
 
@@ -76,7 +77,7 @@ function checkRuntimeFlags(fail: Fail) {
  */
 function checkMainnet(fail: Fail) {
   if (!IS_REAL_MONEY_CHAIN) fail(`TRANSF_CHAIN_ID=${CHAIN_ID} is not a mainnet chain (expected one of ${[...REAL_MONEY_CHAINS].join(", ")})`);
-  if (MONERIUM.baseUrl !== "https://api.monerium.app") fail(`MONERIUM_BASE_URL must be https://api.monerium.app in production (got ${MONERIUM.baseUrl})`);
+  if (MONERIUM.baseUrl !== "https://api.monerium.app") fail(`MONERIUM_BASE_URL must be https://api.monerium.app in production (got ${urlForLog(MONERIUM.baseUrl)})`);
   if (!/^(ethereum|gnosis|polygon|base|arbitrum|linea)$/.test(MONERIUM.chain)) {
     fail(`MONERIUM_CHAIN=${MONERIUM.chain} is not a Monerium production chain name`);
   }
