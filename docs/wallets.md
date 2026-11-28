@@ -51,12 +51,11 @@ wallets and live in `deployments.json` or code.
 
 ## Replacing the mainnet custodial withdrawer
 
-The Akash mainnet lease still uses the old withdrawer, whose `keyHolder` is
-`"unknown"`, so preflight fails on its env. The replacement,
-`0x222222222211B5eB5be634822404F66f1A3adB00` (a 1-of-3 Safe the owner
-holds, also the Zoldenburg recovery guardian), is registered
-and set in the Oracle host's mainnet env. It takes effect at the cut-over,
-and from then on steps 4 to 6 apply. Adding a source chain to
+Mainnet's withdrawer is `0x222222222211B5eB5be634822404F66f1A3adB00` (a
+1-of-3 Safe the owner holds, also the Zoldenburg recovery guardian),
+registered and set in the Oracle host's mainnet env. The old withdrawer stays
+in `wallets.json` as `"unknown"`, and pages activated under it follow steps 4
+to 6. Adding a source chain to
 `CANDIDE_FORWARDING_SOURCE_CHAIN_IDS` first needs that Safe deployed at the
 same address on the new chain.
 
@@ -73,7 +72,8 @@ therefore gives every Candide payment page a new deposit address.
    entry stays as `unknown`.
 3. **Configure.** Set `CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER` to the new
    address in the mainnet env and run `npm run preflight -- --chain 8453`
-   with it. Push the env to the mainnet lease.
+   with it, then set it in `/etc/zold/mainnet.env` on the Oracle host and
+   restart `zold-api@mainnet`.
 4. **Pages close at renewal.** A page keeps showing its old address while
    that activation is live. When `livePaymentPage` next renews it (activation
    close to expiry), it gets a different address than the page shows and

@@ -26,7 +26,7 @@ an active IBAN and a sent payment in a real browser without help.
 - [ ] `/business` Access screen: security and who approves payments on one
       screen, so a company login never needs `/app`.
 - [ ] Agent-payments brief and scope committed, or dropped.
-- [ ] Production rebuilt from main and redeployed to the Akash lease.
+- [ ] zoldhq.com's lease running current `production`.
 - [ ] One full browser run on zoldhq.com: signup, passkey, Safe, recovery
       enrolment, Monerium connect, IBAN, a SEPA send, a payment link paid.
 
@@ -45,20 +45,18 @@ Owner:
       `npm run preflight` green; gas mode chosen (`native` or `token`).
 - [ ] Monerium production OAuth app registered; the three open questions in
       `docs/status.md` answered.
-- [ ] Processing agreements with the host, Brevo and Turnkey, or the service
-      dropped; a host for real user data (not the current lease).
+- [ ] Processing agreements with Oracle (the mainnet host), Brevo and
+      Turnkey, or the service dropped.
 - [ ] Impressum and privacy notice (Art. 13) published.
 - [ ] Domain and trademark clearance for "Zold" in fintech.
 - [ ] Counsel on the wallet-tier deny list and on any Zold fee on swaps.
 
 Build:
 - [ ] Database encrypted at rest; data export and account closure routes.
-- [ ] The store on Postgres on the owner's Oracle host, testnet first, then
-      app.zoldhq.com (`docs/postgres-store-design.md` §8). The backend,
-      migrations, importer and export are on main. The host's scripts, units
-      and runbook (S7a, `docs/oracle-host.md`) have not run on a host; running
-      them there (S7b) and the cut-over (S8) wait on the owner's account, host
-      access and §9 answers.
+- [ ] The store on Postgres on the owner's Oracle host
+      (`docs/postgres-store-design.md` §8). app.zoldhq.com runs there; left:
+      the first restore drill, testnet's cluster and cut-over, then Postgres
+      as the default (S7b, S8; `docs/oracle-host.md`).
 - [ ] `RECOVERY_IBAN_HMAC_KEY` set; one 1 € enrolment arms an account; one
       Zoldenburg recovery runs on chain against a test Safe.
 - [ ] Wallet tier: gas policy for accounts without fiat.

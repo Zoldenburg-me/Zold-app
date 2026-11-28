@@ -13,7 +13,7 @@ browser ─┬─ /            landing (site.css/site.js + landing.css, landing/
                 │
         services/api/src/server.ts  (wiring only: middleware → routers)
                 │
-   routes/* ──► domain/* (rules)  ──► store.ts ──► store/db.ts (one JSON file)
+   routes/* ──► domain/* (rules)  ──► store.ts ──► store/db.ts (JSON) | store/pg/ (Postgres)
       │            │
       │            └─► bookkeeping/* (statement, Belege, exports)
       └─► transfers/build.ts ──► orchestrator.ts ──► liquidity.ts ─► liquidity/*
@@ -44,6 +44,7 @@ Safe itself) · payment page / request (`/pay`) ·
 crypto deposit via Candide forwarder → optional convert to EURe.
 
 ## Deploy
-Akash lease at zoldhq.com, chain `TRANSF_CHAIN_ID` (Base Sepolia today; its
-dollar token is zUSD, see usd-token.ts).
+zoldhq.com: an Akash lease on the JSON store, Base Sepolia (its dollar token
+is zUSD, see usd-token.ts). app.zoldhq.com: the Oracle host on Postgres, Base
+mainnet (`docs/oracle-host.md`). `TRANSF_CHAIN_ID` selects the chain.
 `production` branch is built only by `scripts/build-production-branch.sh`.
