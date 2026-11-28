@@ -281,6 +281,7 @@ export async function issueOutgoing(
         ...(draft.recipientVatCheck ? { recipientVatCheck: draft.recipientVatCheck } : {}),
         // Frozen with the document: which rules ran, and how far they went.
         jurisdiction: report.jurisdiction,
+        ...(org.invoicing?.logoId ? { logoId: org.invoicing.logoId } : {}),
         ...(original ? { corrects: { invoiceId: original.id, number: original.issued!.number, issueDate: original.issued!.issueDate } } : {}),
       },
       submittedAt: now.toISOString(),

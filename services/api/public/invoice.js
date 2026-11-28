@@ -155,6 +155,7 @@ function renderIssued(inv) {
         <div class="sub">${esc(d.number)}</div>
       </div>
       <div class="issuer-block">
+        ${inv.logo ? `<img class="issuer-logo" src="${esc(inv.logo)}" alt="${esc(d.issuer.name)}">` : ""}
         ${issuerLines.map((l, i) => (i === 0 ? `<strong>${esc(l)}</strong>` : esc(l))).join("<br>")}
       </div>
     </div>

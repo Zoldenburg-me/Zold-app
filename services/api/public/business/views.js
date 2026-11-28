@@ -11,7 +11,7 @@
  * what exists. Every renderer reads the live `org` from core.js.
  */
 import { isOwnCompanyOrg } from "./access-model.js";
-import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, mayPayInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd, zipMode } from "./core.js";
+import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, mayPayInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, toast, ymd, zipMode } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -607,7 +607,7 @@ RENDER["invoicing-settings"] = async () => {
     ["Country", j.countryName], [names.vatId, iss.vatId], [names.taxNumber, iss.taxNumber],
     ["Registration", [p.registerCourt, p.registerNumber].filter(Boolean).join(" ")], [names.director, p.managingDirector],
   ].filter(([, v]) => v);
-  return jurisdictionBanner(j, d.disclaimer, d.notVerified) + `
+  return { bind: bindLogoUpload, html: jurisdictionBanner(j, d.disclaimer, d.notVerified) + `
   ${card("From your business profile", esc(j.ruleSet === "DE"
       ? "Printed at the top of every invoice. § 14 Abs. 4 UStG requires your full name, address and either a Steuernummer or a USt-IdNr."
       : j.ruleSet === "EU"
@@ -617,6 +617,12 @@ RENDER["invoicing-settings"] = async () => {
      ${missing.length ? `<div class="zb-note zb-note--a" style="margin-top:10px">${Z.icon("badge")}<span>Your business profile has no ${esc(missing.join(" and no "))} yet. Invoices need ${missing.length > 1 ? "them" : "it"}.</span></div>` : ""}
      ${!org.legalName && sug.source === "monerium" ? `<p class="desc" style="margin-top:8px">Your Monerium profile names you ${esc(sug.name)}. Add it as the legal name in your business profile if that is what the register says.</p>` : ""}`,
     editProfile)}
+  ${card("Logo", "Printed top right on new invoices. PNG, JPEG or WebP; Zold scales it to at most 800 × 230 pixels and 40 kB. Invoices already issued keep the logo they were issued with.",
+    `<div id="i-logo-box">${p.logo ? `<img src="${esc(p.logo)}" alt="Your current logo" style="display:block;max-width:220px;max-height:64px;margin-bottom:12px;background:#fff;padding:8px;border-radius:6px">` : `<p class="desc" style="margin-bottom:12px">No logo yet.</p>`}
+     ${!["owner", "admin"].includes(org.role) /* org.update */ ? `<p class="desc">An owner or admin can change it.</p>` : `<label for="i-logo" class="z-btn z-btn--secondary z-btn--sm" style="cursor:pointer">${Z.icon("upload")}<span>${p.logo ? "Replace logo" : "Upload logo"}</span></label>
+     <input id="i-logo" type="file" accept="image/png,image/jpeg,image/webp" class="z-sr" />
+     ${p.logo ? `<button type="button" class="z-link-btn" data-act="remove-invoice-logo" style="margin-left:12px">Remove</button>` : ""}
+     <div id="i-logos-kept"></div>`}</div>`)}
   ${card("Tax and numbering", "Defaults for new invoices. Each invoice can change them.",
     `<div class="grid g2"><div>
         <label for="i-lang">Invoice language</label>
@@ -654,8 +660,56 @@ RENDER["invoicing-settings"] = async () => {
           <td class="mono">${esc(c.id)}</td><td>${esc(c.label)}${c.legalBasis ? `<p class="desc">${esc(c.legalBasis)}</p>` : ""}</td><td class="desc">${esc(c.invoiceNote)}</td>
           <td><button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="del-custom-reason" data-id="${esc(c.id)}">Remove</button></td></tr>`).join("")}</tbody></table>`
       : `<p class="empty">No rules of your own.${j.ruleSet === "GENERIC" ? " You’ll probably need some: Zold applies no tax rules here." : ""}</p>`,
-    secondary("Add rule", 'data-act="add-custom-reason"', "add"))}`;
+    secondary("Add rule", 'data-act="add-custom-reason"', "add"))}` };
 };
+
+/** Scale the picked file to fit 800 x 230 in the browser, then save it on its
+ *  own: a logo is not part of the form's Save. The server checks it again. */
+/** `rerender` is shell.js's render, passed in: shell.js imports this module. */
+function bindLogoUpload(box, rerender) {
+  // Logos used before, to choose again: only where the controls are (org.update).
+  const kept = box.querySelector("#i-logos-kept");
+  if (kept) {
+    api(`/api/orgs/${org.id}/invoicing/logos`).then(({ current, logos }) => {
+      const others = logos.filter((l) => l.id !== current);
+      if (!others.length) return;
+      kept.innerHTML = `<p class="desc" style="margin:16px 0 8px">Logos used before</p>
+        <div style="display:flex;flex-wrap:wrap;gap:10px">${others.map((l) => `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:6px">
+          <img src="${esc(l.logo)}" alt="" style="display:block;max-width:140px;max-height:40px;background:#fff;padding:6px;border-radius:6px">
+          <button type="button" class="z-link-btn" data-act="use-invoice-logo" data-id="${esc(l.id)}">Use this one</button></div>`).join("")}</div>`;
+    }).catch(() => {}); // the card works without the list
+  }
+  box.querySelector("#i-logo")?.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const img = await createImageBitmap(file).catch(() => { throw new Error("That image could not be read. Use a PNG, JPEG or WebP file."); });
+      const k = Math.min(1, 800 / img.width, 230 / img.height);
+      const c = Object.assign(document.createElement("canvas"), { width: Math.round(img.width * k), height: Math.round(img.height * k) });
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      // PNG keeps a transparent background; JPEG when PNG is too large to
+      // send (the server takes at most 40 kB, invoice-logo.ts).
+      const fits = (u) => u.length * 0.75 <= 40_000;
+      let logo = c.toDataURL("image/png");
+      if (!fits(logo)) {
+        // JPEG has no transparency: paint white behind, or it prints black.
+        const g = c.getContext("2d");
+        g.globalCompositeOperation = "destination-over";
+        g.fillStyle = "#fff";
+        g.fillRect(0, 0, c.width, c.height);
+        logo = c.toDataURL("image/jpeg", 0.85);
+      }
+      if (!fits(logo)) throw new Error("This image is too detailed for a logo. Use a simpler one, such as the logo on a plain background.");
+      await api(`/api/orgs/${org.id}/invoicing/profile`, { method: "PATCH", body: { logo } });
+      toast("Logo saved. New invoices print it.");
+      await rerender();
+    } catch (err) {
+      toast(err?.message || "That image could not be read.", true);
+    } finally {
+      e.target.value = ""; // the same file picked again fires change again
+    }
+  });
+}
 
 /* ==========================================================================
    Pieces the screens share

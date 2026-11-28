@@ -363,7 +363,7 @@ function paper(check) {
   return `<article class="zb-paper" lang="${lang}" translate="no" aria-label="${esc(`${t.invoice} ${pv.number || ""}`)}">
     <header class="zb-paper__head">
       <div><p class="zb-paper__who">${esc(iss.name || "")}</p><p>${esc(addr(iss)) || `<span class="zb-paper__missing">${t.missing}</span>`}</p></div>
-      <p class="zb-paper__tax">${taxIds.map(([label, value]) => `${esc(label)} ${value ? esc(value) : `<span class="zb-paper__missing">${t.missing}</span>`}`).join("<br>")}</p>
+      <p class="zb-paper__tax">${profile?.profile?.logo ? `<img class="zb-paper__logo" src="${esc(profile.profile.logo)}" alt="">` : ""}${taxIds.map(([label, value]) => `${esc(label)} ${value ? esc(value) : `<span class="zb-paper__missing">${t.missing}</span>`}`).join("<br>")}</p>
     </header>
     <p class="zb-paper__to">${esc(rec.name || "")}<br>${esc(addr(rec))}</p>
     <h2 class="zb-paper__title">${esc(t.invoice)} ${esc(pv.number || "")}</h2>

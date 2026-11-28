@@ -263,6 +263,7 @@ h2.zb-conn__group--first { margin-top: 0; }
 .zb-paper { padding: 40px 44px; border-radius: var(--z-radius-card); background: var(--z-heading); color: var(--z-bg); font-size: 13px; line-height: 1.5; }
 .zb-paper p { margin: 0; }
 .zb-paper__head { display: flex; justify-content: space-between; gap: var(--z-space-4); }
+.zb-paper__logo { display: block; max-width: 180px; max-height: 52px; margin: 0 0 8px auto; object-fit: contain; }
 .zb-paper__who { font-size: 15px; font-weight: 600; }
 .zb-paper__tax { text-align: right; }
 .zb-paper__to { margin-top: 28px !important; }
