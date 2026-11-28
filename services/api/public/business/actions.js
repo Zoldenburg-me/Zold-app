@@ -1049,8 +1049,7 @@ export const ACTIONS = {
   /** Open the editor on the original, to change what was wrong; its issue
    *  button then posts to …/correct (inv-issue). */
   "correct-invoice": async (el) => {
-    const { invoices } = await api(`/api/orgs/${org.id}/invoices`);
-    const i = invoices.find((x) => x.id === el.dataset.id);
+    const i = iv.invoices.find((x) => x.id === el.dataset.id);
     if (!i?.issued) return "keep";
     Z.closeOverlay("inv-drawer");
     setInvoiceDraft(correctionDraft(i));

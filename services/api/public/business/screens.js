@@ -364,7 +364,7 @@ function moreMenu(i) {
   const correct = i.direction === "outgoing" && i.issued && !i.replacedBy && ["SUBMITTED", "PAID"].includes(i.state) && roleCan(org.role, "invoices");
   if (!correct) return "";
   return `<details class="zb-more-menu"><summary class="z-btn z-btn--secondary z-btn--sm">${Z.icon("more_horiz")}<span class="z-sr">More actions</span></summary>
-    <div class="zb-more-menu__list"><button type="button" class="zb-more-menu__item" data-act="correct-invoice" data-id="${esc(i.id)}" data-number="${esc(i.issued.number)}">${Z.icon("edit")}<span>Issue corrected invoice</span></button></div></details>`;
+    <div class="zb-more-menu__list"><button type="button" class="zb-more-menu__item" data-act="correct-invoice" data-id="${esc(i.id)}">${Z.icon("edit")}<span>Issue corrected invoice</span></button></div></details>`;
 }
 
 /** One invoice in a drawer: its parties, what it is for, how it was paid. */
