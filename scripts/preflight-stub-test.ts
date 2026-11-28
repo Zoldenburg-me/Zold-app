@@ -95,11 +95,15 @@ await check("everything matching passes, every call went to a stub, and no .env 
   assert.ok(r.envFileReads.length >= 1, "the run never tried to load .env, so the stub did not cover that path");
   assert.ok(r.calls.some((c) => c.who === "paymaster" && c.method === "pm_getPaymasterStubData"), "the paymaster was never asked");
 });
-await check("a real-money deployment env runs the production boot checks: no document key fails", () => {
-  const chain = { rpcChain: 8453, bundlerChain: 8453, paymasterChain: 8453 };
-  const r = preflight(chain, { CANDIDE_CHAIN_ID: "8453", DOCUMENT_SIGNING_KEY: "" });
+await check("a real-money deployment env runs the API's boot checks with its own env", () => {
+  // Base mainnet app chain, Candide still on the Sepolia stubs, a harness flag
+  // the probes drop, no document key, a local checkout origin.
+  const r = preflight({}, { TRANSF_CHAIN_ID: "8453", LOCAL_HARNESS: "1", DOCUMENT_SIGNING_KEY: "", CHECKOUT_SERVICE_ORIGIN: "http://localhost:4000" });
   assert.equal(r.status, 1, r.out);
-  assert.match(lines(r.out, "FAIL"), /production would refuse to start: DOCUMENT_SIGNING_KEY is required in production/);
+  const failed = lines(r.out, "FAIL");
+  assert.match(failed, /production would refuse to start: DOCUMENT_SIGNING_KEY is required in production/);
+  assert.match(failed, /production would refuse to start: LOCAL_HARNESS=1 is forbidden in production/);
+  assert.match(failed, /production would refuse to start: .*CANDIDE/);
   assert.match(preflight().out, /PASS\s+not a real-money deployment env/);
 });
 await check("an RPC on another chain fails", () => {
