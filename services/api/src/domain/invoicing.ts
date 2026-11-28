@@ -841,6 +841,19 @@ export function checkCompliance(
     );
   }
 
+  // Any invoice that prints a period prints a real one, in every rule set.
+  if (draft.supplyPeriod) {
+    // Round-tripped like the issue date: 2026-02-30 is not a day.
+    const isDay = (v: string) => {
+      const d = new Date(`${v}T00:00:00Z`);
+      return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+    };
+    const { from, to } = draft.supplyPeriod;
+    if (!isDay(from) || !isDay(to) || from > to) {
+      add("error", "supplyPeriod", `The period of supply must be two dates, the first not after the second (${from} – ${to}).`, basis("§ 14 Abs. 4 Nr. 6 UStG", "Art. 226(7) VAT Directive"));
+    }
+  }
+
   /**
    * Settled in euro, in every jurisdiction: a foreign-currency invoice needs
    * its euro restatement before it goes out, or the Pay button would charge
@@ -985,18 +998,6 @@ function checkDirectiveContent(
     );
   }
 
-  // Any invoice that prints a period, a small one included, prints a real one.
-  if (draft.supplyPeriod) {
-    // Round-tripped like the issue date: 2026-02-30 is not a day.
-    const isDay = (v: string) => {
-      const d = new Date(`${v}T00:00:00Z`);
-      return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
-    };
-    const { from, to } = draft.supplyPeriod;
-    if (!isDay(from) || !isDay(to) || from > to) {
-      add("error", "supplyPeriod", `The period of supply must be two dates, the first not after the second (${from} – ${to}).`, basis("§ 14 Abs. 4 Nr. 6 UStG", "Art. 226(7) VAT Directive"));
-    }
-  }
   // ── Full content, unless § 33 UStDV applies (Germany only) ────────────────
   if (regime !== "kleinbetrag") {
     if (!has(draft.recipient.name)) {

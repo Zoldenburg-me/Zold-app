@@ -339,6 +339,27 @@ await check("a service period is corrected as a period; one that ends before it 
   const fixed = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, supplyPeriod: { from: "2026-10-01", to: "2026-10-30" } });
   assert.equal(fixed.status, 201, JSON.stringify(fixed.data));
   assert.deepEqual(fixed.data.invoice.issued.supplyPeriod, { from: "2026-10-01", to: "2026-10-30" });
+  // A single day in place of the period: the period goes, not both printed.
+  const oneDay = await correct(fixed.data.invoice.id, "u_owner", { acceptWarnings: true, supplyDate: "2026-10-15" });
+  assert.equal(oneDay.status, 201, JSON.stringify(oneDay.data));
+  assert.equal(oneDay.data.invoice.issued.supplyDate, "2026-10-15");
+  assert.equal(oneDay.data.invoice.issued.supplyPeriod, undefined);
+});
+
+await check("a reversed period is refused where no tax rules are encoded too (GENERIC)", async () => {
+  const { checkCompliance } = await import("../services/api/src/domain/invoicing.js");
+  const { jurisdictionFor } = await import("../services/api/src/domain/jurisdictions.js");
+  const jur = jurisdictionFor("GA");
+  assert.equal(jur.ruleSet, "GENERIC");
+  const draft: any = {
+    number: "1", issueDate: "2026-11-01",
+    issuer: { name: "Acme", addressLine: "Rue 1", city: "Libreville", country: "GA" },
+    recipient: { name: "Client", addressLine: "Rue 2", city: "Libreville", country: "GA" },
+    lines: [{ description: "Work", quantity: 1, unitPriceNet: "100.00" }],
+    treatment: { kind: "standard", rate: 0 },
+    supplyPeriod: { from: "2026-10-31", to: "2026-10-01" },
+  };
+  assert.ok(checkCompliance(draft, jur).issues.some((i) => i.field === "supplyPeriod" && i.severity === "error"));
 });
 
 await check("an amount that no longer matches is refused, not issued", async () => {

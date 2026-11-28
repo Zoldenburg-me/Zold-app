@@ -404,5 +404,8 @@ export function correctionBody(original: Invoice, edits: Record<string, unknown>
     notes: d.notes,
   };
   for (const k of CORRECTABLE) if (edits[k] !== undefined) base[k] = edits[k];
+  // A date and a period are one choice: an edit that names one drops the other.
+  if (edits.supplyDate !== undefined && edits.supplyPeriod === undefined) delete base.supplyPeriod;
+  if (edits.supplyPeriod !== undefined && edits.supplyDate === undefined) delete base.supplyDate;
   return { ...base, acceptWarnings: edits.acceptWarnings === true };
 }
