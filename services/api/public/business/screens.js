@@ -345,6 +345,28 @@ function payToHtml(p) {
   return `<section><h3 class="z-eyebrow" style="margin-bottom:8px">How the supplier wants to be paid</h3><dl class="z-kv z-card">${rows.join("")}</dl></section>`;
 }
 
+// The More menu opens rightwards from its button, or leftwards where that
+// would run past the drawer (the actions row wraps, so either can happen).
+// toggle does not bubble: listened for in the capture phase.
+document.addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (!d.classList?.contains("zb-more-menu") || !d.open) return;
+  const list = d.querySelector(".zb-more-menu__list");
+  list.classList.remove("zb-more-menu__list--end");
+  const edge = (d.closest(".z-sheet, .z-dialog") ?? document.documentElement).getBoundingClientRect().right;
+  if (list.getBoundingClientRect().right > edge) list.classList.add("zb-more-menu__list--end");
+}, true);
+
+/** The drawer's rarer actions, behind "More": a correction replaces an open
+ *  or paid invoice (POST …/correct), the states the API accepts, for a member
+ *  who may issue. Not in the list's rows: it is not what a row is opened for. */
+function moreMenu(i) {
+  const correct = i.direction === "outgoing" && i.issued && !i.replacedBy && ["SUBMITTED", "PAID"].includes(i.state) && roleCan(org.role, "invoices");
+  if (!correct) return "";
+  return `<details class="zb-more-menu"><summary class="z-btn z-btn--secondary z-btn--sm">${Z.icon("more_horiz")}<span class="z-sr">More actions</span></summary>
+    <div class="zb-more-menu__list"><button type="button" class="zb-more-menu__item" data-act="correct-invoice" data-id="${esc(i.id)}">${Z.icon("edit")}<span>Issue corrected invoice</span></button></div></details>`;
+}
+
 /** One invoice in a drawer: its parties, what it is for, how it was paid. */
 export function invoiceDrawer(i, trigger) {
   const out = i.direction === "outgoing";
@@ -374,7 +396,7 @@ export function invoiceDrawer(i, trigger) {
       <dl class="z-kv z-card">${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>
       ${!out && i.payTo ? payToHtml(i.payTo) : ""}
       ${isDraft ? receiptDraftSections(i) : i.settlements?.length ? settlementRows(i.settlements) : ""}
-      <div class="zb-actions" style="margin-top:0">${out && i.issued ? `<a class="z-btn z-btn--secondary z-btn--sm" href="/invoice/own?org=${encodeURIComponent(org.id)}&amp;id=${encodeURIComponent(i.id)}" target="_blank" rel="noopener">${Z.icon("print")}<span>View, print or save as PDF</span><span class="z-sr"> (opens in a new tab)</span></a>` : ""}${i.linkKept && roleCan(org.role, "invoices") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-link" data-id="${esc(i.id)}">${Z.icon("link")}<span>Copy link</span></button>` : ""}${invoiceActions(i, iv.payLink)}</div></div>`,
+      <div class="zb-actions" style="margin-top:0">${out && i.issued ? `<a class="z-btn z-btn--secondary z-btn--sm" href="/invoice/own?org=${encodeURIComponent(org.id)}&amp;id=${encodeURIComponent(i.id)}" target="_blank" rel="noopener">${Z.icon("print")}<span>View, print or save as PDF</span><span class="z-sr"> (opens in a new tab)</span></a>` : ""}${i.linkKept && roleCan(org.role, "invoices") ? `<button type="button" class="z-btn z-btn--secondary z-btn--sm" data-act="invoice-link" data-id="${esc(i.id)}">${Z.icon("link")}<span>Copy link</span></button>` : ""}${invoiceActions(i, iv.payLink)}${moreMenu(i)}</div></div>`,
   }));
   Z.openOverlay("inv-drawer", trigger);
 }

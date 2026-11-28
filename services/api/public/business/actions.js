@@ -10,7 +10,7 @@ import { $, Z, api, cap, chainId, day, deviceLib, dialog, esc, eur, maskIban, me
 import { docHref, docMonth, exportMonth, setExportMonth } from "./views.js";
 import { sendState, walletOf } from "./send.js";
 import { bankLines, sendAmount } from "./send-model.js";
-import { forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
+import { correctionDraft, forgetDraft, invoiceBody, invoiceDraft, readInvoiceEditor, setInvoiceDraft, storeDraft } from "./invoice.js";
 import { ap, bk, contactPayments, ct, draftTag, draftTitle, draftTotal, invoiceDrawer, iv, mayReview, memberName } from "./screens.js";
 import { loadOrg, render } from "./shell.js";
 import { field, payerRuleDialog, payerRuleSection, runSummary } from "./receipts.js";
@@ -866,19 +866,24 @@ export const ACTIONS = {
   async "inv-issue"() {
     readInvoiceEditor();
     const issue = async (acceptWarnings) => {
-      const r = await api(`/api/orgs/${org.id}/invoicing/issue`, { method: "POST", body: { ...invoiceBody(), ...(acceptWarnings ? { acceptWarnings: true } : {}) } });
+      const fixing = invoiceDraft._correcting;
+      const r = await api(fixing ? `/api/orgs/${org.id}/invoices/${fixing.id}/correct` : `/api/orgs/${org.id}/invoicing/issue`,
+        { method: "POST", body: { ...invoiceBody(), ...(acceptWarnings ? { acceptWarnings: true } : {}) } });
       setInvoiceDraft(null);
-      forgetDraft();
+      if (!fixing) forgetDraft();
       setView("invoices");
       await render();
       // After any dialog that led here has closed.
       // One link to send: the invoice, with a Pay button when a payment link
       // could be made for it. When it could not, say why rather than hide it.
       const pay = r.payment;
-      const how = pay?.ok
+      const how = fixing && r.invoice.state === "PAID" ? "It is already paid."
+        : pay?.ok
         ? `It opens the invoice with a Pay button${typeof pay.amountEur === "number" ? ` for ${eur(pay.amountEur)}` : ""}, and the invoice is marked paid when the money arrives.`
-        : `It opens the invoice with your bank details. There’s no Pay button on it: ${plain(pay?.reason || "no payment link could be made.")}`;
-      setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} is ready`, `Send your customer this link. ${how}`, location.origin + r.linkPath), 0);
+        : `It opens the invoice with your bank details. There’s no Pay button on it${pay?.reason ? `: ${plain(pay.reason)}` : "."}`;
+      const title = fixing ? `Invoice ${r.invoice.issued.number} replaces ${fixing.number}` : `Invoice ${r.invoice.issued.number} is ready`;
+      const old = fixing ? " The old invoice’s link now says it was replaced; money sent with its payment details counts for the new one." : "";
+      setTimeout(() => linkDialog(title, `Send your customer this link. ${how}${old}`, location.origin + r.linkPath), 0);
     };
     const tryIssue = async (acceptWarnings) => {
       try {
@@ -1033,36 +1038,14 @@ export const ACTIONS = {
     const r = await api(`/api/orgs/${org.id}/invoices/${el.dataset.id}/pay`, { method: "POST", body: {} });
     toast(plain(r.note) || "Payment run drafted. It’s in Approvals.");
   },
-  "correct-invoice": (el) => {
-    const id = el.dataset.id;
-    const correct = async (acceptWarnings) => {
-      const r = await api(`/api/orgs/${org.id}/invoices/${id}/correct`, { method: "POST", body: acceptWarnings ? { acceptWarnings: true } : {} });
-      // Paid already: nothing to collect. Otherwise say whether it has a Pay button, and why not.
-      const pay = r.payment;
-      const how = r.invoice.state === "PAID" ? "It is already paid."
-        : pay?.ok ? `It has a Pay button${typeof pay.amountEur === "number" ? ` for ${eur(pay.amountEur)}` : ""}.`
-        : `There’s no Pay button on it${pay?.reason ? `: ${plain(pay.reason)}` : "."}`;
-      const showLink = () => setTimeout(() => linkDialog(`Invoice ${r.invoice.issued.number} replaces ${el.dataset.number}`,
-        `Send your customer this link. ${how} The old invoice’s link now says it was replaced; money sent with its payment details counts for the new one.`, location.origin + r.linkPath), 0);
-      try { await render(); } finally { showLink(); }
-    };
+  /** Open the editor on the original, to change what was wrong; its issue
+   *  button then posts to …/correct (inv-issue). */
+  "correct-invoice": async (el) => {
+    const i = iv.invoices.find((x) => x.id === el.dataset.id);
+    if (!i?.issued) return "keep";
     Z.closeOverlay("inv-drawer");
-    dialog(`Correct invoice ${el.dataset.number}?`,
-      `<p class="desc">A new invoice with the next number and today’s date, the same customer, lines and amount, and your business details as they are now. It says which invoice it replaces.</p>
-       <p class="desc" style="margin-top:8px">The old invoice stays in your records, marked replaced. Any payment on it counts for the new one.</p>`,
-      async () => {
-        try {
-          await correct(false);
-        } catch (e) {
-          if (e.status === 409 && e.warnings?.length) {
-            setTimeout(() => dialog("Issue it with these warnings?", `<ul class="desc" style="margin:8px 0 0 18px">${e.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
-              <p class="desc" style="margin-top:12px">Your acceptance is recorded on the invoice.</p>`, () => correct(true), { okLabel: "Issue anyway" }), 0);
-            return;
-          }
-          throw e;
-        }
-      }, { okLabel: "Issue corrected invoice" });
-    return "keep";
+    setInvoiceDraft(correctionDraft(i));
+    setView("invoice-new");
   },
   "reconcile-invoice": (el) => dialog("Mark this invoice as paid",
     `${field("d-note", 'Note <span class="desc">(optional)</span>', 'placeholder="Paid from the company’s other bank account on 3 Sept…"')}`,

@@ -11,8 +11,8 @@
  * the request says: the receipts are in the past, the invoice is not.
  *
  * A correction (§ 31 Abs. 5 UStDV) is issued here too: the next number of
- * today's series, the original's customer, lines, treatment and euro figures,
- * today's issuer details, and a printed reference to the original's number
+ * today's series, the original's treatment, total and euro figures, the
+ * customer and lines as edited (correctionBody), today's issuer details, and a printed reference to the original's number
  * and date. The original moves to REPLACED in the same transaction, with its
  * payments carried over and its open payment link handed to the correction.
  */
@@ -108,6 +108,37 @@ export async function issueOutgoing(
       { ...report },
     );
   }
+  if (correcting) {
+    // Before the warnings, so a total that cannot be issued is said before
+    // the issuer accepts them. Same amount, so the payments carry over as
+    // they are; a different amount is a cancellation and a new invoice, which
+    // this does not do. Both the printed total and the euro one: the
+    // conversion is the original's, so edited lines in another currency
+    // would otherwise pass on its euros.
+    const euroCents = draft.conversion?.grossCents ?? report.totals.grossCents;
+    if (report.totals.grossCents !== correcting.issued!.grossCents) {
+      return refusal(422, `The corrected invoice would total ${fromCents(report.totals.grossCents)} ${draft.currency ?? SETTLEMENT_CURRENCY}, not the original's ${fromCents(correcting.issued!.grossCents)}. Change what is billed with a new invoice; a correction keeps the amount. Nothing was issued.`);
+    }
+    if (euroCents !== Math.round((payableEur(correcting) ?? NaN) * 100)) {
+      return refusal(422, `The corrected invoice would total ${fromCents(euroCents)} EUR, not the original's ${fromCents(Math.round((payableEur(correcting) ?? 0) * 100))} EUR. Nothing was issued.`);
+    }
+    // The same gross can hide a different VAT (net moved between a 19% and a
+    // 7% line): the tax shown per rate must stay the original's (§ 14c UStG).
+    const perRate = (b: { rate: number; netCents: number; vatCents: number }[] | undefined, vatCents: number | undefined) =>
+      JSON.stringify(b ? [...b].sort((x, y) => x.rate - y.rate).map(({ rate, netCents, vatCents }) => [rate, netCents, vatCents]) : vatCents);
+    const was = correcting.issued!;
+    if (perRate(report.totals.buckets, report.totals.vatCents) !== perRate(was.buckets, was.vatCents)) {
+      return refusal(422, `The corrected invoice would show different VAT than the original (${fromCents(report.totals.vatCents)} instead of ${fromCents(was.vatCents)}, or split differently across rates). A correction keeps the tax; change it with a cancellation and a new invoice. Nothing was issued.`);
+    }
+    // A line made from a wallet receipt carries that receipt by position, so
+    // such lines may be reworded but not merged, split, reordered or repriced.
+    const fromReceipts = correcting.lines.some((l) => l.receipt);
+    const moved = fromReceipts && (report.totals.lines.length !== correcting.lines.length ||
+      report.totals.lines.some((l, i) => fromCents(l.netCents) !== correcting.lines[i].amount || (correcting.lines[i].vatRate !== undefined && l.appliedRate !== correcting.lines[i].vatRate)));
+    if (moved) {
+      return refusal(422, "This invoice was made from wallet receipts: each line stays with its receipt, so a correction may change a line's wording but not merge, split, reorder or reprice lines. Nothing was issued.");
+    }
+  }
   // A receipt month the wallets may not have delivered in full is confirmed in
   // the same answer as the compliance warnings, so one acceptance covers only
   // what the issuer was shown.
@@ -121,19 +152,6 @@ export async function issueOutgoing(
         : "There are warnings on this invoice. Re-send with acceptWarnings: true to issue it anyway.",
       { ...report, warnings: [...receiptWarnings, ...report.warnings] },
     );
-  }
-  if (correcting) {
-    // The point of the correction is the number the original lacked: a note
-    // in its place again would need a correction of its own.
-    if (report.warnings.some((w) => w.field === "issuer.vatId")) {
-      return refusal(422, "A corrected invoice prints your VAT ID itself. Enter the number you were given in the business profile, then correct the invoice. Nothing was issued.", { ...report });
-    }
-    // Same amount, so the payments carry over as they are. A different amount
-    // is a cancellation and a new invoice, which this does not do.
-    const euroCents = draft.conversion?.grossCents ?? report.totals.grossCents;
-    if (euroCents !== Math.round((payableEur(correcting) ?? NaN) * 100)) {
-      return refusal(422, `The corrected invoice would total ${fromCents(euroCents)} EUR, not the original's ${fromCents(Math.round((payableEur(correcting) ?? 0) * 100))} EUR. Nothing was issued.`);
-    }
   }
   if (fromDraft) {
     // The invoice must bill exactly what arrived, or it would be issued as
@@ -350,11 +368,21 @@ async function issueDraft(draft: Invoice, document: Partial<Invoice>, linkTokenH
 export const correctable = (i: Invoice) =>
   i.direction === "outgoing" && !!i.issued && !i.replacedBy && (i.state === "SUBMITTED" || i.state === "PAID");
 
+/** What a correction may change, taken from the request; anything left out
+ *  stays as the original printed it. The VAT treatment and currency are
+ *  never taken: changing what tax is shown is a cancellation (§ 14c UStG),
+ *  and the amount is checked to be the original's. The issuer's details come
+ *  from today's profile. The recipient is replaced whole, VAT ID and country
+ *  included, on a paid invoice too: an owner decision, so the issuer can fix
+ *  who was billed without a cancellation. Its warnings (an issuer VAT ID still
+ *  a note, say) are accepted like a new invoice's, also by owner decision. */
+const CORRECTABLE = ["recipient", "lines", "supplyKind", "supplyDate", "supplyPeriod", "language", "purchaseOrder", "paymentTerms", "notes"] as const;
+
 /** The request a correction is issued from: the original's own document,
- *  so only the issuer's details (read from today's profile) can differ. */
-export function correctionBody(original: Invoice, acceptWarnings: boolean): Record<string, unknown> {
+ *  with the edits the request carries (CORRECTABLE). */
+export function correctionBody(original: Invoice, edits: Record<string, unknown> = {}): Record<string, unknown> {
   const d = original.issued!;
-  return {
+  const base: Record<string, unknown> = {
     recipient: { ...d.recipient, ...(d.recipientIsBusiness !== undefined ? { isBusiness: d.recipientIsBusiness } : {}) },
     ...(d.supplyKind ? { supplyKind: d.supplyKind } : {}),
     supplyDate: d.supplyDate,
@@ -374,6 +402,10 @@ export function correctionBody(original: Invoice, acceptWarnings: boolean): Reco
     // The original's terms as printed; none stays none, not the profile's.
     paymentTerms: d.paymentTerms,
     notes: d.notes,
-    acceptWarnings,
   };
+  for (const k of CORRECTABLE) if (edits[k] !== undefined) base[k] = edits[k];
+  // A date and a period are one choice: an edit that names one drops the other.
+  if (edits.supplyDate !== undefined && edits.supplyPeriod === undefined) delete base.supplyPeriod;
+  if (edits.supplyPeriod !== undefined && edits.supplyDate === undefined) delete base.supplyDate;
+  return { ...base, acceptWarnings: edits.acceptWarnings === true };
 }

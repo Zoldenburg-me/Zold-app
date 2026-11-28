@@ -103,10 +103,10 @@ await check("an invoice issued with 'USt-IdNr. beantragt' has its pay link", asy
   first = r.data;
 });
 
-await check("no correction while the VAT ID is still a note: nothing changes", async () => {
-  const r = await correct(first.invoice.id);
-  assert.equal(r.status, 422, JSON.stringify(r.data));
-  assert.match(r.data.error, /VAT ID itself/);
+await check("a correction still carrying the VAT ID note asks for its warnings first: nothing changes", async () => {
+  const r = await correct(first.invoice.id, "u_owner", {});
+  assert.equal(r.status, 409, JSON.stringify(r.data));
+  assert.ok(r.data.warnings.some((w: any) => w.field === "issuer.vatId"), JSON.stringify(r.data.warnings));
   assert.equal((await store.findInvoice(first.invoice.id))!.state, "SUBMITTED");
   assert.equal((await links(first.invoice.id))[0].state, "OPEN");
 });
@@ -259,6 +259,107 @@ await check("a part-paid invoice whose link lapsed gets no new full-amount link"
   assert.equal(fixed.data.invoice.settlements.length, 1, "the 40 carries over");
   assert.equal(fixed.data.payment, undefined);
   assert.equal((await store.list("paymentRequests")).length, before);
+});
+
+await check("the customer's details and the lines' wording can be corrected; the total cannot", async () => {
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
+  // Refused before the warnings are asked about.
+  const changedTotal = await correct(r.data.invoice.id, "u_owner", { lines: [{ description: "Consulting", quantity: "3", unitPriceNet: "50.00" }] });
+  assert.equal(changedTotal.status, 422, JSON.stringify(changedTotal.data));
+  assert.equal((await store.findInvoice(r.data.invoice.id))!.state, "SUBMITTED");
+  const fixed = await correct(r.data.invoice.id, "u_owner", {
+    acceptWarnings: true,
+    recipient: { ...reverseCharge.recipient, name: "Kund Sverige AB", addressLine: "Nya gatan 7" },
+    lines: [{ description: "Consulting, May", quantity: "1", unitPriceNet: "60.00" }, { description: "Travel", quantity: "1", unitPriceNet: "40.00" }],
+    // Not correctable: the treatment stays the original's.
+    vat: { kind: "standard", rate: 19 },
+  });
+  assert.equal(fixed.status, 201, JSON.stringify(fixed.data));
+  const c = fixed.data.invoice;
+  assert.equal(c.issued.recipient.name, "Kund Sverige AB");
+  assert.equal(c.issued.recipient.addressLine, "Nya gatan 7");
+  assert.deepEqual(c.lines.map((l: any) => l.description), ["Consulting, May", "Travel"]);
+  assert.equal(c.issued.vatTreatment.kind, "exempt");
+  assert.equal(c.issued.grossCents, r.data.invoice.issued.grossCents);
+});
+
+await check("the VAT per rate cannot move under the same total; a mixed-rate invoice keeps its rates", async () => {
+  const domestic = {
+    ...reverseCharge,
+    recipient: { name: "Kunde GmbH", addressLine: "Hauptstr. 1", postalCode: "10115", city: "Berlin", country: "DE", isBusiness: true },
+    lines: [{ description: "Beratung", quantity: "1", unitPriceNet: "100.00", vatRate: 19 }, { description: "Buch", quantity: "1", unitPriceNet: "10.00", vatRate: 7 }],
+    vat: { kind: "standard", rate: 19 },
+  };
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", domestic);
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  assert.equal(r.data.invoice.issued.grossCents, 11900 + 1070);
+  // Same gross (117.70 + 12.00 = 129.70), less VAT: net moved from 19% to 7%.
+  const shifted = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, lines: [
+    { description: "Beratung", quantity: "1", unitPriceNet: "110.00", vatRate: 7 },
+    { description: "Buch", quantity: "1", unitPriceNet: "10.08", vatRate: 19 },
+  ] });
+  assert.equal(shifted.status, 422, JSON.stringify(shifted.data));
+  assert.match(shifted.data.error ?? JSON.stringify(shifted.data), /VAT/);
+  assert.equal((await store.findInvoice(r.data.invoice.id))!.state, "SUBMITTED");
+  // Rewording both lines at their own rates is a correction.
+  const fixed = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, lines: [
+    { description: "Beratung, Mai", quantity: "1", unitPriceNet: "100.00", vatRate: 19 },
+    { description: "Fachbuch", quantity: "1", unitPriceNet: "10.00", vatRate: 7 },
+  ] });
+  assert.equal(fixed.status, 201, JSON.stringify(fixed.data));
+  assert.equal(fixed.data.invoice.issued.vatCents, r.data.invoice.issued.vatCents);
+});
+
+await check("lines made from wallet receipts may be reworded, not reordered: each keeps its receipt", async () => {
+  const two = { ...reverseCharge, lines: [{ description: "May, receipt 1", quantity: "1", unitPriceNet: "60.00" }, { description: "May, receipt 2", quantity: "1", unitPriceNet: "40.00" }] };
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", two);
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const inv = (await store.findInvoice(r.data.invoice.id))!;
+  await store.updateInvoice(inv.id, { lines: inv.lines.map((l, i) => ({ ...l, receipt: { txHash: `0x${String(i + 1).repeat(64)}` } })) } as any);
+  const swapped = await correct(inv.id, "u_owner", { acceptWarnings: true, lines: [two.lines[1], two.lines[0]] });
+  assert.equal(swapped.status, 422, JSON.stringify(swapped.data));
+  assert.equal((await store.findInvoice(inv.id))!.state, "SUBMITTED");
+  const reworded = await correct(inv.id, "u_owner", { acceptWarnings: true, lines: [
+    { description: "Delegation pay, May (1)", quantity: "1", unitPriceNet: "60.00" },
+    { description: "Delegation pay, May (2)", quantity: "1", unitPriceNet: "40.00" },
+  ] });
+  assert.equal(reworded.status, 201, JSON.stringify(reworded.data));
+  assert.deepEqual(reworded.data.invoice.lines.map((l: any) => l.receipt?.txHash), [`0x${"1".repeat(64)}`, `0x${"2".repeat(64)}`]);
+});
+
+await check("a service period is corrected as a period; one that ends before it starts is refused", async () => {
+  const monthly = { ...reverseCharge, supplyDate: undefined, supplyPeriod: { from: "2026-10-01", to: "2026-10-31" } };
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", monthly);
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const reversed = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, supplyPeriod: { from: "2026-10-31", to: "2026-10-01" } });
+  assert.equal(reversed.status, 422, JSON.stringify(reversed.data));
+  assert.equal((await store.findInvoice(r.data.invoice.id))!.state, "SUBMITTED");
+  const notADay = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, supplyPeriod: { from: "2026-10-01", to: "2026-10-32" } });
+  assert.equal(notADay.status, 422, JSON.stringify(notADay.data));
+  const fixed = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, supplyPeriod: { from: "2026-10-01", to: "2026-10-30" } });
+  assert.equal(fixed.status, 201, JSON.stringify(fixed.data));
+  assert.deepEqual(fixed.data.invoice.issued.supplyPeriod, { from: "2026-10-01", to: "2026-10-30" });
+  // A single day in place of the period: the period goes, not both printed.
+  const oneDay = await correct(fixed.data.invoice.id, "u_owner", { acceptWarnings: true, supplyDate: "2026-10-15" });
+  assert.equal(oneDay.status, 201, JSON.stringify(oneDay.data));
+  assert.equal(oneDay.data.invoice.issued.supplyDate, "2026-10-15");
+  assert.equal(oneDay.data.invoice.issued.supplyPeriod, undefined);
+});
+
+await check("a reversed period is refused where no tax rules are encoded too (GENERIC)", async () => {
+  const { checkCompliance } = await import("../services/api/src/domain/invoicing.js");
+  const { jurisdictionFor } = await import("../services/api/src/domain/jurisdictions.js");
+  const jur = jurisdictionFor("GA");
+  assert.equal(jur.ruleSet, "GENERIC");
+  const draft: any = {
+    number: "1", issueDate: "2026-11-01",
+    issuer: { name: "Acme", addressLine: "Rue 1", city: "Libreville", country: "GA" },
+    recipient: { name: "Client", addressLine: "Rue 2", city: "Libreville", country: "GA" },
+    lines: [{ description: "Work", quantity: 1, unitPriceNet: "100.00" }],
+    treatment: { kind: "standard", rate: 0 },
+    supplyPeriod: { from: "2026-10-31", to: "2026-10-01" },
+  };
+  assert.ok(checkCompliance(draft, jur).issues.some((i) => i.field === "supplyPeriod" && i.severity === "error"));
 });
 
 await check("an amount that no longer matches is refused, not issued", async () => {
