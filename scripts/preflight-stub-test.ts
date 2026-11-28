@@ -95,6 +95,13 @@ await check("everything matching passes, every call went to a stub, and no .env 
   assert.ok(r.envFileReads.length >= 1, "the run never tried to load .env, so the stub did not cover that path");
   assert.ok(r.calls.some((c) => c.who === "paymaster" && c.method === "pm_getPaymasterStubData"), "the paymaster was never asked");
 });
+await check("a real-money deployment env runs the production boot checks: no document key fails", () => {
+  const chain = { rpcChain: 8453, bundlerChain: 8453, paymasterChain: 8453 };
+  const r = preflight(chain, { CANDIDE_CHAIN_ID: "8453", DOCUMENT_SIGNING_KEY: "" });
+  assert.equal(r.status, 1, r.out);
+  assert.match(lines(r.out, "FAIL"), /production would refuse to start: DOCUMENT_SIGNING_KEY is required in production/);
+  assert.match(preflight().out, /PASS\s+not a real-money deployment env/);
+});
 await check("an RPC on another chain fails", () => {
   const r = preflight({ rpcChain: 8453 });
   assert.equal(r.status, 1);

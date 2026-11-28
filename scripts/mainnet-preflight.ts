@@ -253,6 +253,26 @@ console.log("wallets");
   if (!problems.length) ok("every configured wallet is in wallets.json with a known key holder");
 }
 
+console.log("production config");
+{
+  // The API unit runs with NODE_ENV=production, which a shell running
+  // preflight usually lacks: ask the same boot checks the service will. A
+  // --chain run probes public endpoints and is not a deployment's env.
+  const { REAL_MONEY_CHAINS } = await import("../services/api/src/config/env.js");
+  if (chainFlag || !REAL_MONEY_CHAINS.has(Number(CANDIDE.chainId))) {
+    ok("not a real-money deployment env (--chain, or a test chain): boot checks not run");
+  } else {
+    const { spawnSync } = await import("node:child_process");
+    const r = spawnSync(process.execPath, ["--import", "tsx", "-e", 'await import("./services/api/src/config/production.ts")'], {
+      cwd: ROOT, encoding: "utf8", timeout: 60_000, env: { ...process.env, TRANSF_PRODUCTION: "1" },
+    });
+    const problems = r.stderr.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+    for (const p of problems) fail(`production would refuse to start: ${p}`);
+    if (r.status !== 0 && !problems.length) fail(`the production boot check did not run (exit ${r.status})`);
+    if (r.status === 0) ok("production boot checks pass");
+  }
+}
+
 console.log("retired settings");
 const stale = Object.keys(process.env).filter((k) => k.startsWith("CANDIDE_COSIGNER_") || k === "CANDIDE_ALLOWANCE_MODULE_ADDRESS");
 if (stale.length) warn(`${stale.join(", ")} set but no longer read — remove ${stale.length > 1 ? "them" : "it"}`);

@@ -127,15 +127,18 @@ await check("production refuses to start without its own document key", () => {
   const boot = (extra: Record<string, string>) =>
     load({ ...SEPOLIA, RELAY_KEY: RELAY, TRANSF_PRODUCTION: "1", ...extra }, 'await import("./services/api/src/config.js")');
   assert.match(boot({}).stderr, /DOCUMENT_SIGNING_KEY is required in production/);
-  const malformed = boot({ DOCUMENT_SIGNING_KEY: ORCHESTRATOR.slice(0, -2) });
+  const short = fake("c7").slice(0, -2);
+  const malformed = boot({ DOCUMENT_SIGNING_KEY: short });
   assert.match(malformed.stderr, /DOCUMENT_SIGNING_KEY is not a 32-byte hex private key/);
-  assert.deepEqual(secretsIn(malformed.stderr), [], "the value is never printed");
+  assert.ok(!malformed.stderr.toLowerCase().includes(short.slice(2)), "the value is never printed");
   const same = boot({ DOCUMENT_SIGNING_KEY: ORCHESTRATOR });
   assert.match(same.stderr, /DOCUMENT_SIGNING_KEY must not be the orchestrator key/);
   assert.deepEqual(secretsIn(same.stderr), [], "the value is never printed");
   // The alias config/keys.ts also reads the orchestrator key from.
   const alias = boot({ ORCHESTRATOR_KEY: "", DEPLOY_ORCHESTRATOR_KEY: fake("f6"), DOCUMENT_SIGNING_KEY: ` ${fake("f6").toUpperCase().replace("0X", "0x")} ` });
   assert.match(alias.stderr, /DOCUMENT_SIGNING_KEY must not be the orchestrator key/);
+  // SEPOLIA cannot boot production (checkMainnet refuses it), so this asserts
+  // the boot ran its checks and none of them named the document key.
   const own = boot({ DOCUMENT_SIGNING_KEY: fake("e5") });
   assert.match(own.stderr, /production configuration is incomplete/, "the other checks ran");
   assert.doesNotMatch(own.stderr, /DOCUMENT_SIGNING_KEY/);
