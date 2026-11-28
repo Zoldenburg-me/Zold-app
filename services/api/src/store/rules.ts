@@ -516,3 +516,30 @@ export function settleOutboxOn(r: OutboxRow, attempt: number, outcome: OutboxOut
   }
   return true;
 }
+
+/** Transfer states in which the pipeline may still read the user row. A
+ *  CREATED transfer moved nothing and its userOp needs a session to sign. */
+const SETTLED_OR_UNSIGNED = new Set(["CREATED", "PAID", "FAILED", "REFUNDED"]);
+
+export type DeleteUserRefusal = { ok: false; code: "NOT_FOUND" } | { ok: false; code: "OPEN_TRANSFERS"; transferIds: string[] } | { ok: false; code: "LAST_OWNER"; orgIds: string[] };
+
+/**
+ * Why a user may not be deleted yet, or null. Refused while a transfer is in
+ * flight, and while they are the last active owner of an org that has other
+ * active members (an org never loses its last owner). An org they are alone
+ * in is theirs and goes ownerless with them.
+ */
+export function deleteUserRefusal(transfers: Transfer[], members: Member[], userId: string): DeleteUserRefusal | null {
+  const open = transfers.filter((t) => t.userId === userId && !SETTLED_OR_UNSIGNED.has(t.state)).map((t) => t.id);
+  if (open.length) return { ok: false, code: "OPEN_TRANSFERS", transferIds: open };
+  const live = members.filter((m) => m.status === "active");
+  const orphaned = [...new Set(live.filter((m) => m.userId === userId && m.role === "owner").map((m) => m.orgId))].filter((orgId) => {
+    const rest = live.filter((m) => m.orgId === orgId && m.userId !== userId);
+    return rest.length > 0 && !rest.some((m) => m.role === "owner");
+  });
+  return orphaned.length ? { ok: false, code: "LAST_OWNER", orgIds: orphaned } : null;
+}
+
+/** What a deleted user's member row keeps: the org's record of a seat, with
+ *  no name or email. */
+export const erasedMember = (at: string): Partial<Member> => ({ status: "deactivated", deactivatedAt: at, email: "", name: undefined, invite: undefined });

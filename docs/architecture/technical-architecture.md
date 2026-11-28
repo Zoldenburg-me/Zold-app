@@ -1616,5 +1616,7 @@ Settings (`config/checkout-service.ts`; a bad webhook URL or secret refuses star
 | `GET /admin/{stats, overview, issues, users, transactions, errors}` (operator, A) | Dashboard reads; derived views in `src/admin/`. |
 | `GET /admin/users/:id` (operator, A) | One account: projection, onboarding stage, transactions, recoveries, issues, audit. |
 | `GET /admin/users/:id/monerium[?live=1]` (operator, A) | What Zold stored from Monerium; `live=1` also reads Monerium on the account's own connection (refused without one), stores nothing, audits the read. |
+| `POST /admin/users/:id/email` (operator, A) | Change the account's email at the user's request: at once and unconfirmed (`emailVerifiedAt` cleared), refused when another account holds the address, a notice to the old address when mail is on. |
+| `DELETE /admin/users/:id` (operator, A) | GDPR erasure (`store.deleteUser`): the users row, its sessions and payment handle are deleted, its member rows deactivated with no name or email; transfers, ledger and audit keep the bare id. Refused while a transfer is in flight or the user is the last owner of an org with other members. The Safe and its funds stay on chain. |
 | `GET /admin/monerium[?live=1]` (operator, A) | Deployment-wide Monerium view; `live=1` checks the app credentials. |
 | `GET /admin/recoveries` (operator, A) | Zoldenburg requests and guardian enrolments. Each request's account carries `moneriumProfileHistory`, every Monerium profile it recorded (append-only, store.updateUser). |

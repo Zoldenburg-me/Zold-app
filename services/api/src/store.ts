@@ -65,6 +65,9 @@ import {
   type MoneriumTokens,
   reviewRefundTx,
   sessionDead,
+  deleteUserRefusal,
+  erasedMember,
+  type DeleteUserRefusal,
   type ReviewResolution,
   type ReviewResult,
 } from "./store/rules.js";
@@ -935,6 +938,23 @@ export const jsonCore = {
     }
     persist();
     return epoch;
+  },
+  /**
+   * Erase a user for a GDPR request (routes/admin-users.ts): the users row,
+   * its sessions and payment handle go, and its org member rows lose name and
+   * email. Transfers, ledger, documents and audit keep the bare userId, which
+   * no longer resolves to a person. Refused as deleteUserRefusal says.
+   */
+  deleteUser(userId: string, at = new Date().toISOString()): { ok: true } | DeleteUserRefusal {
+    const i = db.users.findIndex((u) => u.id === userId);
+    if (i < 0) return { ok: false, code: "NOT_FOUND" };
+    const refusal = deleteUserRefusal(db.transfers, db.members, userId);
+    if (refusal) return refusal;
+    db.users.splice(i, 1);
+    db.sessions = db.sessions.filter((s) => s.userId !== userId);
+    for (const m of db.members) if (m.userId === userId) Object.assign(m, erasedMember(at));
+    persist();
+    return { ok: true };
   },
   /** Drop sessions that can no longer authenticate (store/db.ts pruneSessions). */
   pruneSessions() {

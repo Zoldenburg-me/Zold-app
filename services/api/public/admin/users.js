@@ -247,7 +247,47 @@ function renderUserDetail(root, id) {
         ['', (x) => (x.mode === 'zoldenburg' ? `<a href="${href('recoveries', x.id)}">Open</a>` : '')],
       ], 'None.')}</section>
 
-    <section class="card"><div class="card-h"><h2>Audit trail</h2></div>${auditTable(audit)}</section>`;
+    <section class="card"><div class="card-h"><h2>Audit trail</h2></div>${auditTable(audit)}</section>
+
+    <section class="card"><div class="card-h"><h2>Support actions</h2>
+      <div class="actions"><button type="button" class="btn sm" data-change-email>Change email</button>
+      <button type="button" class="btn sm ghost" data-delete-user>Delete user</button></div></div>
+      <div class="card-b"><p class="sub2">For a request the person sent support. Each needs your passkey and is audited. Delete erases the account for good; transfers and the ledger keep only its id.</p></div></section>`;
+}
+
+/* An operator changes the email at a user's request: it takes effect now,
+   unconfirmed, and the old address is told. */
+async function changeUserEmail(root, id) {
+  const u = S.userCache[id].detail.user;
+  const email = (prompt(`New email for ${u.name || id} (now ${u.email || 'none'}).\n\nIt takes effect at once and unconfirmed; the old address gets a notice.`) || '').trim();
+  if (!email) return;
+  try {
+    const r = await api(`/api/admin/users/${encodeURIComponent(id)}/email`, { method: 'POST', body: JSON.stringify({ email }) });
+    alert(`Email changed to ${r.email}. ${r.noticeSent ? 'The old address was told.' : 'No notice went to the old address (no old address, or mail is off or failed).'}`);
+    await loadUserDetail(id);
+    renderUserDetail(root, id);
+  } catch (err) {
+    alert(`Not changed: ${err.message}`);
+  }
+}
+
+/* A GDPR erasure. The Safe stays on chain and the user's: the prompt names it
+   so support can tell the person where their money is. */
+async function deleteUserAccount(id) {
+  const u = S.userCache[id].detail.user;
+  const safe = u.passkeySafe?.address || u.address;
+  const typed = prompt(`Delete ${u.name || 'this user'} (${u.email || id}) for good?\n\n` +
+    `Their Safe ${safe} and any money in it stay on chain and stay theirs: tell them before you delete. ` +
+    `Name, email, passkey, sessions and Monerium connection are erased; transfers and the ledger keep only the id.\n\nType the user id to confirm:`);
+  if (typed === null) return;
+  if (typed.trim() !== id) { alert('The id did not match. Nothing was deleted.'); return; }
+  try {
+    await api(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    delete S.userCache[id];
+    go('users');
+  } catch (err) {
+    alert(`Not deleted: ${err.message}`);
+  }
 }
 
 /* Status pill for a recovery request (recoveries.js holds the full map). */
@@ -276,6 +316,8 @@ VIEWS.users = {
     const c = S.userCache[arg];
     if (ev.target.closest('[data-raw-user]') && c) return openModal(`User ${arg}`, c.detail.user);
     if (ev.target.closest('[data-raw-monerium]') && c) return openModal(`Monerium · ${arg}`, { ...c.monerium, live: c.live });
+    if (ev.target.closest('[data-change-email]') && c) return changeUserEmail(root, arg);
+    if (ev.target.closest('[data-delete-user]') && c) return deleteUserAccount(arg);
     const btn = ev.target.closest('[data-live-monerium]');
     if (btn) {
       btn.disabled = true;

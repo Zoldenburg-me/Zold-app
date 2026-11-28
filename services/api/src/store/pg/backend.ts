@@ -55,6 +55,8 @@ import {
   reviewRefundTx,
   sessionDead,
   moneriumTokensPatch,
+  deleteUserRefusal,
+  erasedMember,
   announceOutbox,
   newOutboxRow,
   outboxDraftsFor,
@@ -906,6 +908,27 @@ export function createPgStore(database: Database): StoreBackend {
           await save(t, TABLE.sessions, s);
         }
         return epoch;
+      }),
+    // User row first, as in addSession; then each org's row before its
+    // members, as in updateMemberChecked.
+    deleteUser: (userId, at = new Date().toISOString()) =>
+      tx(async (t) => {
+        if (!(await locked<User>(t, TABLE.users, userId))) return { ok: false as const, code: "NOT_FOUND" as const };
+        const own = await rows<Member>(t, TABLE.members, "user_id = $1", [userId]);
+        const orgIds = [...new Set(own.map((m) => m.orgId))].sort();
+        const members: Member[] = [];
+        for (const orgId of orgIds) {
+          await locked<Organisation>(t, TABLE.organisations, orgId);
+          members.push(...(await rows<Member>(t, TABLE.members, "org_id = $1", [orgId], "FOR UPDATE")));
+        }
+        const transfers = await rows<Transfer>(t, TABLE.transfers, "user_id = $1", [userId]);
+        const refusal = deleteUserRefusal(transfers, members, userId);
+        if (refusal) return refusal;
+        for (const m of members.filter((x) => x.userId === userId)) await save(t, TABLE.members, Object.assign(m, erasedMember(at)));
+        await t.query("DELETE FROM sessions WHERE user_id = $1", [userId]);
+        await t.query("DELETE FROM payment_handles WHERE owner_kind = 'user' AND owner_id = $1", [userId]);
+        await t.query("DELETE FROM users WHERE id = $1", [userId]);
+        return { ok: true as const };
       }),
     // Periodic (server.ts), not part of addSession: a prune there would scan
     // and lock the whole table on every login.

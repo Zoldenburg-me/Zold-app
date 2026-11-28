@@ -650,6 +650,29 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   // Rule 4 over an organisation: a write only while a check on it holds.
   assert.equal(await s.updateOrganisationIf("org_b", () => false, () => ({ name: "never" })), null);
   assert.equal((await s.updateOrganisationIf("org_b", (o) => o.name === "B 2", (o) => ({ name: `${o.name}!` })))?.name, "B 2!");
+
+  // An erasure: refused while a transfer is in flight or an org would lose
+  // its last owner; then the row, its sessions and handle go, member rows
+  // lose name and email, and the money rows keep the bare id.
+  const del = (id: string, n: string) => ({ id, name: `Del ${n}`, email: `${id}@example.com`, country: "DE", address: `0x${n.repeat(40)}`, iban: "", createdAt: now, paymentPage: { handle: id } } as any);
+  await s.addUser(del("u_del", "d"));
+  await s.addSession({ id: "s_del", userId: "u_del", tokenHash: "th-del", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY) });
+  await s.addOrganisation({ id: "org_del", type: "business", name: "Del Co", createdAt: now, updatedAt: now } as any);
+  await s.addMember({ id: "m_del", orgId: "org_del", userId: "u_del", email: "u_del@example.com", name: "Del", role: "owner", status: "active", invitedAt: now } as any);
+  await s.addMember({ id: "m_del_staff", orgId: "org_del", userId: "u_b", email: "bo@example.com", role: "admin", status: "active", invitedAt: now } as any);
+  await s.addTransfer({ id: "t_del", userId: "u_del", quoteId: "q_del", rail: "sepa", state: "PAYOUT_SUBMITTED", sendEur: 1, txs: [], createdAt: now, updatedAt: now } as any);
+  assert.deepEqual(await s.deleteUser("u_del"), { ok: false, code: "OPEN_TRANSFERS", transferIds: ["t_del"] });
+  await s.updateTransfer("t_del", { state: "PAID" } as any);
+  assert.deepEqual(await s.deleteUser("u_del"), { ok: false, code: "LAST_OWNER", orgIds: ["org_del"] });
+  await s.updateMember("m_del_staff", { role: "owner" });
+  assert.deepEqual(await s.deleteUser("u_del", now), { ok: true });
+  assert.equal(await s.findUser("u_del"), undefined);
+  assert.equal(await s.findUserByHandle("u_del"), undefined, "the handle is free");
+  assert.equal(await s.findSessionByTokenHash("th-del"), undefined);
+  assert.equal((await s.findTransfer("t_del"))?.userId, "u_del");
+  assert.deepEqual(json(await s.findMember("m_del")), json({ id: "m_del", orgId: "org_del", userId: "u_del", email: "", role: "owner", status: "deactivated", invitedAt: now, deactivatedAt: now }));
+  assert.equal((await s.findMember("m_del_staff"))?.email, "bo@example.com", "another member is untouched");
+  assert.deepEqual(await s.deleteUser("u_del"), { ok: false, code: "NOT_FOUND" });
 }
 
 /**

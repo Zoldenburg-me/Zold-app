@@ -30,6 +30,7 @@ import { startCheckoutWebhook } from "./checkout-webhook.js";
 import { startOutboxWorker } from "./outbox.js";
 import { createMoneriumRouter } from "./routes/monerium.js";
 import { createAdminRouter } from "./routes/admin.js";
+import { createAdminUsersRouter } from "./routes/admin-users.js";
 import { createPageRouter, notFound } from "./routes/pages.js";
 import { createUserRouter } from "./routes/users.js";
 import { createCryptoDepositRouter } from "./routes/crypto-deposits.js";
@@ -258,6 +259,8 @@ app.use("/api", createBooksLineRouter({ requireUserSession }));
 app.use("/api", createMoneriumRouter({ requireUserSession }));
 // The operator dashboard's read side, behind the operator bearer token.
 app.use("/api", createAdminRouter());
+// Operator actions on one user: erase it, change its email.
+app.use("/api", createAdminUsersRouter());
 // Zoldenburg as guardian: the owner opts in, asks after losing the passkey,
 // and an operator signs from a hardware wallet (admin console or Safe Cover).
 app.use("/api", createZoldenburgRecoveryRouter({ requireUserSession }));

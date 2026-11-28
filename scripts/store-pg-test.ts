@@ -383,7 +383,7 @@ try {
       const denied = /permission denied/;
       await assert.rejects(() => app.query("DELETE FROM ledger"), denied, "no DELETE grant on ledger");
       await assert.rejects(() => app.query("DELETE FROM transfers"), denied, "nor on transfers");
-      for (const t of ["processed_monerium_orders", "processed_monerium_webhooks", "monerium_issue_orders", "crypto_deposits", "crypto_sends", "users", "payment_requests"]) {
+      for (const t of ["processed_monerium_orders", "processed_monerium_webhooks", "monerium_issue_orders", "crypto_deposits", "crypto_sends", "payment_requests"]) {
         await assert.rejects(() => app.query(`DELETE FROM ${t}`), denied, `no DELETE on ${t}: no store method deletes from it`);
       }
       await assert.rejects(() => app.query("UPDATE audit SET doc = doc"), denied, "audit: no UPDATE grant");
@@ -397,6 +397,7 @@ try {
       // What it may do: delete where a store method deletes, and its ledger
       // writes leave history through the trigger.
       assert.ok((await app.query("DELETE FROM contacts WHERE FALSE")).rows);
+      assert.ok((await app.query("DELETE FROM users WHERE FALSE")).rows, "users: the operator's erasure (store.deleteUser)");
       await as.addLedgerEntries([{ id: "le_app", orgId: "org_app", direction: "in", asset: "EURe", amount: "1", at: new Date().toISOString(), createdAt: new Date().toISOString() } as any]);
       await as.updateLedgerEntry("le_app", { note: "categorised" } as any);
       assert.equal((await app.query("SELECT 1 FROM ledger_history WHERE entry_id = 'le_app'")).rows.length, 1, "the app role's update leaves history");

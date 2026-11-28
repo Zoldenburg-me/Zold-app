@@ -28,6 +28,7 @@ process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "admin-test-encryption-key-012345678
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
+const { createAdminUsersRouter } = await import("../services/api/src/routes/admin-users.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
 const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
@@ -92,6 +93,7 @@ app.use(express.json());
 app.use("/api/admin", createOperatorGate());
 app.use("/api", createOperatorAuthRouter());
 app.use("/api", createAdminRouter());
+app.use("/api", createAdminUsersRouter());
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -211,6 +213,87 @@ await check("a pickup hash that differs from the recorded send is still shown", 
   const { transactions } = JSON.parse((await get("/api/admin/transactions")).text);
   const route = transactions.find((t: any) => t.id === "t_anchor_differs").route;
   assert.ok(route.some((r: any) => r.hash === H) && route.some((r: any) => r.hash === H3), JSON.stringify(route));
+});
+
+// ── Operator actions on one user: change email, delete ─────────────────────
+const plainUser = (id: string, email: string) => ({
+  id, name: `Name ${id}`, email, country: "DE", kycStatus: "approved", iban: "", address: safe(id.slice(-1)), createdAt: now,
+  passkey: { credentialId: `cred-${id}`, rpId: "localhost", createdAt: now },
+} as any);
+const send = async (method: string, p: string, body?: unknown, headers: Record<string, string> = {}) => {
+  const res = await realFetch(`${API}${p}`, { method, headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body ?? {}) });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+};
+await store.addUser(plainUser("u_mail1", "old@example.com"));
+await store.updateUser("u_mail1", { emailVerifiedAt: now });
+
+await check("change email and delete refuse without an operator session, and without a step-up", async () => {
+  assert.equal((await send("POST", "/api/admin/users/u_mail1/email", { email: "new@example.com" })).status, 401);
+  assert.equal((await send("DELETE", "/api/admin/users/u_mail1")).status, 401);
+  const noStepUp = { authorization: `Bearer ${kit.sessionToken}` };
+  assert.equal((await send("POST", "/api/admin/users/u_mail1/email", { email: "new@example.com" }, noStepUp)).status, 403);
+  assert.equal((await send("DELETE", "/api/admin/users/u_mail1", undefined, noStepUp)).status, 403);
+  // An approval for one body does not carry another.
+  const other = await kit.stepUp("POST", "/api/admin/users/u_mail1/email", { email: "else@example.com" });
+  assert.equal((await send("POST", "/api/admin/users/u_mail1/email", { email: "new@example.com" }, { ...noStepUp, ...other })).status, 403);
+  assert.equal((await store.findUser("u_mail1"))?.email, "old@example.com");
+});
+
+await check("change email refuses an invalid, an unchanged and a taken address", async () => {
+  assert.equal((await kit.call("POST", "/api/admin/users/u_mail1/email", { email: "not-an-email" })).status, 400);
+  const same = await kit.call("POST", "/api/admin/users/u_mail1/email", { email: " OLD@example.com " });
+  assert.equal(same.body.code, "SAME_EMAIL");
+  const taken = await kit.call("POST", "/api/admin/users/u_mail1/email", { email: "Hollow@Example.com" });
+  assert.equal(taken.status, 409);
+  assert.equal(taken.body.code, "EMAIL_IN_USE");
+  assert.equal((await kit.call("POST", "/api/admin/users/nobody/email", { email: "x@example.com" })).status, 404);
+});
+
+await check("change email takes effect unconfirmed and is audited without either address", async () => {
+  const r = await kit.call("POST", "/api/admin/users/u_mail1/email", { email: " New@Example.com " });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body, { email: "new@example.com", noticeSent: false }, "mail is off in this test");
+  const u = (await store.findUser("u_mail1"))!;
+  assert.equal(u.email, "new@example.com");
+  assert.equal(u.emailVerifiedAt, undefined, "the new address must be confirmed again");
+  const row = (await store.auditFor("u_mail1", 5)).find((e: any) => e.kind === "operator.request" && e.data.method === "POST");
+  assert.ok(row && row.data.status === 200 && String(row.data.operator).startsWith("operator:"));
+  assert.ok(!JSON.stringify(row).includes("example.com"), "the audit row names no address");
+});
+
+await check("delete refuses a user with a transfer in flight or who is an org's last owner", async () => {
+  await store.addUser(plainUser("u_busy", "busy@example.com"));
+  await store.addTransfer({ id: "t_busy", userId: "u_busy", quoteId: "q", rail: "sepa", state: "DEBITED", sendEur: 5, txs: [], createdAt: now, updatedAt: now } as any);
+  const busy = await kit.call("DELETE", "/api/admin/users/u_busy");
+  assert.equal(busy.status, 409);
+  assert.deepEqual([busy.body.code, busy.body.transferIds], ["OPEN_TRANSFERS", ["t_busy"]]);
+  await store.addUser(plainUser("u_boss", "boss@example.com"));
+  await store.addOrganisation({ id: "org_co", type: "business", name: "Co", createdAt: now, updatedAt: now } as any);
+  await store.addMember({ id: "m_boss", orgId: "org_co", userId: "u_boss", email: "boss@example.com", role: "owner", status: "active", invitedAt: now } as any);
+  await store.addMember({ id: "m_staff", orgId: "org_co", userId: "u_live", email: "live@example.com", role: "admin", status: "active", invitedAt: now } as any);
+  const boss = await kit.call("DELETE", "/api/admin/users/u_boss");
+  assert.deepEqual([boss.status, boss.body.code, boss.body.orgIds], [409, "LAST_OWNER", ["org_co"]]);
+  assert.ok(await store.findUser("u_busy") && await store.findUser("u_boss"), "nothing was deleted");
+  assert.equal((await kit.call("DELETE", "/api/admin/users/nobody")).status, 404);
+});
+
+await check("delete erases the user, its sessions and member rows, and keeps the money rows", async () => {
+  await store.addUser({ ...plainUser("u_gone", "gone@example.com"), paymentPage: { handle: "gone" } });
+  await store.addSession({ id: "s_gone", userId: "u_gone", tokenHash: "h-gone", createdAt: now, expiresAt: new Date(Date.now() + 3_600_000).toISOString() } as any);
+  await store.addTransfer({ id: "t_gone", userId: "u_gone", quoteId: "q", rail: "sepa", state: "PAID", sendEur: 5, txs: [], createdAt: now, updatedAt: now } as any);
+  await store.addOrganisation({ id: "org_gone", type: "personal", name: "Gone", createdAt: now, updatedAt: now } as any);
+  await store.addMember({ id: "m_gone", orgId: "org_gone", userId: "u_gone", email: "gone@example.com", name: "Gone", role: "owner", status: "active", invitedAt: now } as any);
+  const r = await kit.call("DELETE", "/api/admin/users/u_gone");
+  assert.deepEqual([r.status, r.body], [200, { deleted: true }]);
+  assert.equal(await store.findUser("u_gone"), undefined);
+  assert.equal(await store.findUserByHandle("gone"), undefined);
+  assert.equal(await store.findSessionByTokenHash("h-gone"), undefined);
+  assert.equal((await store.findTransfer("t_gone"))?.userId, "u_gone", "the transfer stays, on the bare id");
+  const m = (await store.findMember("m_gone"))!;
+  assert.deepEqual([m.status, m.email, m.name], ["deactivated", "", undefined]);
+  assert.equal((await get("/api/admin/users/u_gone")).status, 404);
+  const row = (await store.auditFor("u_gone", 5)).find((e: any) => e.kind === "operator.request" && e.data.method === "DELETE");
+  assert.ok(row && row.data.status === 200, "the deletion is audited");
 });
 
 server.close();
