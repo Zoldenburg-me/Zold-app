@@ -140,7 +140,11 @@ Rules, because whatever is on `production` is what both deployments run:
   goes through a PR to main, then a rebuild.
 - **Never build from an unmerged branch.** The script's argument exists for
   re-snapshotting an older main commit, not for shipping a branch.
-- **Roll back with a revert PR to main**, which deploys like any merge. To
+- **Roll back with a revert PR to main**, which deploys like any merge. On
+  Postgres a revert keeps every migration file already applied: the deploy
+  refuses a release whose applied migration is gone or changed, so a schema
+  change is fixed forward with a new migration (`docs/oracle-host.md`,
+  Deploys). To
   hold zoldhq.com on an older production commit meanwhile, set
   `ZOLD_COMMIT=<sha>` on its lease: a pinned lease stops following the
   branch until `ZOLD_COMMIT=production` is set again. The Oracle host has
