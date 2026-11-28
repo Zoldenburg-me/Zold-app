@@ -516,3 +516,48 @@ export function settleOutboxOn(r: OutboxRow, attempt: number, outcome: OutboxOut
   }
   return true;
 }
+
+/** A transfer moved no money and never will: settled, or CREATED and never
+ *  signed. A signed one stays CREATED while its debit is relayed
+ *  (transfers/activity.ts), so it is open. */
+const transferClosed = (t: Transfer) =>
+  ["PAID", "FAILED", "REFUNDED"].includes(t.state) || (t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt);
+const RECOVERY_CLOSED = new Set(["FINALIZED", "CANCELED", "EXPIRED"]);
+
+export type DeleteUserRefusal =
+  | { ok: false; code: "NOT_FOUND" }
+  | { ok: false; code: "IN_FLIGHT"; transferIds: string[]; cryptoSendIds: string[]; recoveryIds: string[] }
+  | { ok: false; code: "LAST_OWNER"; orgIds: string[] };
+
+/** The rows deleteUserRefusal weighs, all of one user except `members`,
+ *  which are every member of the orgs the user is in. */
+export interface DeleteUserRows {
+  transfers: Transfer[];
+  cryptoSends: { id: string; state: string }[];
+  recoveries: { id: string; status: string }[];
+  members: Member[];
+}
+
+/**
+ * Why a user may not be deleted yet, or null. Refused while anything that
+ * reads the user row is in flight: a signed or moving transfer, a submitted
+ * crypto send, an open recovery request. And while they are the last active
+ * owner of an org with other active members (an org never loses its last
+ * owner). An org they are alone in is theirs and goes ownerless with them.
+ */
+export function deleteUserRefusal(rows: DeleteUserRows, userId: string): DeleteUserRefusal | null {
+  const transferIds = rows.transfers.filter((t) => !transferClosed(t)).map((t) => t.id);
+  const cryptoSendIds = rows.cryptoSends.filter((c) => c.state === "SUBMITTED").map((c) => c.id);
+  const recoveryIds = rows.recoveries.filter((r) => !RECOVERY_CLOSED.has(r.status)).map((r) => r.id);
+  if (transferIds.length || cryptoSendIds.length || recoveryIds.length) return { ok: false, code: "IN_FLIGHT", transferIds, cryptoSendIds, recoveryIds };
+  const live = rows.members.filter((m) => m.status === "active");
+  const orphaned = [...new Set(live.filter((m) => m.userId === userId && m.role === "owner").map((m) => m.orgId))].filter((orgId) => {
+    const rest = live.filter((m) => m.orgId === orgId && m.userId !== userId);
+    return rest.length > 0 && !rest.some((m) => m.role === "owner");
+  });
+  return orphaned.length ? { ok: false, code: "LAST_OWNER", orgIds: orphaned } : null;
+}
+
+/** What a deleted user's member row keeps: the org's record of a seat, with
+ *  no name or email. */
+export const erasedMember = (at: string): Partial<Member> => ({ status: "deactivated", deactivatedAt: at, email: "", name: undefined, invite: undefined });

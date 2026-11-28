@@ -588,6 +588,8 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         return res.status(503).json({ error: SCREENING_DOWN_ERROR, code: "SCREENING_UNAVAILABLE" });
       }
       const claim = await store.tx(async () => {
+        // The user row first, as store.deleteUser takes it (routes/transfers.ts).
+        if (!(await store.lockUser(send.userId))) return "gone" as const;
         // A payment run's payee is a saved contact and its signer the member
         // whose Safe backs the account. Checked in one transaction with the
         // claim, so an address-book edit cannot land in between.
@@ -627,6 +629,7 @@ export function createCryptoSendsRouter({ requireUserSession, ...deps }: CryptoS
         await store.dropPendingExecution("cryptoSend", send.id);
         return "claimed" as const;
       });
+      if (claim === "gone") return res.status(404).json({ error: "user not found" });
       if (claim !== "claimed") return;
       let op: Awaited<ReturnType<typeof submitPasskeySafeOperationWithReceipt>>;
       try {

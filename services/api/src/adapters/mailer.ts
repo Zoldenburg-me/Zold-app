@@ -125,6 +125,21 @@ export async function sendSendLinkFilled(to: string): Promise<void> {
   });
 }
 
+/** To the old address after an operator changed the account's email. Names
+ *  neither address: this one may no longer be the owner's. No link. */
+export async function sendEmailChangedNotice(to: string): Promise<void> {
+  await smtp().sendMail({
+    from: EMAIL_VERIFICATION.smtp.from,
+    to,
+    subject: "The email on your Zold account was changed",
+    text:
+      `Zoldenburg support changed the email address on the Zold account that used this address. Mail about the account now goes to the new address.\n\n` +
+      `If you did not ask for this, contact Zoldenburg support.\n\n` +
+      `This email has no link.\n\n` +
+      `Zoldenburg`,
+  });
+}
+
 /** "13 October 2026, 09:00 UTC": the same for every reader, whatever their zone. */
 const utcText = (d: Date) =>
   `${d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}, ` +

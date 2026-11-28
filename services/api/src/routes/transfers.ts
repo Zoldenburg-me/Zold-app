@@ -447,10 +447,14 @@ export function createTransferRouter(deps: TransferDeps) {
       // The prepared operation goes with the claim, in one transaction: a
       // replayed approval finds neither.
       const claimed = await store.tx(async () => {
+        // The user row first, as store.deleteUser takes it: an operator's
+        // deletion either sees this claim or lands before it and refuses it.
+        if (!(await store.lockUser(transfer.userId))) return "gone" as const;
         if (!(await store.claimAuthorization(transfer.id))) return false;
         await store.dropPendingExecution("transfer", transfer.id);
         return true;
       });
+      if (claimed === "gone") return res.status(404).json({ error: "user not found" });
       if (!claimed) {
         return res.status(409).json({ error: "authorization already submitted for this transfer" });
       }

@@ -654,6 +654,42 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   // Rule 4 over an organisation: a write only while a check on it holds.
   assert.equal(await s.updateOrganisationIf("org_b", () => false, () => ({ name: "never" })), null);
   assert.equal((await s.updateOrganisationIf("org_b", (o) => o.name === "B 2", (o) => ({ name: `${o.name}!` })))?.name, "B 2!");
+
+  // An erasure: refused while a transfer is in flight or an org would lose
+  // its last owner; then the row, its sessions and handle go, member rows
+  // lose name and email, and the money rows keep the bare id.
+  const del = (id: string, n: string) => ({ id, name: `Del ${n}`, email: `${id}@example.com`, country: "DE", address: `0x${n.repeat(40)}`, iban: "", createdAt: now, paymentPage: { handle: id } } as any);
+  await s.addUser(del("u_del", "d"));
+  await s.addSession({ id: "s_del", userId: "u_del", tokenHash: "th-del", createdAt: now, lastUsedAt: now, expiresAt: iso(DAY) });
+  await s.addOrganisation({ id: "org_del", type: "business", name: "Del Co", createdAt: now, updatedAt: now } as any);
+  await s.addMember({ id: "m_del", orgId: "org_del", userId: "u_del", email: "u_del@example.com", name: "Del", role: "owner", status: "active", invitedAt: now } as any);
+  await s.addMember({ id: "m_del_staff", orgId: "org_del", userId: "u_b", email: "bo@example.com", role: "admin", status: "active", invitedAt: now } as any);
+  const inFlight = (o: { transferIds?: string[]; cryptoSendIds?: string[]; recoveryIds?: string[] }) =>
+    ({ ok: false, code: "IN_FLIGHT", transferIds: [], cryptoSendIds: [], recoveryIds: [], ...o });
+  // Unsigned CREATED moved nothing; signed, it is being relayed.
+  await s.addTransfer({ id: "t_del", userId: "u_del", quoteId: "q_del", rail: "sepa", state: "CREATED", sendEur: 1, txs: [], auth: { terms: "t" }, createdAt: now, updatedAt: now } as any);
+  await s.addTransfer({ id: "t_del_paid", userId: "u_del", quoteId: "q_del2", rail: "sepa", state: "PAID", sendEur: 1, txs: [], createdAt: now, updatedAt: now } as any);
+  await s.addCryptoSendUnderHold({ id: "cs_del", userId: "u_del", to: `0x${"11".repeat(20)}`, token: "EURE", amount: "1", capEur: 1, state: "SUBMITTED", deadline: Date.now() / 1000 + 600, createdAt: now, updatedAt: now } as any,
+    (await s.holdDailyCap("u_del", 1, 100, () => 0) as any).holdId);
+  await s.addRecoveryRequest({ id: "rr_del", userId: "u_del", status: "REVIEW_PENDING", requestedAt: now, updatedAt: now } as any);
+  assert.deepEqual(await s.deleteUser("u_del"), inFlight({ cryptoSendIds: ["cs_del"], recoveryIds: ["rr_del"] }), "an unsigned CREATED transfer does not block");
+  await s.updateCryptoSendFrom("cs_del", ["SUBMITTED"], { state: "SENT" });
+  await s.updateRecoveryRequest("rr_del", { status: "CANCELED" } as any);
+  assert.ok(await s.claimAuthorization("t_del"));
+  assert.deepEqual(await s.deleteUser("u_del"), inFlight({ transferIds: ["t_del"] }), "a signed CREATED transfer is in flight");
+  await s.updateTransfer("t_del", { state: "PAYOUT_SUBMITTED" } as any);
+  assert.deepEqual(await s.deleteUser("u_del"), inFlight({ transferIds: ["t_del"] }));
+  await s.updateTransfer("t_del", { state: "PAID" } as any);
+  assert.deepEqual(await s.deleteUser("u_del"), { ok: false, code: "LAST_OWNER", orgIds: ["org_del"] });
+  await s.updateMember("m_del_staff", { role: "owner" });
+  assert.deepEqual(await s.deleteUser("u_del", now), { ok: true });
+  assert.equal(await s.findUser("u_del"), undefined);
+  assert.equal(await s.findUserByHandle("u_del"), undefined, "the handle is free");
+  assert.equal(await s.findSessionByTokenHash("th-del"), undefined);
+  assert.equal((await s.findTransfer("t_del"))?.userId, "u_del");
+  assert.deepEqual(json(await s.findMember("m_del")), json({ id: "m_del", orgId: "org_del", userId: "u_del", email: "", role: "owner", status: "deactivated", invitedAt: now, deactivatedAt: now }));
+  assert.equal((await s.findMember("m_del_staff"))?.email, "bo@example.com", "another member is untouched");
+  assert.deepEqual(await s.deleteUser("u_del"), { ok: false, code: "NOT_FOUND" });
 }
 
 /**

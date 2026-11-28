@@ -23,7 +23,7 @@ export interface User {
    *  it). Stamped by store.updateUser; absent on rows from before. */
   ibanSince?: string;
   /** When a code sent to `email` was typed back (routes/email-verification.ts).
-   *  Cleared nowhere: there is no route that changes the email. */
+   *  Cleared when an operator changes the email (routes/admin-users.ts). */
   emailVerifiedAt?: string;
   /** The outstanding code, hashed. Never in any projection. */
   emailCode?: {
