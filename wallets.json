@@ -4,6 +4,31 @@
       "role": "Candide custodial withdrawer",
       "env": ["CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER"],
       "keyHolder": "unknown"
+    },
+    "0x222222222211B5eB5be634822404F66f1A3adB00": {
+      "role": "Zoldenburg recovery guardian and Candide custodial withdrawer: a 1-of-3 Safe whose three owners are the owner's hardware wallets",
+      "env": ["CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER", "CANDIDE_RECOVERY_GUARDIAN_ADDRESS"],
+      "keyHolder": "owner"
+    },
+    "0x42141ac4b52Dd9E9eEA810A0fF442a8f4b8E435C": {
+      "role": "orchestrator: receives fees, submits payout steps; the printed signer of the account documents issued before 2026-11-28",
+      "env": ["ORCHESTRATOR_KEY", "DEPLOY_ORCHESTRATOR_KEY"],
+      "keyHolder": "server"
+    },
+    "0x2092048B38d105438a325626340C6a41eb4675FD": {
+      "role": "ramp",
+      "env": ["RAMP_KEY", "DEPLOY_RAMP_KEY"],
+      "keyHolder": "server"
+    },
+    "0xb75877178BB6d9dC60351215Fb9c2BcB1d55E4Db": {
+      "role": "relay: pays gas for calls anyone may make, holds nothing else",
+      "env": ["RELAY_KEY"],
+      "keyHolder": "server"
+    },
+    "0x22222E36148ef115b7e6304cB636dF756d722222": {
+      "role": "document signer: signs account documents (EIP-191), holds nothing",
+      "env": ["DOCUMENT_SIGNING_KEY"],
+      "keyHolder": "server"
     }
   },
   "84532": {

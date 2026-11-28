@@ -26,7 +26,7 @@ const HARDHAT_RELAY = privateKeyToAccount("0x47e179ec197488593b187f80a00eb0da91f
 // config loads for anything unset) cannot fill one in.
 const BLANK = Object.fromEntries(
   ["RELAY_KEY", "DEPLOYER_KEY", "DEPLOY_DEPLOYER_KEY", "ORCHESTRATOR_KEY", "DEPLOY_ORCHESTRATOR_KEY", "RAMP_KEY", "DEPLOY_RAMP_KEY",
-    "FAUCET_KEY", "ENS_GATEWAY_KEY", "ENS_PARENT_NAME", "ENS_RESOLVER_ADDRESS", "ALLOW_DEV_KEYS_ON_EXTERNAL_RPC", "TRANSF_PRODUCTION"]
+    "FAUCET_KEY", "ENS_GATEWAY_KEY", "DOCUMENT_SIGNING_KEY", "ENS_PARENT_NAME", "ENS_RESOLVER_ADDRESS", "ALLOW_DEV_KEYS_ON_EXTERNAL_RPC", "TRANSF_PRODUCTION"]
     .map((k) => [k, ""]),
 );
 const SEPOLIA = { ...BLANK, TRANSF_RPC_URL: "https://sepolia.base.org", TRANSF_CHAIN_ID: "84532", ORCHESTRATOR_KEY: ORCHESTRATOR, RAMP_KEY: RAMP };
@@ -121,6 +121,27 @@ await check("production refuses to start with a deployer key in the environment"
   // Empty is unset: the other production checks still refuse this test env,
   // but not over the deployer key.
   assert.doesNotMatch(boot({}).stderr, /DEPLOYER_KEY must not/);
+});
+
+await check("production refuses to start without its own document key", () => {
+  const boot = (extra: Record<string, string>) =>
+    load({ ...SEPOLIA, RELAY_KEY: RELAY, TRANSF_PRODUCTION: "1", ...extra }, 'await import("./services/api/src/config.js")');
+  assert.match(boot({}).stderr, /DOCUMENT_SIGNING_KEY is required in production/);
+  const short = fake("c7").slice(0, -2);
+  const malformed = boot({ DOCUMENT_SIGNING_KEY: short });
+  assert.match(malformed.stderr, /DOCUMENT_SIGNING_KEY is not a 32-byte hex private key/);
+  assert.ok(!malformed.stderr.toLowerCase().includes(short.slice(2)), "the value is never printed");
+  const same = boot({ DOCUMENT_SIGNING_KEY: ORCHESTRATOR });
+  assert.match(same.stderr, /DOCUMENT_SIGNING_KEY must not be the orchestrator key/);
+  assert.deepEqual(secretsIn(same.stderr), [], "the value is never printed");
+  // The alias config/keys.ts also reads the orchestrator key from.
+  const alias = boot({ ORCHESTRATOR_KEY: "", DEPLOY_ORCHESTRATOR_KEY: fake("f6"), DOCUMENT_SIGNING_KEY: ` ${fake("f6").toUpperCase().replace("0X", "0x")} ` });
+  assert.match(alias.stderr, /DOCUMENT_SIGNING_KEY must not be the orchestrator key/);
+  // SEPOLIA cannot boot production (checkMainnet refuses it), so this asserts
+  // the boot ran its checks and none of them named the document key.
+  const own = boot({ DOCUMENT_SIGNING_KEY: fake("e5") });
+  assert.match(own.stderr, /production configuration is incomplete/, "the other checks ran");
+  assert.doesNotMatch(own.stderr, /DOCUMENT_SIGNING_KEY/);
 });
 
 console.log("the relay wallet");

@@ -47,6 +47,9 @@ try {
 } catch {
   // no .env: the shell environment and defaults
 }
+// The deployment's env as given, for the boot checks below: the probes drop
+// test switches, the service would not.
+const deploymentEnv = { ...process.env };
 // Never the hardhat harness: this script only means anything against a chain.
 delete process.env.LOCAL_HARNESS;
 
@@ -251,6 +254,31 @@ console.log("wallets");
   const report = REAL_MONEY_CHAINS.has(Number(CANDIDE.chainId)) ? fail : warn;
   for (const p of problems) report(p);
   if (!problems.length) ok("every configured wallet is in wallets.json with a known key holder");
+}
+
+console.log("production config");
+{
+  // The API unit runs with NODE_ENV=production, which a shell running
+  // preflight usually lacks: load the API's config the way the service will.
+  // A --chain run probes public endpoints and is not a deployment's env.
+  const { IS_REAL_MONEY_CHAIN, REAL_MONEY_CHAINS } = await import("../services/api/src/config/env.js");
+  if (chainFlag || !(IS_REAL_MONEY_CHAIN || REAL_MONEY_CHAINS.has(Number(CANDIDE.chainId)))) {
+    ok("not a real-money deployment env (--chain, or a test chain): boot checks not run");
+  } else {
+    const { spawnSync } = await import("node:child_process");
+    // The same loader flags as this run (under the stub test, its preload too).
+    const r = spawnSync(process.execPath, [...process.execArgv, "-e", 'await import("./services/api/src/config.ts")'], {
+      cwd: ROOT, encoding: "utf8", timeout: 60_000, env: { ...deploymentEnv, TRANSF_PRODUCTION: "1" },
+    });
+    const listed = r.stderr.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
+    // A refusal outside the production list (checkout, keys) throws a single Error.
+    const single = listed.length ? [] : (r.stderr.match(/^\w*Error: (.+)$/m)?.slice(1) ?? []);
+    // Any URL in a refusal prints as its origin: a URL can carry a key or credentials.
+    const origins = (line: string) => line.replace(/\bhttps?:\/\/[^\s)"',]+/g, (u) => urlForLog(u));
+    for (const p of [...listed, ...single]) fail(`production would refuse to start: ${origins(p)}`);
+    if (r.status !== 0 && !listed.length && !single.length) fail(`the production boot check did not run (exit ${r.status})`);
+    if (r.status === 0) ok("production boot checks pass");
+  }
 }
 
 console.log("retired settings");

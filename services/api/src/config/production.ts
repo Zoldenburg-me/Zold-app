@@ -8,6 +8,7 @@
 import { CHAIN_ID, envNumber, IS_PRODUCTION, IS_REAL_MONEY_CHAIN, LOOKS_LOCAL, PUBLIC_URL, REAL_MONEY_CHAINS, STORE_BACKEND } from "./env.js";
 import { MONERIUM, moneriumOAuthEnabled, moneriumSandboxEnabled } from "./monerium.js";
 import { dataKeyProblems } from "./data-keys.js";
+import { urlForLog } from "../http/log-safe.js";
 import { RECOVERY, RECOVERY_MODULE_3_MINUTES, SECURITY } from "./security.js";
 import { anchorModeEnabled, BRIDGE, isMoneyGramAnchorDomain, STELLAR, STELLAR_TESTNET_PASSPHRASE } from "./cash-rail.js";
 
@@ -76,7 +77,7 @@ function checkRuntimeFlags(fail: Fail) {
  */
 function checkMainnet(fail: Fail) {
   if (!IS_REAL_MONEY_CHAIN) fail(`TRANSF_CHAIN_ID=${CHAIN_ID} is not a mainnet chain (expected one of ${[...REAL_MONEY_CHAINS].join(", ")})`);
-  if (MONERIUM.baseUrl !== "https://api.monerium.app") fail(`MONERIUM_BASE_URL must be https://api.monerium.app in production (got ${MONERIUM.baseUrl})`);
+  if (MONERIUM.baseUrl !== "https://api.monerium.app") fail(`MONERIUM_BASE_URL must be https://api.monerium.app in production (got ${urlForLog(MONERIUM.baseUrl)})`);
   if (!/^(ethereum|gnosis|polygon|base|arbitrum|linea)$/.test(MONERIUM.chain)) {
     fail(`MONERIUM_CHAIN=${MONERIUM.chain} is not a Monerium production chain name`);
   }
@@ -116,6 +117,17 @@ function checkDataKeys(fail: Fail) {
   if (!problems.length && !(process.env.DATA_ENCRYPTION_KEYS ?? "").trim()) {
     fail("DATA_ENCRYPTION_KEYS is required in production: Monerium, Shopify and GetMyInvoices credentials are stored under it");
   }
+}
+
+/** Account documents are signed with their own key; the orchestrator key
+ *  moves money and must not double as the attestation key (documents.ts). */
+function checkDocumentKey(fail: Fail) {
+  const key = (process.env.DOCUMENT_SIGNING_KEY ?? "").trim();
+  if (!key) return fail("DOCUMENT_SIGNING_KEY is required in production: account documents are signed with it");
+  if (!/^0x[0-9a-fA-F]{64}$/.test(key)) return fail("DOCUMENT_SIGNING_KEY is not a 32-byte hex private key");
+  // The same names, in the same order, that config/keys.ts reads the orchestrator key from.
+  const orchestrator = ["ORCHESTRATOR_KEY", "DEPLOY_ORCHESTRATOR_KEY"].map((n) => process.env[n]?.trim()).find(Boolean);
+  if (orchestrator && key.toLowerCase() === orchestrator.toLowerCase()) fail("DOCUMENT_SIGNING_KEY must not be the orchestrator key");
 }
 
 function checkBridge(fail: Fail) {
@@ -198,7 +210,7 @@ function assertProductionConfig() {
   if (!IS_PRODUCTION) return;
   const problems: string[] = [];
   const fail: Fail = (message) => problems.push(message);
-  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkDataKeys, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
+  for (const check of [checkRuntimeFlags, checkMainnet, checkMoneriumSecrets, checkDataKeys, checkDocumentKey, checkBridge, checkSmartAccount, checkAnchor, checkHosted, checkPublicUrl]) {
     check(fail);
   }
   if (problems.length) {

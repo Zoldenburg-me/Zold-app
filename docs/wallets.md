@@ -34,11 +34,12 @@ key lives, and its backup, is in the owner's private notes.
 
 | Role | Setting | Key | Chains |
 |---|---|---|---|
-| Candide custodial withdrawer: recovers a payment-page deposit stuck in its forwarding address, after Candide's timelock | `CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER` (address) | owner; must sign on every source chain a page accepts, so a hardware-wallet EOA, not a Safe | Base mainnet. Base Sepolia pages take zUSD straight into the Safe and do not use it |
-| Zoldenburg recovery guardian | `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` (address) | owner, hardware wallet only (`docs/recovery-and-signers.md`) | both |
+| Candide custodial withdrawer: recovers a payment-page deposit stuck in its forwarding address, after Candide's timelock | `CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER` (address) | owner; it withdraws with a transaction on the chain the deposit went to, so it must exist at its address on every source chain a page accepts: an EOA, or a Safe deployed at the same address on each. Mainnet pages accept Base only (`CANDIDE_FORWARDING_SOURCE_CHAIN_IDS` unset), where the mainnet withdrawer Safe is deployed | Base mainnet. Base Sepolia pages take zUSD straight into the Safe and do not use it |
+| Zoldenburg recovery guardian | `CANDIDE_RECOVERY_GUARDIAN_ADDRESS` (address) | owner; a hardware-wallet EOA where /admin signs; on Base mainnet a 1-of-3 Safe whose three owners are the owner's hardware wallets, confirmed in Safe Cover because /admin takes ECDSA only (`docs/recovery-and-signers.md`) | both |
 | Orchestrator: receives fees, submits payout steps | `ORCHESTRATOR_KEY` / `DEPLOY_ORCHESTRATOR_KEY` | server | both |
 | Ramp | `RAMP_KEY` / `DEPLOY_RAMP_KEY` | server | both |
 | Relay: pays gas for calls anyone may make, holds nothing else | `RELAY_KEY` | server | both |
+| Document signer: signs account documents (EIP-191), holds nothing. Each document stores its signer, so a new key leaves older documents verifying; on Base mainnet those issued before 2026-11-28 name the orchestrator | `DOCUMENT_SIGNING_KEY` | server; production refuses to start without it, or with the orchestrator key | every production deployment; off production the orchestrator key stands in |
 | ENS gateway signer | `ENS_GATEWAY_KEY` | server | where ENS is on |
 | Testnet faucet and zUSD owner ("the vanity account") | `FAUCET_KEY` | server; refused on a real-money chain | Base Sepolia |
 | Contract deployer and admin | `DEPLOYER_KEY` / `DEPLOY_DEPLOYER_KEY` | owner; the deploy machine, never the server off the local chain | where we deploy contracts |
@@ -50,16 +51,23 @@ wallets and live in `deployments.json` or code.
 
 ## Replacing the mainnet custodial withdrawer
 
-The withdrawer on Base mainnet has `keyHolder: "unknown"`, so mainnet
-preflight fails until it is replaced.
+The Akash mainnet lease still uses the old withdrawer, whose `keyHolder` is
+`"unknown"`, so preflight fails on its env. The replacement,
+`0x222222222211B5eB5be634822404F66f1A3adB00` (a 1-of-3 Safe the owner
+holds, also the Zoldenburg recovery guardian), is registered
+and set in the Oracle host's mainnet env. It takes effect at the cut-over,
+and from then on steps 4 to 6 apply. Adding a source chain to
+`CANDIDE_FORWARDING_SOURCE_CHAIN_IDS` first needs that Safe deployed at the
+same address on the new chain.
 
 A forwarding address is computed from recipient, custodial withdrawer,
 destination chain and salt (`forwarding_getAddress`). A new withdrawer
 therefore gives every Candide payment page a new deposit address.
 
-1. **New wallet.** The owner creates a hardware-wallet EOA and records it
-   privately. An EOA has the same address on every chain, which the role
-   needs: recovery is a transaction on the chain the deposit went to.
+1. **New wallet.** The owner creates a hardware-wallet EOA, or a Safe
+   deployed at the same address on every source chain, and records it
+   privately. The role needs the same address on every chain a page accepts:
+   recovery is a transaction on the chain the deposit went to.
 2. **Register.** A PR adds it to `wallets.json` under `8453` with `env:
    ["CANDIDE_FORWARDING_CUSTODIAL_WITHDRAWER"]`, `keyHolder: "owner"`. The old
    entry stays as `unknown`.
@@ -84,4 +92,8 @@ therefore gives every Candide payment page a new deposit address.
    the old address or QR to use the page link instead.
 
 Recovery itself: [forwarding-address.candidelabs.com](https://forwarding-address.candidelabs.com/),
-signed by the custodial withdrawer or the recipient on the source chain.
+signed by the custodial withdrawer or the recipient on the source chain. That
+page offers Withdraw to the recipient only. A withdrawal by the mainnet
+withdrawer Safe after the timelock is a transaction the Safe sends to the
+forwarding contract itself; none has been made, so the call is not yet
+written down here.
