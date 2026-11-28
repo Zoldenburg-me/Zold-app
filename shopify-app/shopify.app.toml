@@ -9,7 +9,7 @@
 # Distribution: CUSTOM (one store, no Shopify review). Set that in the Partner
 # Dashboard under Distribution before the first deploy.
 
-client_id = "REPLACE_WITH_PARTNER_DASHBOARD_CLIENT_ID"
+client_id = "7de41782f161e752d590e1d34596d400"
 name = "Zold"
 handle = "zold"
 application_url = "https://zoldhq.com/business"

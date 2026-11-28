@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState } from "preact/hooks";
 
 /**
  * The thank-you page block. It reads the order with the checkout token
@@ -23,8 +23,7 @@ function numericId(gid) {
   return m ? m[1] : undefined;
 }
 
-export function ZoldPay({ ui, orderId, checkoutToken, shop, apiBase }) {
-  const { BlockStack, InlineStack, Heading, Text, Banner, Link, QRCode, Divider, SkeletonText } = ui;
+export function ZoldPay({ orderId, checkoutToken, shop, apiBase }) {
   const [state, setState] = useState({ phase: "loading" });
   const id = numericId(orderId);
   const base = String(apiBase ?? "").replace(/\/$/, "");
@@ -73,25 +72,25 @@ export function ZoldPay({ ui, orderId, checkoutToken, shop, apiBase }) {
   if (state.phase === "unconfigured") return null;
   if (state.phase === "pending" || state.phase === "loading") {
     return (
-      <BlockStack spacing="base">
-        <Heading level={2}>Pay with Zold</Heading>
-        <Text>Preparing your payment…</Text>
-        <SkeletonText inlineSize="large" />
-      </BlockStack>
+      <s-stack gap="base">
+        <s-heading>Pay with Zold</s-heading>
+        <s-text>Preparing your payment…</s-text>
+        <s-skeleton-paragraph />
+      </s-stack>
     );
   }
   if (state.phase === "none") {
     return (
-      <Banner status="info" title="Pay with Zold">
+      <s-banner tone="info" heading="Pay with Zold">
         This order's payment page is not ready yet. The link in your order confirmation email opens it once it is.
-      </Banner>
+      </s-banner>
     );
   }
   if (state.phase === "error") {
     return (
-      <Banner status="warning" title="Pay with Zold">
+      <s-banner tone="warning" heading="Pay with Zold">
         Could not load the payment right now ({state.message}). Use the link in your order confirmation email.
-      </Banner>
+      </s-banner>
     );
   }
 
@@ -104,23 +103,23 @@ export function ZoldPay({ ui, orderId, checkoutToken, shop, apiBase }) {
 
   if (r.state === "PAID") {
     return (
-      <Banner status="success" title={`${name} — payment received`}>
+      <s-banner tone="success" heading={`${name} — payment received`}>
         Your payment of {eur} was seen on chain and the order is being marked paid. Keep this page for your records.
-      </Banner>
+      </s-banner>
     );
   }
   if (r.state !== "OPEN") {
     return (
-      <Banner status="critical" title={`${name} — payment window closed`}>
-        This payment request is {String(r.state).toLowerCase()}. If you have already sent funds, contact the store with your transaction. <Link to={r.pageUrl} external>Open the payment page</Link>
-      </Banner>
+      <s-banner tone="critical" heading={`${name} — payment window closed`}>
+        This payment request is {String(r.state).toLowerCase()}. If you have already sent funds, contact the store with your transaction. <s-link href={r.pageUrl} target="_blank">Open the payment page</s-link>
+      </s-banner>
     );
   }
   if (!c) {
     return (
-      <Banner status="warning" title={`${name} — pay with Zold`}>
-        Crypto payment cannot be quoted right now. <Link to={r.pageUrl} external>Open the payment page</Link> to try again.
-      </Banner>
+      <s-banner tone="warning" heading={`${name} — pay with Zold`}>
+        Crypto payment cannot be quoted right now. <s-link href={r.pageUrl} target="_blank">Open the payment page</s-link> to try again.
+      </s-banner>
     );
   }
 
@@ -129,32 +128,34 @@ export function ZoldPay({ ui, orderId, checkoutToken, shop, apiBase }) {
   const expires = r.expiresAt ? new Date(r.expiresAt) : undefined;
 
   return (
-    <BlockStack spacing="base" border="base" cornerRadius="base" padding="base">
-      <Heading level={2}>{name} — pay {due} with crypto</Heading>
-      <Text>
-        Send <Text emphasis="bold">{usdc ? `${usdc} USDC` : "USDC"}</Text> on {c.token?.chainName ?? `chain ${c.chainId}`} to the address below. The order is marked paid the moment the transfer is seen.
+    <s-box border="base" borderRadius="base" padding="base">
+      <s-stack gap="base">
+      <s-heading>{name} — pay {due} with crypto</s-heading>
+      <s-text>
+        Send <s-text type="strong">{usdc ? `${usdc} USDC` : "USDC"}</s-text> on {c.token?.chainName ?? `chain ${c.chainId}`} to the address below. The order is marked paid the moment the transfer is seen.
         {c.allowanceBps ? ` The USDC figure includes a ${(c.allowanceBps / 100).toFixed(2)}% rate allowance.` : ""}
-      </Text>
+      </s-text>
       {c.uri ? (
-        <InlineStack blockAlignment="center" inlineAlignment="center">
-          <QRCode content={c.uri} size="base" />
-        </InlineStack>
+        <s-stack alignItems="center">
+          <s-qr-code content={c.uri} />
+        </s-stack>
       ) : null}
-      <BlockStack spacing="extraTight">
-        <Text size="small" appearance="subdued">Address</Text>
-        <Text emphasis="bold">{c.address}</Text>
-      </BlockStack>
+      <s-stack gap="small-200">
+        <s-text color="subdued">Address</s-text>
+        <s-text type="strong">{c.address}</s-text>
+      </s-stack>
       {c.uri ? (
-        <Link to={c.uri} external>Open in wallet</Link>
+        <s-link href={c.uri} target="_blank">Open in wallet</s-link>
       ) : null}
-      <Divider />
-      <Text size="small" appearance="subdued">
+      <s-divider />
+      <s-text color="subdued">
         {validUntil ? `This USDC figure is valid until ${validUntil.toLocaleTimeString()}. ` : ""}
         {expires ? `The payment window closes ${expires.toLocaleString()}. ` : ""}
         Sending a different token or chain will not be recognised.
-      </Text>
-      <Link to={r.pageUrl} external>Open the payment page in Zold</Link>
-      {r.test ? <Banner status="warning">Test order: any payment made here is a real payment.</Banner> : null}
-    </BlockStack>
+      </s-text>
+      <s-link href={r.pageUrl} target="_blank">Open the payment page in Zold</s-link>
+      {r.test ? <s-banner tone="warning">Test order: any payment made here is a real payment.</s-banner> : null}
+      </s-stack>
+    </s-box>
   );
 }

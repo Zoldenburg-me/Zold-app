@@ -12,7 +12,7 @@
  *   - the service worker's cache of the app's own files.
  * There is no analytics, advertising or tracking of any kind, and fonts are
  * self-hosted. Strictly necessary storage needs no consent under ePrivacy
- * Art. 5(3) / TTDSG §25(2), only information, and a "Reject" button would
+ * Art. 5(3) / § 25(2) No. 2 TDDDG, only information, and a "Reject" button would
  * reject nothing. If a non-essential cookie is ever added, this must become a
  * consent prompt that blocks it until accepted.
  *

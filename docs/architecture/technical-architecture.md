@@ -17,7 +17,7 @@ flowchart TB
     BIZ["/business — ES modules"]
     PUB["public pages: pay, pay-request, receipt, document, invoice, landing"]
     SW["sw.js — shell cache"]
-    EXT["Shopify checkout extension (React)"]
+    EXT["Shopify checkout extension (Preact)"]
   end
   subgraph "One Node process (tsx services/api/src/server.ts)"
     PIPE["http/: json → headers → origin policy → rate limit"]
