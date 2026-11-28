@@ -8,7 +8,7 @@
  * The older views keep their ?view= ids and sit under one of these (PARENT):
  * the ledger and assets under Statement, Shopify under Apps.
  */
-import { $, Z, api, cap, esc, eur, me, mayActOnInvoice, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, signOut, testMode, toast, view } from "./core.js";
+import { $, Z, api, cap, esc, eur, masked, me, mayActOnInvoice, needsPersonalOrg, org, orgs, personalLater, recoveryNone, recoveryPending, recoveryUnknown, reviewOn, roleCan, ROLE_WORD, setView, signOut, testMode, toast, view } from "./core.js";
 import { loadOrg, render } from "./shell.js";
 import { isOwnCompanyOrg } from "./access-model.js";
 
@@ -147,7 +147,7 @@ function link(it, active) {
    balance in the API. */
 function accountRight(a) {
   if (a.status !== "active") return a.status === "gated" ? "Not open" : "Waiting";
-  if (a.backingUserId && me && a.backingUserId === me.id && typeof me.balanceEur === "number") return eur(me.balanceEur);
+  if (a.backingUserId && me && a.backingUserId === me.id && typeof me.balanceEur === "number") return { html: masked(esc(eur(me.balanceEur))) };
   const iban = a.identifier?.iban;
   return iban ? `•••• ${String(iban).replace(/\s+/g, "").slice(-4)}` : "";
 }
@@ -188,7 +188,7 @@ function topInfo(waiting) {
   const approvals = shown(pay) && cap(pay.capability).allowed
     ? `<a class="zb-topchip" href="?view=payments" data-view="payments"${view === "payments" ? ' aria-current="page"' : ""}>${Z.icon("inbox")}<span>${reviewOn() ? "Approvals" : "Payments"}</span>${waiting ? `<span class="z-side__badge"><span class="z-sr">, </span>${waiting}<span class="z-sr"> waiting for you</span></span>` : ""}</a>`
     : "";
-  return `${testMode !== undefined ? Z.testModePill(testMode) : ""}${fig ? `<span class="zb-topchip zb-topchip--bal"><small>${esc(fig.label)}</small><b class="z-fig">${esc(eur(fig.eur))}</b></span>` : ""}${approvals}`;
+  return `${testMode !== undefined ? Z.testModePill(testMode) : ""}${fig ? `<span class="zb-topchip zb-topchip--bal"><small>${esc(fig.label)}</small><b class="z-fig">${masked(esc(eur(fig.eur)))}</b></span>` : ""}${approvals}`;
 }
 
 /* Only a changed trigger is redrawn, so an open menu keeps the button that
@@ -244,7 +244,7 @@ export function renderNav() {
   paint($("#top-info"), topInfo(waiting));
   $("#side-accounts").innerHTML = accts && accts.length
     ? `<section class="zb-accts" aria-labelledby="side-acc-h"><h2 class="z-eyebrow" id="side-acc-h">Accounts</h2>${accts.map((a) =>
-      `<a class="zb-acct" href="?view=accounts" data-view="accounts"${view === "accounts" ? ' aria-current="page"' : ""}>${Z.icon("account_balance_wallet")}<span>${esc(a.label || a.currency)}</span><span class="zb-acct__right">${esc(accountRight(a))}</span></a>`).join("")}</section>`
+      `<a class="zb-acct" href="?view=accounts" data-view="accounts"${view === "accounts" ? ' aria-current="page"' : ""}>${Z.icon("account_balance_wallet")}<span>${esc(a.label || a.currency)}</span><span class="zb-acct__right">${((r) => (r?.html ?? esc(r)))(accountRight(a))}</span></a>`).join("")}</section>`
     : "";
   // Sign out shows here under 1024px only, as the Menu's last row; from 1024px it is in the account menu.
   $("#side-foot").innerHTML = `${link({ id: "soon", icon: "hourglass_top", label: "Coming soon" }, active)}

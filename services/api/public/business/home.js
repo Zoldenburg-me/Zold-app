@@ -17,7 +17,7 @@
  * - Security and the set-up list speak only for the company login in its own
  *   company, from what Access reads (access-model.js).
  */
-import { $, Z, api, cap, day, ensureMe, esc, eur, gateHtml, maskIban, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, view, when, ymd } from "./core.js";
+import { $, Z, api, cap, day, ensureMe, esc, eur, gateHtml, maskIban, masked, me, org, ownSafe, refreshMe, roleCan, safeAddressHtml, view, when, ymd } from "./core.js";
 import { META, RENDER, linkBtn, moneriumLink } from "./views.js";
 import { setTopBalance, submittedInvoices, waitingForMe } from "./nav.js";
 import { draftTag, draftTitle, draftTotal, invAmount, invWho, loadMembers, memberName } from "./screens.js";
@@ -245,6 +245,19 @@ function roundActions() {
 // The figure this render's balance card shows, for the top bar (nav.js setTopBalance).
 let cardFig = null;
 
+/* Hide balance: the app's own setting (phone-home.js), so one choice covers both. */
+const HIDE_KEY = "zold-hide-balance";
+const balHidden = () => document.documentElement.classList.contains("zb-bal-hidden");
+try { document.documentElement.classList.toggle("zb-bal-hidden", localStorage.getItem(HIDE_KEY) === "1"); } catch { /* shown */ }
+const hideBtn = () => `<button type="button" class="zb-h-icon-btn zb-h-hide" id="hm-hide" aria-pressed="${balHidden()}" aria-label="Hide balance">${Z.icon(balHidden() ? "visibility_off" : "visibility")}</button>`;
+function toggleHidden(btn) {
+  const on = !balHidden();
+  document.documentElement.classList.toggle("zb-bal-hidden", on);
+  try { localStorage.setItem(HIDE_KEY, on ? "1" : "0"); } catch { /* this visit only */ }
+  btn.setAttribute("aria-pressed", String(on));
+  btn.innerHTML = Z.icon(on ? "visibility_off" : "visibility");
+}
+
 function balanceCard(accounts, read) {
   const mine = accounts.find((a) => a.status === "active" && a.backingUserId && me && a.backingUserId === me.id);
   const safe = read ? ownSafe(accounts) : null;
@@ -255,7 +268,7 @@ function balanceCard(accounts, read) {
   const label = mine ? `${mine.label || mine.currency} balance` : safe?.company ? "Company Zold account" : "Your Zold account";
   cardFig = fig ? { label, eur: me.balanceEur } : null;
   const head = fig
-    ? `<span class="zb-h-bal__label">${esc(label)}</span><span class="zb-h-bal__fig">${bigEur(me.balanceEur)}</span>`
+    ? `<span class="zb-h-bal__label">${esc(label)}${hideBtn()}</span><span class="zb-h-bal__fig">${masked(bigEur(me.balanceEur))}</span>`
     : mine || safe
       ? `<span class="zb-h-bal__label">${esc(label)}</span><p class="zb-hint">The balance could not be read just now. Reload to try again.</p>`
       : company
@@ -391,7 +404,7 @@ function accountsCard(accounts, read) {
   const one = (a) => {
     const mine = a.status === "active" && a.backingUserId && me && a.backingUserId === me.id;
     const iban = a.identifier?.iban;
-    const right = mine && typeof me.balanceEur === "number" ? `<b class="zb-h-accrow__fig">${esc(eur(me.balanceEur))}</b>`
+    const right = mine && typeof me.balanceEur === "number" ? `<b class="zb-h-accrow__fig">${masked(esc(eur(me.balanceEur)))}</b>`
       : a.status === "active" ? `<span class="z-dim">${a.backingUserId ? "Member’s" : "Not connected"}</span>` : Z.tag(a.status === "gated" ? "Not open" : "Waiting");
     return `<li><a class="zb-h-accrow" href="?view=accounts" data-view-link="accounts">${Z.iconTile({ icon: "account_balance", tone: "n" })}
       <span class="z-row__main"><span class="z-row__title">${esc(a.label || a.currency)}</span>${iban ? `<span class="z-row__sub z-mono" translate="no">${esc(maskIban(iban))}</span>` : ""}</span>${right}</a></li>`;
@@ -406,7 +419,7 @@ const appLink = (a, title) => `<a class="z-btn z-btn--secondary z-btn--sm" href=
 function securityCard(rows) {
   const right = (r) => (r.action ? appLink(r.action, r.text) : r.view ? `<a href="?view=${r.view}" data-view-link="${r.view}">Details</a>` : "");
   return `<section class="z-card zb-side-card" aria-labelledby="home-sec"><div class="zb-side-card__head"><h2 id="home-sec">Security</h2><a href="?view=access" data-view-link="access">Access</a></div>
-    <ul class="zb-h-checks">${rows.map((r) => `<li>${mark(r.ok)}<span class="zb-h-checks__main">${esc(r.text)}</span>${right(r)}</li>`).join("")}</ul></section>`;
+    <ul class="zb-h-checks">${rows.map((r) => `<li>${mark(r.ok)}<span class="z-row__main zb-h-checks__main"><span class="z-row__title">${esc(r.text)}</span>${r.sub ? `<span class="z-row__sub">${esc(r.sub)}</span>` : ""}</span>${right(r)}</li>`).join("")}</ul></section>`;
 }
 
 const STEP = {
@@ -519,18 +532,25 @@ RENDER.overview = async () => {
   }
 
   const cmds = commands();
-  const html = `<div id="hm-root" class="zb-h-root">${commandBox(cmds)}${balanceCard(accounts, acc.status === "fulfilled")}
+  const html = `<div id="hm-root" class="zb-h-root">${commandBox(cmds)}<div class="zb-h-sheet">${balanceCard(accounts, acc.status === "fulfilled")}
     ${attention({ waiting: waitingForMe(runs), invoices, lines: counted, accounts })}
     ${setup.length ? `<div class="zb-grid2">${setup.join("")}</div>` : ""}
     <div class="zb-grid2">${accountsCard(accounts, acc.status === "fulfilled")}${cards.join("")}</div>
     ${lines ? `<section class="zb-h-section" id="hm-act" aria-labelledby="home-act">${activity(lines, ACTIVITY_ROWS, pendingTab)}</section>` : ""}
     ${summed ? flowSection(summed) : ""}
-    ${lines && months.length ? `<section class="zb-h-section" id="hm-move" aria-labelledby="home-move">${movement(summed, months)}</section>` : ""}</div>`;
+    ${lines && months.length ? `<section class="zb-h-section" id="hm-move" aria-labelledby="home-move">${movement(summed, months)}</section>` : ""}</div></div>`;
 
   return {
     html,
     bind(box) {
       setTopBalance(cardFig);
+      box.querySelector("#hm-hide")?.addEventListener("click", (ev) => toggleHidden(ev.currentTarget));
+      // The ask box stays put while the sheet slides over it; taller than the
+      // screen (a long answer), it scrolls until its bottom shows, then stays.
+      const hero = box.querySelector(".zb-h-cmd");
+      new ResizeObserver(() => { hero.style.top = `${Math.min(0, innerHeight - hero.offsetHeight)}px`; }).observe(hero);
+      // Focus moving into it while the sheet covers it brings it back into view.
+      hero.addEventListener("focusin", () => { if (scrollY > 0) scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" }); });
       rotateLine(box, cmds, owedInvoices(invoices).some((i) => i.overdue));
       const q = box.querySelector("#hm-q");
       const answer = (cmd, typed) => {

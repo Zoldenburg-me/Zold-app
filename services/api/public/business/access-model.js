@@ -82,11 +82,13 @@ export async function readGuardians(id, api, health = () => api("/api/health")) 
  *  - set:     a guardian the chain shows, whatever Zold's records say. A
  *             guardian on chain that is neither Zoldenburg's nor the
  *             email/phone one Zold set up is listed as kind "other": it can
- *             start a recovery too, so it is never left out
+ *             start a recovery too, so it is never left out. One of the
+ *             user's own Google/Apple guardians (`social`, the addresses in
+ *             GET /api/session passkeySafe.socialGuardians) is kind "social"
  *  - none:    both answered, every chain read worked, and no guardian is on
  *             chain. `offered` is false when this deployment offers neither.
  */
-export function recoveryStatus(c, z) {
+export function recoveryStatus(c, z, social = []) {
   const chainPending = z?.onChain?.pendingRecovery || c?.onChain?.pendingRecovery || null;
   const request = (z?.requests || []).find((r) => OPEN_REQUEST.includes(r.status)) || null;
   const guardians = [];
@@ -98,12 +100,13 @@ export function recoveryStatus(c, z) {
   // up. A stranger is named only when both answered: with one unread, its own
   // guardian would look like one (and the status is unknown anyway).
   const known = new Set([z?.guardianAddress, c?.guardianAddress].filter(Boolean).map(lower));
+  const own = new Set(social.map(lower));
   const seen = new Set();
   for (const g of c !== null && z !== null ? [...(z?.onChain?.guardians || []), ...(c?.onChain?.guardians || [])] : []) {
     const k = lower(g);
     if (known.has(k) || seen.has(k)) continue;
     seen.add(k);
-    guardians.push({ kind: "other", address: g });
+    guardians.push({ kind: own.has(k) ? "social" : "other", address: g });
   }
   const declinedAt = z?.choice?.choice === "declined" ? z.choice.at : null;
   const offered = Boolean(c?.available || z?.available);
@@ -169,11 +172,12 @@ export async function loadAccess(me, api, health) {
     readGuardians(me.id, api, health),
   ]);
   const [c, z] = g.status === "fulfilled" ? g.value : [null, null];
+  const social = (me.passkeySafe?.socialGuardians || []).filter((x) => x.status === "active").map((x) => x.address);
   return {
     noSafe: false,
     signers: s.status === "fulfilled" ? signersView(s.value) : null,
     signersError: s.status === "rejected" ? String(s.reason?.message || "Couldn’t read who can approve for the account.") : null,
-    recovery: recoveryStatus(c, z),
+    recovery: recoveryStatus(c, z, social),
   };
 }
 

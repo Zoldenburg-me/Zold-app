@@ -65,7 +65,12 @@ assert.equal(m.securityRows({ noSafe: true }, links), null, "no Safe yet: no car
 }
 {
   const r = m.securityRows({ signers, recovery: rec("set", [{ kind: "zoldenburg" }, { kind: "other", address: "0xe" }]) }, links);
-  assert.deepEqual([r[1].ok, r[1].text], [false, "A recovery helper Zold didn’t set up is on the account"], "a stranger guardian warns even beside Zoldenburg's");
+  assert.deepEqual([r[1].ok, r[1].text], [false, "An unknown address can take over this account"], "a stranger guardian warns even beside Zoldenburg's");
+  assert.match(r[1].sub, /no one added in Zold/);
+}
+{
+  const r = m.securityRows({ signers, recovery: rec("set", [{ kind: "social", address: "0xs" }]) }, links);
+  assert.deepEqual([r[1].ok, r[1].text], [true, "Recovery on, with the login you set up"], "the user's own Google/Apple guardian is no stranger");
 }
 {
   const r = m.securityRows({ signers, recovery: rec("pending") }, links);

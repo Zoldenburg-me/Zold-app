@@ -549,7 +549,24 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
 
 /* Home's blocks, one gap between each. */
 .zb-h-root { display: flex; flex-direction: column; gap: var(--z-space-5); }
-.zb-h-root > .zb-h-attention, .zb-h-root > .zb-h-section { margin: 0; }
+.zb-h-root > .zb-h-attention, .zb-h-root > .zb-h-section, .zb-h-sheet > .zb-h-attention, .zb-h-sheet > .zb-h-section { margin: 0; }
+/* Scrolling Home: the ask box stays where it is and fades, while the balance
+   and everything under it slide up over it as one sheet. */
+.zb-h-sheet { position: relative; z-index: 1; display: flex; flex-direction: column; gap: var(--z-space-5); margin: 0 calc(-1 * var(--z-space-4)); padding: var(--z-space-4) var(--z-space-4) 0; border-radius: var(--z-radius-card) var(--z-radius-card) 0 0; background: var(--z-bg); box-shadow: 0 -24px 48px -24px rgb(0 0 0 / .6); }
+.zb-h-root > .zb-h-cmd { position: sticky; top: 0; z-index: 0; }
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .zb-h-root > .zb-h-cmd { animation: zb-h-sink linear both; animation-timeline: scroll(root); animation-range: 0 70vh; }
+  }
+}
+@keyframes zb-h-sink { to { opacity: 0; transform: scale(.94); } }
+/* Hide balance (home.js): the figure is swapped for dots, for screen readers too. */
+.zb-bal-mask { display: none; letter-spacing: .08em; }
+.zb-bal-hidden .zb-bal-val { display: none; }
+.zb-bal-hidden .zb-bal-mask { display: inline; }
+.zb-h-bal__label { display: inline-flex; align-items: center; gap: var(--z-space-2); }
+.zb-h-hide { border: 0; color: var(--z-dim); }
+.zb-h-hide:hover { color: var(--z-heading); }
 
 /* Home's command box: search and the slash commands, centred above the balance (design/agentic Desk-Command). */
 /* Home opens on the ask box, centred in the first screen; the rest of Home is below it. */
@@ -615,4 +632,36 @@ dialog .desc, dialog .zb-hint { font-size: 14.5px; color: var(--z-dim); }
   .zb-h-bal__row { flex-direction: column; gap: var(--z-space-5); }
   .zb-h-acts { width: 100%; justify-content: space-between; gap: var(--z-space-2); }
   .zb-h-act { flex: 1; min-width: 0; }
+}
+
+/* Access (access.js): each signer, recovery helper and the account as a named
+   item, an address shortened beside its copy button, and a role table. */
+.zb-acc-items { list-style: none; margin: 0; padding: 0; border: 1px solid var(--z-line); border-radius: var(--z-radius-card); overflow: hidden; }
+.zb-acc-item { display: flex; align-items: center; gap: var(--z-space-3); padding: 14px 16px; }
+.zb-acc-item + .zb-acc-item { border-top: 1px solid var(--z-line); }
+.zb-acc-item .z-row__sub { white-space: normal; }
+.zb-acc-item__title { display: inline-flex; align-items: center; gap: var(--z-space-2); font-size: 14.5px; font-weight: 500; color: var(--z-heading); }
+.zb-acc-item__right { flex: none; display: flex; align-items: center; gap: var(--z-space-2); }
+.zb-acc-addr { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
+.zb-acc-addr .z-mono { color: var(--z-text); }
+.zb-acc-copy { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--z-radius-control); background: none; color: var(--z-dim); cursor: pointer; }
+.zb-acc-copy:hover { color: var(--z-heading); background: var(--z-ghost); }
+.zb-acc-copy .z-ic { font-size: 16px; }
+.zb-acc-switch { display: flex; align-items: center; gap: var(--z-space-3); padding: 14px 16px; border: 1px solid var(--z-line); border-radius: var(--z-radius-card); }
+.zb-acc-sub { margin: var(--z-space-2) 0 0; font-size: 13px; font-weight: 500; color: var(--z-dim); }
+.zb-acc-people { display: flex; flex-wrap: wrap; gap: var(--z-space-2); list-style: none; margin: 0; padding: 0; }
+.zb-acc-person { display: inline-flex; align-items: center; gap: var(--z-space-2); padding: 6px 14px 6px 6px; border: 1px solid var(--z-line); border-radius: var(--z-radius-pill); }
+.zb-acc-person > span:last-child { display: flex; flex-direction: column; line-height: 1.25; }
+.zb-acc-person b { font-size: 13.5px; font-weight: 500; color: var(--z-heading); }
+.zb-acc-person small { font-size: 12px; color: var(--z-dim); }
+.zb-acc-matrix { width: 100%; border-collapse: collapse; font-size: 14px; }
+.zb-acc-matrix th, .zb-acc-matrix td { padding: 10px 12px; border-top: 1px solid var(--z-line); text-align: center; }
+.zb-acc-matrix thead th { border-top: 0; font-size: 12.5px; font-weight: 500; color: var(--z-dim); }
+.zb-acc-matrix th[scope="row"], .zb-acc-matrix thead th:first-child { text-align: left; font-weight: 500; color: var(--z-text); }
+.zb-acc-matrix thead th:first-child { color: var(--z-dim); }
+.zb-acc-yes { color: var(--z-mint); font-size: 20px; }
+.zb-acc-no { color: var(--z-dim); }
+@media (max-width: 599px) {
+  .zb-acc-item, .zb-acc-switch { flex-wrap: wrap; }
+  .zb-acc-item__right { width: 100%; justify-content: flex-end; }
 }

@@ -11,7 +11,7 @@
  * what exists. Every renderer reads the live `org` from core.js.
  */
 import { isOwnCompanyOrg } from "./access-model.js";
-import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, mayPayInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd, zipMode } from "./core.js";
+import { $, Z, api, cap, chainId, countrySelect, day, esc, eur, gateHtml, masked, issuerFieldNames, issuerIds, maskIban, mayActOnInvoice, mayPayInvoice, me, org, ownSafe, plain, refreshMe, roleCan, safeAddressHtml, ymd, zipMode } from "./core.js";
 
 export const RENDER = {};
 export const META = {};
@@ -120,7 +120,7 @@ RENDER.accounts = async () => {
   const safeCard = safe ? `<section class="z-card zb-acard" aria-labelledby="acc-safe">
       <div class="zb-acard__head">
         <div><b class="zb-acard__name" id="acc-safe">${safe.company ? "Company Zold account" : "Your Zold account"}</b><span class="zb-acard__cur">EURe</span></div>
-        ${safe.balanceEur === null ? '<span class="z-dim">Balance unavailable</span>' : `<b>${esc(eur(safe.balanceEur))}</b>`}
+        ${safe.balanceEur === null ? '<span class="z-dim">Balance unavailable</span>' : `<b>${masked(esc(eur(safe.balanceEur)))}</b>`}
       </div>
       <div class="zb-acard__iban"><span class="z-eyebrow">Address</span>${safeAddressHtml(safe)}</div>
     </section>` : "";

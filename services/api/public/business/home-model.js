@@ -57,8 +57,9 @@ export function securityRows(access, links, passkeyName = "passkey") {
 
   if (r.status === "pending") rows.push({ ok: false, text: "A recovery is under way", action: { label: "Check", href: links.alert } });
   else if (r.status === "unknown") rows.push({ ok: null, text: "Couldn’t check recovery", view: "access" });
-  else if (r.guardians.some((g) => g.kind === "other")) rows.push({ ok: false, text: "A recovery helper Zold didn’t set up is on the account", view: "access" });
+  else if (r.guardians.some((g) => g.kind === "other")) rows.push({ ok: false, text: "An unknown address can take over this account", sub: "It is a recovery helper no one added in Zold. Check it on Access.", view: "access" });
   else if (r.guardians.some((g) => g.kind === "zoldenburg")) rows.push({ ok: true, text: "Zoldenburg recovery on" });
+  else if (r.guardians.some((g) => g.kind === "social")) rows.push({ ok: true, text: "Recovery on, with the login you set up" });
   else if (r.status === "set") rows.push({ ok: true, text: "Recovery on, by email or phone codes" });
   else rows.push({ ok: false, text: "Recovery not set up", action: { label: "Set up", href: links.recovery } });
 

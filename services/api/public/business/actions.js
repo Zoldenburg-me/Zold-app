@@ -303,7 +303,7 @@ function gmiDrawer(el) {
     <div><label for="gmi-key">API key</label><input id="gmi-key" name="gmi-key" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key…" /></div>
     <div><label for="gmi-company">Company id <span class="desc">(optional)</span></label><input id="gmi-company" name="gmi-company" autocomplete="off" placeholder="Empty for the account’s own company…" /></div>
     <div class="zb-note">${Z.icon("lock")}<span>Zold checks the key once, stores it encrypted and never shows it again. It can upload documents; it can’t move money.</span></div>
-    <div class="zb-note zb-note--a">${Z.icon("science")}<span>Beta: one push has run against a real GetMyInvoices account, with test data that was deleted after. Check the first upload before you close a month on it.</span></div>
+    <div class="zb-note zb-note--a">${Z.icon("science")}<span>Beta. Check your first upload in GetMyInvoices before you close a month on it.</span></div>
     <p class="zb-err" id="gmi-err" role="alert"></p>
     <div class="zb-actions"><button type="button" class="z-btn z-btn--secondary" id="gmi-cancel">Cancel</button><button type="button" class="z-btn z-btn--primary" id="gmi-go">Check and connect</button></div>`, el);
   scrim.querySelector("#gmi-cancel").onclick = () => Z.closeOverlay("gmi-drawer");

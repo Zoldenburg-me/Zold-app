@@ -134,6 +134,8 @@ assert.equal(m.recoveryStatus({ ...cSet, onChain: { error: "rpc down" } }, zNone
     { ...zSet, guardianAddress: G, onChain: { ...zSet.onChain, guardians: [G, X.toUpperCase().replace("0X", "0x")] } },
   );
   assert.deepEqual(both.guardians.map((g: any) => g.kind), ["zoldenburg", "codes", "other"]);
+  // The user's own Google/Apple guardian (session socialGuardians) is theirs, not a stranger's.
+  assert.deepEqual(m.recoveryStatus(cNone, zOther, [X.toUpperCase().replace("0X", "0x")]).guardians, [{ kind: "social", address: X }]);
   // With the codes read failed, its guardian is not taken for a stranger.
   assert.deepEqual(m.recoveryStatus(null, { ...zSet, onChain: { ...zSet.onChain, guardians: [G, C] } }).guardians.map((g: any) => g.kind), ["zoldenburg"]);
 }
@@ -285,7 +287,7 @@ assert.equal(m.isCompanyLogin(null), false);
   assert.doesNotMatch(m.ORG_RECOVERY_NOT_OFFERED.join(" "), /hasn’t set up recovery/);
   assert.equal((await m.loadOrgRecovery("o1", async () => ({ state: "not_set_up", available: true }))).canSetUp, false, "no Safe yet: nothing to add a guardian to");
   // The card: the not-offered copy, and the button only for an owner when canSetUp, wired to the queue route.
-  const card = view.slice(view.indexOf("function orgRecoveryCard"), view.indexOf("const guardianRow"));
+  const card = view.slice(view.indexOf("function orgRecoveryCard"), view.indexOf("const guardianItem"));
   assert.match(card, /if \(!r\.offered\) return card\([^\n]*ORG_RECOVERY_NOT_OFFERED/);
   assert.match(card, /r\.canSetUp && org\.role === "owner"[\s\S]*data-act="org-recovery-setup"/);
   const actions = readFileSync(path.join(ROOT, "services/api/public/business/actions.js"), "utf8");

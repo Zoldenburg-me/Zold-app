@@ -40,7 +40,7 @@ export function createPaymentLinkRoutes(deps: OrgRoutes): express.Router {
     if (!requirePermission(ctx, res, "invoices.manage")) return;
     const user = await store.findUser(ctx.userId);
     if (!user) return res.status(401).json({ error: "no such user" });
-    const found = await payLinkPayee(ctx.org, user);
+    const found = await payLinkPayee(ctx.org, user, Boolean(req.body?.invoiceId));
     if ("code" in found) return res.status(found.code === "NOT_THE_PAYEE" ? 403 : 409).json({ error: found.reason, code: found.code });
     // The payee is the member whose Safe backs the account, which may not be
     // the caller, or the company's own account.
