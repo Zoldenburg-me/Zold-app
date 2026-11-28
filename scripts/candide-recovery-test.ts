@@ -351,7 +351,7 @@ try {
     await fetch(`${API}/api/health`);
   };
 
-  opKit = await operatorKit({ base: API, origin: API, rpId: "localhost", dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
+  opKit = await operatorKit({ base: API, origin: API, rpId: "127.0.0.1", dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
   const health = await call("/api/health");
   assert.equal(health.data.capabilities?.emailSmsRecovery, true, "capability must be published when the service URL is set");
 

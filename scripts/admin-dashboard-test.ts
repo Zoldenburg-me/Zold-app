@@ -25,6 +25,8 @@ process.env.TRANSF_DB_PATH = path.join(mkdtempSync(path.join(tmpdir(), "zold-adm
 // No real partner credentials in a test, and a key so a token can be stored.
 for (const k of ["MONERIUM_CLIENT_ID", "MONERIUM_CLIENT_SECRET", "MONERIUM_OAUTH_CLIENT_ID"]) process.env[k] = "";
 process.env.MONERIUM_TOKEN_ENCRYPTION_KEY = "admin-test-encryption-key-0123456789abcdef";
+// The dashboard on the local API's origin, whatever ADMIN_ORIGIN a developer's .env holds.
+process.env.ADMIN_ORIGIN = "";
 
 const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
@@ -97,7 +99,7 @@ app.use("/api", createAdminUsersRouter());
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
-const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
+const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: OPERATOR_CONFIG.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
 const get = async (p: string, token: string | null = kit.sessionToken) => {
   const res = await realFetch(`${API}${p}`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
   return { status: res.status, text: await res.text() };
@@ -294,6 +296,13 @@ await check("delete erases the user, its sessions and member rows, and keeps the
   assert.equal((await get("/api/admin/users/u_gone")).status, 404);
   const row = (await store.auditFor("u_gone", 5)).find((e: any) => e.kind === "operator.request" && e.data.method === "DELETE");
   assert.ok(row && row.data.status === 200, "the deletion is audited");
+});
+
+await check("a passkey saved with no rpId is offered where the admin RP ID is still the app's", async () => {
+  assert.equal(OPERATOR_CONFIG.rpId, SECURITY.rpId, "this suite runs with no ADMIN_ORIGIN");
+  await store.addOperatorCredential(kit.operator.id, { credentialId: "legacy-1", key: { jwk: {}, alg: "ES256" }, signCount: 0, label: "Old", createdAt: new Date().toISOString() });
+  const c = await realFetch(`${API}/api/admin/auth/login/challenge`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  assert.ok((await c.json()).allowCredentials.some((x: any) => x.id === "legacy-1"));
 });
 
 server.close();

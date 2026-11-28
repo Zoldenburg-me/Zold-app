@@ -392,7 +392,7 @@ try {
   rmSync(process.env.TRANSF_DB_PATH!, { force: true });
   await startApi();
 
-  opKit = await operatorKit({ base: API, origin: API, rpId: "localhost", dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
+  opKit = await operatorKit({ base: API, origin: API, rpId: "127.0.0.1", dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
   const health = await call("/api/health");
   await t("the capability is published when a guardian address is configured", () => {
     assert.equal(health.data.capabilities?.zoldenburgRecovery, true);

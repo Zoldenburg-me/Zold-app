@@ -32,7 +32,7 @@ const { initStore, store } = await import("../services/api/src/store.js");
 const { createAdminRouter } = await import("../services/api/src/routes/admin.js");
 const { createOperatorGate } = await import("../services/api/src/operators/gate.js");
 const { createOperatorAuthRouter } = await import("../services/api/src/routes/operator-auth.js");
-const { OPERATOR: OPERATOR_CONFIG, SECURITY } = await import("../services/api/src/config.js");
+const { OPERATOR: OPERATOR_CONFIG } = await import("../services/api/src/config.js");
 const { operatorKit } = await import("./_operator.js");
 const { createTransferRouter } = await import("../services/api/src/routes/transfers.js");
 const { strandedAction, compensateTransfer, DEBIT_STEP } = await import("../services/api/src/orchestrator.js");
@@ -176,7 +176,7 @@ app.use("/api", createTransferRouter({ requireUserSession: async () => true }));
 const server = app.listen(0, "127.0.0.1");
 await new Promise<void>((r) => server.once("listening", () => r()));
 const API = `http://127.0.0.1:${(server.address() as any).port}`;
-const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: SECURITY.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
+const kit = await operatorKit({ base: API, origin: OPERATOR_CONFIG.adminOrigin, rpId: OPERATOR_CONFIG.rpId, dataDir: path.dirname(process.env.TRANSF_DB_PATH!) });
 const post = async (id: string, body: unknown, token: string | null = OPERATOR) => {
   // The operator's change goes through a passkey session and a fresh approval;
   // any other bearer is sent as given.

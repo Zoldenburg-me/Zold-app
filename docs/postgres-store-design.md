@@ -775,9 +775,10 @@ API and the data move together, from the Akash lease to the Oracle host
    transfers, list the audit. No money moves in the smoke.
 8. Close the lease only after the owner says so.
 
-**Rollback:** while nothing has been written on Postgres, point the tunnel
-back at the lease and start it on its `db.json`. After Postgres has taken
-writes:
+**Rollback:** while nothing has been written on Postgres and the lease is
+still kept, point the tunnel back at the lease and start it on its
+`db.json`. After Postgres has taken writes, or once the lease is closed (as
+mainnet's is):
 
 1. Drain as in step 2 above, then **stop writes**: stop the API unit on the
    Oracle host (the outbox worker runs in it), set the application role
@@ -795,7 +796,9 @@ writes:
    an approval in flight answers 410 and the user starts it again.
 5. Export (it verifies the file against Postgres, counts and hashes, before
    it names it; `pg-export.ts --verify` runs that check again), then start
-   the lease on that `db.json` and point the tunnel back.
+   a JSON API on that `db.json` (the old lease if it is still kept, else a
+   new lease or host with the deployment's environment) and point the
+   tunnel at it.
 
 The encrypted `db.json` copies are kept until the owner deletes them.
 

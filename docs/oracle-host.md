@@ -175,7 +175,8 @@ never a redeploy of an older build or a hand-edited schema.
 
 ## Cut-over (S8, at the owner's time)
 
-The steps of design §6. Mainnet has run them; testnet is next. Each
+The steps of design §6. Mainnet has run them all except the restore drill
+of step 1, which it still owes (`docs/status.md`); testnet is next. Each
 deployment is imported: accounts, Safes, passkeys and IBANs carry over, and
 no one signs up again.
 
@@ -196,8 +197,8 @@ no one signs up again.
    tunnel's hostname at the host's `cloudflared`.
 6. Smoke (§6 step 7). No money moves in the smoke.
 7. Rollback: design §6, "Rollback" (`zold_app` `NOLOGIN`, export with
-   `pg-export`, a JSON API on that `db.json`). Mainnet's lease is closed, so
-   its JSON API would start on a new lease or host.
+   `pg-export`, a JSON API on that `db.json`; with the lease closed, as
+   mainnet's is, on a new lease or host).
 
 ## Host loss and rebuild
 
