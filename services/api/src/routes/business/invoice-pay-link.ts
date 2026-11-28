@@ -182,7 +182,7 @@ async function ownCompanyBeforeAccount(org: Organisation, user: User): Promise<b
   if (user.accountType !== "company" || org.type !== "business" || orgEntity(org) === "company") return false;
   if (user.passkeySafe?.status !== "active") return false;
   // The link pays the page's deposit address: only when that is the Safe itself.
-  if (String(user.paymentPage?.depositAddress ?? "").toLowerCase() !== user.passkeySafe.address.toLowerCase()) return false;
+  if (user.paymentPage && user.paymentPage.depositAddress.toLowerCase() !== user.passkeySafe.address.toLowerCase()) return false;
   const businesses = (await store.organisationsForUser(user.id)).filter(({ org: o }) => o.type === "business");
   if (businesses.length !== 1 || businesses[0].org.id !== org.id) return false;
   return (await store.membersOf(org.id)).some((m) => m.userId === user.id && m.status === "active" && m.role === "owner");
