@@ -67,7 +67,7 @@ guardian built behind `TURNKEY_GUARDIANS`: `recovery-guardians-plan.md`.
   Shell: air-gapped, QR only, held in MetaMask/Rabby as a QR account), either in
   Safe Cover (Candide's open-source recovery UI; not on Base Sepolia) or in
   /admin → Recoveries via eth_signTypedData_v4 with the relay key (`RELAY_KEY`) paying the gas.
-  On Base mainnet, from the Oracle cut-over, the guardian is a Safe the
+  On Base mainnet the guardian is a Safe the
   owner holds, 1-of-3 (`0x222222222211B5eB5be634822404F66f1A3adB00`,
   `wallets.json`): each of its three owners is one of the owner's hardware
   wallets and can act as the guardian alone. /admin checks a 65-byte ECDSA signature and refuses

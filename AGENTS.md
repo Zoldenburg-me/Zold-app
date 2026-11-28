@@ -9,7 +9,7 @@ append.
 Read when the task touches it:
 - `docs/status.md` — **what has never run**. Read before claiming it works.
 - `docs/running-locally.md` — dev vs api, preflight, funding, KYC gate,
-  tests, Postgres, production branch, lease changes, browser.
+  tests, Postgres, production branch, deploy changes, browser.
 - `docs/wallets.md` — every wallet and its key holder.
 - `docs/recovery-and-signers.md` — second owner, Zoldenburg guardian, recovery.
 - `docs/roadmap.md` — current milestone, agreed priority, parked ideas.
@@ -40,8 +40,9 @@ THREE RULES OVERRIDE CONVENIENCE:
   `deployments.json` is keyed by chain id; on a real chain it holds only EURe
   and USDC. zoldhq.com runs **Base Sepolia (84532)** + Monerium sandbox;
   app.zoldhq.com runs **Base mainnet** + Monerium production, owner only
-  behind Cloudflare Access. Each is an Akash lease (technical-architecture
-  §18.1): closing one deletes its accounts.
+  behind Cloudflare Access. zoldhq.com is an Akash lease on the JSON store
+  (closing it deletes its accounts); app.zoldhq.com runs on the Oracle host
+  on Postgres (`docs/oracle-host.md`, technical-architecture §18.1).
 - **Identity is Monerium's.** Signup: name, email, company name → Google/
   Apple/email guardian or skip → passkey → Safe deployed → Home's checklist:
   "Where you live" (segment) → Monerium OAuth *or* API keys → IBAN. `POST /api/users`

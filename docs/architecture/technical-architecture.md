@@ -1291,8 +1291,8 @@ only self-hosted fonts.
 |---|---|---|---|---|
 | `npm run dev` | hardhat 31337 (spawned) | chain `sepolia` names | `data/db.dev.json`, wiped | the fx-swapper venue; no Safe deploy |
 | tests (`npm run check`) | hardhat on free ports | stubs | tmp | 40 offline suites; `draft`, `crypto`, `convert` and `safe-funded` run separately |
-| **zoldhq.com (current)** | Base Sepolia 84532 | sandbox, `basesepolia` | `TRANSF_DB_PATH` on the Akash lease's persistent volume | one container on an Akash lease: the API plus `cloudflared` (a dashboard-managed Cloudflare Tunnel); the API binds 127.0.0.1; `RP_ID=zoldhq.com`; `NODE_ENV` is deliberately not production, because it would fail the checks above |
-| **app.zoldhq.com** | Base 8453 | production, `base` | `TRANSF_DB_PATH` on its own lease's volume | the same container shape on a second lease with its own tunnel; behind Cloudflare Access (one-time PIN, the owner's email only); `RP_ID=app.zoldhq.com`; real money; gas sponsored through the owner's Candide policy (`CANDIDE_SPONSORSHIP_POLICY_ID`) |
+| **zoldhq.com** | Base Sepolia 84532 | sandbox, `basesepolia` | `TRANSF_DB_PATH` on the Akash lease's persistent volume | one container on an Akash lease: the API plus `cloudflared` (a dashboard-managed Cloudflare Tunnel); the API binds 127.0.0.1; `RP_ID=zoldhq.com`; `NODE_ENV` is deliberately not production, because it would fail the checks above |
+| **app.zoldhq.com** | Base 8453 | production, `base` | Postgres 17 on the Oracle host (`STORE_BACKEND=postgres`, cluster `17/mainnet`) | `zold-api@mainnet` and `cloudflared-zold-mainnet` on the Oracle host, deployed by `zold-deploy@mainnet.timer` from `production` (`docs/oracle-host.md`, which names its RPC); behind Cloudflare Access (one-time PIN, the owner's email only); `RP_ID=app.zoldhq.com`; real money; gas sponsored through the owner's Candide policy (`CANDIDE_SPONSORSHIP_POLICY_ID`) |
 
 `RP_ID` is a one-way door: passkeys are bound to it, and the device key lives
 in per-origin localStorage, so accounts do not move between origins.
@@ -1332,14 +1332,12 @@ and starts the API next to `cloudflared`.
 - **The database lives and dies with the lease.** Closing it deletes every
   account, and passkeys and Safes created there cannot be moved. A deploy
   keeps the lease and its `/data` volume.
-- **The database is the JSON store** (`/data/db.json`) on both leases. The
-  Postgres store (`STORE_BACKEND=postgres`, `docs/postgres-store-design.md`)
-  serves no deployment yet. The move off Akash to one Oracle Cloud ARM host
-  (Postgres 17 on unix sockets, one cluster per deployment, pgBackRest to
-  OCI Object Storage and Cloudflare R2, daily dumps the host cannot delete)
-  has begun for mainnet: its cluster and backups run on the host
-  (`docs/oracle-host.md`). The cut-over (`pg-import` in, `pg-export` as the
-  rollback, §8 row S8) is not done, and testnet has no cluster.
+- **The database is the JSON store** (`/data/db.json`). app.zoldhq.com runs
+  on the Oracle Cloud ARM host instead (Postgres 17 on unix sockets, one
+  cluster per deployment, pgBackRest to OCI Object Storage and Cloudflare R2,
+  daily dumps the host cannot delete; `docs/oracle-host.md`), and zoldhq.com
+  moves there by the same import (`docs/postgres-store-design.md` §6); it has
+  no cluster yet.
 - **Deploying sends the secrets, so the operator runs it.** The SDL is
   generated from `.env` on the operator's machine and never committed.
   Provider bids expire within minutes, so creating the deployment and

@@ -64,7 +64,7 @@ Say this plainly rather than letting the surface imply otherwise:
 - **One real swap has run: 1 USDC to EURe in the earlier owner Safe on Base
   mainnet (2026-10-11).** Read back on chain 2026-10-12, before the 1 €
   below arrived: the Safe held 0 USDC and 0.8914 EURe. Which venue filled it and the gas it used are in
-  the deposit's record on the lease, not checked here. No swap for a send
+  the deposit's record in mainnet's database, not checked here. No swap for a send
   has run, and no send has exercised execution → debit on either chain.
 - **Converting held USDC has run once, on mainnet** (the swap above): a
   1 USDC payment to the owner's payment page with "ask me to convert" on,
@@ -200,8 +200,8 @@ Say this plainly rather than letting the surface imply otherwise:
 - **One real 1 € enrolment has been paid, and whether it armed the account
   is not checked here.** The owner's euro reached the earlier owner Safe
   on Base mainnet (above); matching it to the code, the live name match and the
-  armed state are in the lease's records, which nothing outside the lease
-  reads (there is no mainnet admin). `enrolment:test` runs the matching
+  armed state are in mainnet's database, which nothing outside the
+  deployment reads (there is no mainnet admin). `enrolment:test` runs the matching
   against stub orders. `RECOVERY_IBAN_HMAC_KEY` must be set on a deployment
   before any account there can arm; until then the operator can sign for
   nobody.
@@ -366,18 +366,17 @@ Say this plainly rather than letting the surface imply otherwise:
 - **PWA install on iOS is untested**: a home-screen web app may get storage
   separate from Safari, and the device key lives in localStorage — onboarding in
   Safari then installing could strand an account.
-- **The Postgres store has never held a deployment's data.** Both leases
-  run the JSON store. The Postgres backend, its migrations and the
-  `pg-import` / `pg-export` round trip have run only on fixtures, on PGlite
-  on a local Postgres 17 and on GitHub's linux-arm64 runner (`npm run
-  check:pg`, the manual `oracle-host` workflow). The pre-import report has
-  not been run on a copy of the testnet or the mainnet db.json, so no
-  foreign key is in the schema and no real duplicate is known. Mainnet's
-  cluster exists on the Oracle host with a first full backup in both
-  repositories (OCI Frankfurt and Cloudflare R2) and one daily dump, but it
-  holds no data: nothing has been imported and the API has not run there.
-  Each alert has fired once and the one-repository-down test has run; no
-  restore drill has (`docs/oracle-host.md`). Testnet has no cluster.
+- **Mainnet runs the Postgres store; testnet runs the JSON store.**
+  app.zoldhq.com runs on the Oracle host on Postgres 17
+  (`STORE_BACKEND=postgres`, `docs/oracle-host.md`), imported from its
+  db.json: the pre-import report on that file found nothing blocking, and
+  every collection's count and hash matched on import. The smoke after the
+  import moved no money. zoldhq.com still runs the JSON store on its Akash
+  lease; its report, cluster and import have not run. The schema has no
+  foreign keys. `pg-export` (the rollback) has run only on fixtures and in
+  `check:pg`. Mainnet's cluster has a full backup in both repositories (OCI
+  Frankfurt and Cloudflare R2) and daily dumps; each alert has fired once and
+  the one-repository-down test has run; no restore drill has.
 - Timeout values everywhere were chosen, not measured.
 
 **PARKED, and it gates one customer**: merchant-book privacy. One Safe per

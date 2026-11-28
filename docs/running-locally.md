@@ -112,10 +112,12 @@ or Shopify extension.
 
 Merging a PR to main is the whole deploy. `.github/workflows/production.yml`
 runs `npm run check`, then `scripts/build-production-branch.sh` on the merged
-commit, and pushes `production`; a red check stops it there. zoldhq.com
-follows `refs/heads/production` (never main) and switches to each new commit
-within a few minutes, backing up `/data/db.json` first and rolling back a
-commit that fails `/api/health` (technical-architecture §18.1). By hand, the
+commit, and pushes `production`; a red check stops it there. Both
+deployments follow `refs/heads/production` (never main) and switch to each
+new commit within a few minutes: zoldhq.com's lease backs up `/data/db.json`
+first and rolls back a commit that fails `/api/health` (technical-architecture
+§18.1); app.zoldhq.com's `zold-deploy@mainnet.timer` migrates and fixes
+forward (`docs/oracle-host.md`, Deploys). By hand, the
 same build is:
 
 ```bash
@@ -130,7 +132,7 @@ commit, so a dispatch on another branch or a re-run of an older workflow run
 fails instead of publishing or rolling back. On the host: `npm ci --omit=dev`, write
 `deployments.json`, `npm start`; there is no `hardhat compile` step.
 
-Rules, because whatever is on `production` is what zoldhq.com runs:
+Rules, because whatever is on `production` is what both deployments run:
 
 - **Only the script writes it** (in the workflow, or by hand), and only from
   merged main.
@@ -139,9 +141,10 @@ Rules, because whatever is on `production` is what zoldhq.com runs:
 - **Never build from an unmerged branch.** The script's argument exists for
   re-snapshotting an older main commit, not for shipping a branch.
 - **Roll back with a revert PR to main**, which deploys like any merge. To
-  hold the site on an older production commit meanwhile, set
-  `ZOLD_COMMIT=<sha>` on the lease: a pinned lease stops following the
-  branch until `ZOLD_COMMIT=production` is set again. Never move the branch
+  hold zoldhq.com on an older production commit meanwhile, set
+  `ZOLD_COMMIT=<sha>` on its lease: a pinned lease stops following the
+  branch until `ZOLD_COMMIT=production` is set again. The Oracle host has
+  no pin. Never move the branch
   back. History only grows.
 - **A file the server newly needs at runtime goes in the script's allowlist**
   in the same PR. Then check a clean checkout boots: `npm ci --omit=dev`,
@@ -149,7 +152,7 @@ Rules, because whatever is on `production` is what zoldhq.com runs:
 - On GitHub, `production` is protected against force-pushes and deletion;
   regular pushes stay allowed, since the script only adds commits.
 
-### Lease changes
+### Lease changes (zoldhq.com)
 
 A merge deploys zoldhq.com; anything else (env, a pin, a new lease, close) is
 a lease change. The user's own message in their session is the permission: do
@@ -167,8 +170,9 @@ scripts/secrets.sh run -- node .private/akash/console.mjs <cmd>
   secret store. Never put a value on the command line.
 - `bids` lists offers for a new lease; `go` accepts the one the user picks.
 - No other subcommand, and nothing else under `scripts/secrets.sh run --`.
-- Without `AKASH_SLOT=mainnet` the tool acts on zoldhq.com. Set it
-  (app.zoldhq.com, real money) only when the user's message says mainnet.
+- The tool acts on zoldhq.com only. app.zoldhq.com has no lease: its
+  environment is `/etc/zold/mainnet.env` on the Oracle host
+  (`docs/oracle-host.md`).
 - `close` only when the user says close and names the lease: it deletes every
   account on it.
 - Agents never run `status`: it prints secrets. If any output shows a secret,
@@ -199,10 +203,9 @@ Human testing on zoldhq.com follows `docs/test-round.md`.
 
 ## Postgres
 
-Every deployment runs the JSON store (`data/db.json`). The Postgres backend
-(`docs/postgres-store-design.md`) serves no deployment yet: mainnet's cluster
-is provisioned on the Oracle host with its backups, and holds no data until
-the cut-over (`docs/oracle-host.md`, §8 row S8).
+app.zoldhq.com runs the Postgres backend (`docs/postgres-store-design.md`)
+on the Oracle host (`docs/oracle-host.md`); zoldhq.com and local runs use the
+JSON store (`data/db.json`), the default.
 
 - `STORE_BACKEND=postgres` with `DATABASE_URL` (and `DATABASE_CA` for a TLS
   host) puts the API on it, on any chain. On a real-money chain a host

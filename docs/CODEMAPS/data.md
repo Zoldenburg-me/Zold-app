@@ -1,9 +1,12 @@
 # Data
 
-One JSON file (`TRANSF_DB_PATH`, default data/db.json), read/written whole by
-store/db.ts; every write persists synchronously (`batched` groups a loop).
-No SQL, no migrations tool: db.ts runs idempotent migrations at load
-(e.g. migrateUsersToOrganisations).
+Two backends behind `store.ts`, one collection per table:
+- JSON (default; zoldhq.com, local): one file (`TRANSF_DB_PATH`, default
+  data/db.json), read/written whole by store/db.ts, which runs idempotent
+  migrations at load (e.g. migrateUsersToOrganisations).
+- Postgres (`STORE_BACKEND=postgres`; app.zoldhq.com): store/pg/, numbered
+  SQL migrations in services/api/migrations/ applied by the deploy
+  (`npm run db:migrate`), never by the API (docs/postgres-store-design.md).
 `npm run dev` wipes data/db.dev.json on start.
 
 ## Collections

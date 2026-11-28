@@ -5,18 +5,20 @@ The how of `docs/postgres-store-design.md` §7, §7.1 and §7.2: one OCI Ampere
 cluster per deployment on unix sockets, and the hub in its own database in
 mainnet's cluster. The scripts are in `scripts/oracle-host/`.
 
-**Mainnet's half has run on the host; testnet's has not.** `provision.sh
+**app.zoldhq.com runs here; zoldhq.com does not yet.** `provision.sh
 mainnet` ran on the owner's instance (Ampere A1, Ubuntu 24.04, Frankfurt):
-the cluster on a loop-mounted image, `stanza-create` and `check` against
-`repo1` (OCI Frankfurt) and `repo2` (Cloudflare R2), the database step and
-`check.sql`, the units and timers, a first full backup to each repository,
-WAL archiving, and one daily dump to R2. On mainnet, also run: every alert
-once, reaching `ALERT_URL`; the one-repository-down test (design §7); and
-a dump that the dump credential could neither overwrite nor delete (R2's
-bucket lock answered 409). The API has not run there: its environment is
-staged outside `/etc/zold` and the deploy timer is off until the cut-over.
+the cluster `17/mainnet` on a loop-mounted image, `stanza-create` and `check`
+against `repo1` (OCI Frankfurt) and `repo2` (Cloudflare R2), the database
+step and `check.sql`, the units and timers, a full backup to each
+repository, WAL archiving and the daily dump to R2. Also run on mainnet:
+every alert once, reaching `ALERT_URL`; the one-repository-down test
+(design §7); a dump that the dump credential could neither overwrite nor
+delete (R2's bucket lock answered 409); and the cut-over below, with
+`zold-api@mainnet`, `cloudflared-zold-mainnet` and `zold-deploy@mainnet.timer`
+following `production`. Mainnet's `TRANSF_RPC_URL` is Pocket's public
+`https://base.api.pocket.network`: `mainnet.base.org` refuses `eth_getLogs`.
 Not run yet: listing the dump with a read-only credential, a restore
-drill, testnet, and anything of S8.
+drill, and anything for testnet.
 Everything marked S7b below needs the owner's host and account.
 
 ## Files
@@ -85,13 +87,13 @@ the host:
   lock enforces that, above).
 - `OCI_NAMESPACE`, `OWNER_AGE_RECIPIENT` (public key), `ALERT_URL`
   (`https://` only; provision refuses another scheme).
-- `/etc/zold/<dep>.env`: the lease's environment, plus `DATABASE_URL`,
+- `/etc/zold/<dep>.env`: the deployment's environment, plus `DATABASE_URL`,
   `TRANSF_DB_PATH`, `TRANSF_API_PORT` (`host.env.example` lists them), no
   `export` lines (a systemd `EnvironmentFile`). `host.env` holds assignments
   only: provision and the jobs refuse `export`, `declare`, `readonly`, `set`
   or `eval` in it.
-- `/etc/zold/<dep>.deployments.json` (root, 600): the `deployments.json` the
-  lease writes from its environment variable. `production` carries none, and
+- `/etc/zold/<dep>.deployments.json` (root, 600): the deployment's
+  `deployments.json` (a lease writes it from an environment variable). `production` carries none, and
   `/api/health` needs it, so the deploy copies it into every release.
 - The Cloudflare tunnel token for `cloudflared service install`.
 - For drills: an OCI user with a read-only credential (read and list) on the
@@ -173,9 +175,9 @@ never a redeploy of an older build or a hand-edited schema.
 
 ## Cut-over (S8, at the owner's time)
 
-The steps of design §6, testnet first, then mainnet. Both deployments are
-imported: accounts, Safes, passkeys and IBANs carry over, and no one signs
-up again.
+The steps of design §6. Mainnet has run them; testnet is next. Each
+deployment is imported: accounts, Safes, passkeys and IBANs carry over, and
+no one signs up again.
 
 1. Preconditions: `check:pg` on the release's commit against a scratch
    Postgres 17 (the host's `pg_hba` rejects its temporary roles and
@@ -194,7 +196,8 @@ up again.
    tunnel's hostname at the host's `cloudflared`.
 6. Smoke (§6 step 7). No money moves in the smoke.
 7. Rollback: design §6, "Rollback" (`zold_app` `NOLOGIN`, export with
-   `pg-export`, the lease on that `db.json`).
+   `pg-export`, a JSON API on that `db.json`). Mainnet's lease is closed, so
+   its JSON API would start on a new lease or host.
 
 ## Host loss and rebuild
 
