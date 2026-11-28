@@ -214,6 +214,7 @@ export async function storeSuite(s: StoreBackend): Promise<void> {
   assert.equal(op.email, "op@zold.test", "stored lowercase");
   await s.addOperator({ id: "op_2", email: "two@zold.test", name: "Two", credentials: [], createdAt: now } as any);
   await assert.rejects(async () => await s.addOperator({ id: "op_3", email: "two@zold.test", credentials: [] } as any), /exists/);
+  await assert.rejects(async () => await s.addOperator({ id: "op_4", email: " TWO@Zold.test ", credentials: [] } as any), /exists/, "a case variant is the same operator");
   assert.equal((await s.findOperatorByEmail("OP@zold.test"))?.id, "op_1");
   assert.equal((await s.findOperator("op_2"))?.name, "Two");
   await assert.rejects(async () => await s.addOperatorCredential("op_2", { credentialId: "oc-1" } as any), /already registered/, "one passkey, one operator");

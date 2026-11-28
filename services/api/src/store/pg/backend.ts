@@ -940,10 +940,10 @@ export function createPgStore(database: Database): StoreBackend {
     },
     addOperator: (o: Operator) =>
       tx(async (t) => {
-        if ((await t.query("SELECT 1 FROM operators WHERE email = $1", [o.email])).rows.length) {
+        const row = { ...o, email: o.email.trim().toLowerCase() };
+        if ((await t.query("SELECT 1 FROM operators WHERE email = $1", [row.email])).rows.length) {
           throw new Error("an operator with that email exists");
         }
-        const row = { ...o, email: o.email.trim().toLowerCase() };
         await insert(t, TABLE.operators, row);
         await syncOperatorCredentials(t, row);
         return row;
