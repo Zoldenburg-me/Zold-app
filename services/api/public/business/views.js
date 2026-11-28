@@ -621,7 +621,8 @@ RENDER["invoicing-settings"] = async () => {
     `<div id="i-logo-box">${p.logo ? `<img src="${esc(p.logo)}" alt="Your current logo" style="display:block;max-width:220px;max-height:64px;margin-bottom:12px;background:#fff;padding:8px;border-radius:6px">` : `<p class="desc" style="margin-bottom:12px">No logo yet.</p>`}
      ${!["owner", "admin"].includes(org.role) /* org.update */ ? `<p class="desc">An owner or admin can change it.</p>` : `<label for="i-logo" class="z-btn z-btn--secondary z-btn--sm" style="cursor:pointer">${Z.icon("upload")}<span>${p.logo ? "Replace logo" : "Upload logo"}</span></label>
      <input id="i-logo" type="file" accept="image/png,image/jpeg,image/webp" class="z-sr" />
-     ${p.logo ? `<button type="button" class="z-link-btn" data-act="remove-invoice-logo" style="margin-left:12px">Remove</button>` : ""}`}</div>`)}
+     ${p.logo ? `<button type="button" class="z-link-btn" data-act="remove-invoice-logo" style="margin-left:12px">Remove</button>` : ""}
+     <div id="i-logos-kept"></div>`}</div>`)}
   ${card("Tax and numbering", "Defaults for new invoices. Each invoice can change them.",
     `<div class="grid g2"><div>
         <label for="i-lang">Invoice language</label>
@@ -666,6 +667,18 @@ RENDER["invoicing-settings"] = async () => {
  *  own: a logo is not part of the form's Save. The server checks it again. */
 /** `rerender` is shell.js's render, passed in: shell.js imports this module. */
 function bindLogoUpload(box, rerender) {
+  // Logos used before, to choose again: only where the controls are (org.update).
+  const kept = box.querySelector("#i-logos-kept");
+  if (kept) {
+    api(`/api/orgs/${org.id}/invoicing/logos`).then(({ current, logos }) => {
+      const others = logos.filter((l) => l.id !== current);
+      if (!others.length) return;
+      kept.innerHTML = `<p class="desc" style="margin:16px 0 8px">Logos used before</p>
+        <div style="display:flex;flex-wrap:wrap;gap:10px">${others.map((l) => `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:6px">
+          <img src="${esc(l.logo)}" alt="" style="display:block;max-width:140px;max-height:40px;background:#fff;padding:6px;border-radius:6px">
+          <button type="button" class="z-link-btn" data-act="use-invoice-logo" data-id="${esc(l.id)}">Use this one</button></div>`).join("")}</div>`;
+    }).catch(() => {}); // the card works without the list
+  }
   box.querySelector("#i-logo")?.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;

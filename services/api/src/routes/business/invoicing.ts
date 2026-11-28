@@ -59,6 +59,17 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
   const { ctxOf } = deps;
   const r = express.Router();
 
+  /** Every logo the org keeps, for choosing one again: re-uploading it would
+   *  be re-encoded by the browser into a new id. org.update, who may set one. */
+  r.get("/:orgId/invoicing/logos", async (req, res) => {
+    const ctx = await ctxOf(req, res);
+    if (!ctx) return;
+    if (!requireCapability(ctx, res, "invoices")) return;
+    if (!requirePermission(ctx, res, "org.update")) return;
+    const inv = ctx.org.invoicing ?? {};
+    res.json({ current: inv.logoId ?? null, logos: Object.entries(inv.logos ?? {}).map(([id, logo]) => ({ id, logo })) });
+  });
+
   r.get("/:orgId/invoicing/profile", async (req, res) => {
     const ctx = await ctxOf(req, res);
     if (!ctx) return;
@@ -171,7 +182,11 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     // footer. null takes it off new invoices; issued ones keep theirs.
     let logo: { id: string; dataUrl: string } | undefined;
     if (b.logo === null) next.logoId = undefined;
-    else if (b.logo !== undefined) {
+    else if (typeof b.logoId === "string") {
+      // One the org already keeps, chosen again.
+      if (!stored?.logos || !Object.hasOwn(stored.logos, b.logoId)) return res.status(400).json({ error: "That logo is not one this organisation keeps.", field: "logoId" });
+      next.logoId = b.logoId;
+    } else if (b.logo !== undefined) {
       const checked = logoFrom(b.logo);
       if (!checked.ok) return res.status(400).json({ error: checked.error, field: "logo" });
       logo = checked;
@@ -182,7 +197,7 @@ export function createInvoicingRoutes(deps: OrgRoutes): express.Router {
     // map, and deciding "no invoice uses it" races an issue in flight. The
     // count is bounded instead; one already kept can always be chosen again.
     if (logo && !stored?.logos?.[logo.id] && Object.keys(stored?.logos ?? {}).length >= LOGO_MAX_KEPT) {
-      return res.status(409).json({ error: `Zold keeps every logo you upload, so issued invoices never lose theirs, and this organisation has ${LOGO_MAX_KEPT}. Upload one of those again, or contact support to raise the limit.`, field: "logo" });
+      return res.status(409).json({ error: `Zold keeps every logo you upload, so issued invoices never lose theirs, and this organisation has ${LOGO_MAX_KEPT}. Choose one of those under Logos used before, or contact support to raise the limit.`, field: "logo" });
     }
     if (typeof b.paymentTermsDays === "number" && b.paymentTermsDays >= 0) {
       next.paymentTermsDays = Math.round(b.paymentTermsDays);

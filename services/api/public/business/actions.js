@@ -948,6 +948,10 @@ export const ACTIONS = {
     await api(`/api/orgs/${org.id}/invoicing/profile`, { method: "PATCH", body: { logo: null } });
     toast("Logo removed from new invoices. Issued ones keep theirs.");
   },
+  async "use-invoice-logo"(el) {
+    await api(`/api/orgs/${org.id}/invoicing/profile`, { method: "PATCH", body: { logoId: el.dataset.id } });
+    toast("Logo chosen. New invoices print it.");
+  },
   async "save-invoicing"() {
     const val = (id) => $("#" + id)?.value?.trim() ?? "";
     // Who the issuer is (name, address, tax and registration numbers) is the

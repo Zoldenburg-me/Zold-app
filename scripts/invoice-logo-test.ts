@@ -24,6 +24,7 @@ const { resolveOrg } = await import("../services/api/src/routes/org-context.js")
 const { createInvoicingRoutes } = await import("../services/api/src/routes/business/invoicing.js");
 const { createInvoiceRoutes } = await import("../services/api/src/routes/business/invoices.js");
 const { createInvoiceLinkRouter } = await import("../services/api/src/routes/business/invoice-links.js");
+const { logoFrom } = await import("../services/api/src/domain/invoice-logo.js");
 
 let passed = 0;
 const check = async (name: string, fn: () => void | Promise<void>) => {
@@ -110,6 +111,25 @@ await check("a logo that is not the image it claims, an SVG or too big is refuse
   assert.equal((await store.findOrganisation("org_de"))!.invoicing?.logoId, undefined);
 });
 
+await check("JPEG and WebP sizes are read from their headers (SOF, VP8, VP8L, VP8X)", () => {
+  const url = (type: string, b: Buffer) => `data:image/${type};base64,${b.toString("base64")}`;
+  const u16be = (n: number) => Buffer.from([n >> 8, n & 0xff]);
+  // SOI, an APP0 segment to skip, then SOF0 with height before width.
+  const jpeg = (w: number, h: number) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16]), Buffer.alloc(14), Buffer.from([0xff, 0xc0, 0, 17, 8]), u16be(h), u16be(w), Buffer.alloc(12)]);
+  const riff = (chunk: string, body: Buffer) => Buffer.concat([Buffer.from("RIFF"), Buffer.alloc(4), Buffer.from("WEBP"), Buffer.from(chunk), Buffer.alloc(4), body]);
+  const vp8 = (w: number, h: number) => { const b = Buffer.alloc(14); b.set([0x9d, 0x01, 0x2a], 3); b.writeUInt16LE(w, 6); b.writeUInt16LE(h, 8); return riff("VP8 ", b); };
+  const vp8l = (w: number, h: number) => { const b = Buffer.alloc(9); b[0] = 0x2f; b.writeUInt32LE((w - 1) | ((h - 1) << 14), 1); return riff("VP8L", b); };
+  const vp8x = (w: number, h: number) => { const b = Buffer.alloc(14); b.writeUIntLE(w - 1, 4, 3); b.writeUIntLE(h - 1, 7, 3); return riff("VP8X", b); };
+  for (const [type, make] of [["jpeg", jpeg], ["webp", vp8], ["webp", vp8l], ["webp", vp8x]] as const) {
+    assert.equal(logoFrom(url(type, make(800, 230))).ok, true, `${type} 800 x 230`);
+    const big = logoFrom(url(type, make(801, 230)));
+    assert.equal(big.ok, false, `${type} 801 wide`);
+    assert.match((big as { error: string }).error, /801 x 230/);
+  }
+  // A JPEG cut off before its frame header is refused, not read past its end.
+  assert.equal(logoFrom(url("jpeg", jpeg(100, 50).subarray(0, 22))).ok, false);
+});
+
 await check("a member who may issue but not change the business profile cannot set it", async () => {
   assert.equal((await setLogo(png(), "u_view")).status, 403);
 });
@@ -140,6 +160,17 @@ await check("no logo is ever deleted; past 20 a new one is refused, a kept one c
   assert.equal(Object.keys((await store.findOrganisation("org_de"))!.invoicing?.logos ?? {}).length, 20);
   const refused = await setLogo(png("one too many"));
   assert.equal(refused.status, 409, JSON.stringify(refused.data));
+  // A kept one is chosen by id, without re-uploading it.
+  const kept = await call("GET", "/api/orgs/org_de/invoicing/logos", "u_owner");
+  assert.equal(kept.status, 200);
+  assert.equal(kept.data.logos.length, 20);
+  const a = kept.data.logos.find((l: any) => l.logo === png("A"));
+  const chose = await call("PATCH", "/api/orgs/org_de/invoicing/profile", "u_owner", { logoId: a.id });
+  assert.equal(chose.status, 200, JSON.stringify(chose.data));
+  assert.equal(chose.data.profile.logo, png("A"));
+  assert.equal((await call("PATCH", "/api/orgs/org_de/invoicing/profile", "u_owner", { logoId: "__proto__" })).status, 400);
+  assert.equal((await call("PATCH", "/api/orgs/org_de/invoicing/profile", "u_view", { logoId: kept.data.logos.find((l: any) => l.id !== a.id).id })).status, 403);
+  assert.equal((await call("GET", "/api/orgs/org_de/invoicing/logos", "u_view")).status, 403);
   assert.equal((await setLogo(png("A"))).status, 200);
   assert.equal((await printed(first.linkToken)).logo, png("A"));
 });
