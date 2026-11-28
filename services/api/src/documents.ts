@@ -417,7 +417,7 @@ export function snapshotDigest(snapshot: DocumentSnapshot): Hex {
  *  EIP-191 message naming the digest, so any Ethereum tool can recover the
  *  signer and a reader can compare it with the address printed on the page. */
 function documentSigner() {
-  const configured = process.env.DOCUMENT_SIGNING_KEY as `0x${string}` | undefined;
+  const configured = (process.env.DOCUMENT_SIGNING_KEY?.trim() || undefined) as `0x${string}` | undefined;
   // Off production the orchestrator key stands in; on production a hot money
   // key must not double as the attestation key.
   if (!configured && IS_PRODUCTION) {
