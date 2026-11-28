@@ -263,7 +263,8 @@ console.log("production config");
     ok("not a real-money deployment env (--chain, or a test chain): boot checks not run");
   } else {
     const { spawnSync } = await import("node:child_process");
-    const r = spawnSync(process.execPath, ["--import", "tsx", "-e", 'await import("./services/api/src/config/production.ts")'], {
+    // The same loader flags as this run (under the stub test, its preload too).
+    const r = spawnSync(process.execPath, [...process.execArgv, "-e", 'await import("./services/api/src/config/production.ts")'], {
       cwd: ROOT, encoding: "utf8", timeout: 60_000, env: { ...process.env, TRANSF_PRODUCTION: "1" },
     });
     const problems = r.stderr.split("\n").filter((l) => l.startsWith("- ")).map((l) => l.slice(2));
