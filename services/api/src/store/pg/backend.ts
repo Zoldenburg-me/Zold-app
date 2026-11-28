@@ -921,8 +921,12 @@ export function createPgStore(database: Database): StoreBackend {
           await locked<Organisation>(t, TABLE.organisations, orgId);
           members.push(...(await rows<Member>(t, TABLE.members, "org_id = $1", [orgId], "FOR UPDATE")));
         }
-        const transfers = await rows<Transfer>(t, TABLE.transfers, "user_id = $1", [userId]);
-        const refusal = deleteUserRefusal(transfers, members, userId);
+        const refusal = deleteUserRefusal({
+          transfers: await rows<Transfer>(t, TABLE.transfers, "user_id = $1", [userId], "FOR UPDATE"),
+          cryptoSends: await rows<CryptoSend>(t, TABLE.cryptoSends, "user_id = $1", [userId], "FOR UPDATE"),
+          recoveries: await rows<RecoveryRequest>(t, TABLE.recoveryRequests, "user_id = $1", [userId], "FOR UPDATE"),
+          members,
+        }, userId);
         if (refusal) return refusal;
         for (const m of members.filter((x) => x.userId === userId)) await save(t, TABLE.members, Object.assign(m, erasedMember(at)));
         await t.query("DELETE FROM sessions WHERE user_id = $1", [userId]);

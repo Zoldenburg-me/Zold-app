@@ -140,7 +140,7 @@ Each of these was a bug once.
   free: no plan, no trial.
 - **INVALID_DATA**: a draft line's payee fingerprint is recomputed at review AND
   at execution: an address-book edit lands between the two.
-- **An org can never lose its last owner** (role change or deactivation).
+- **An org can never lose its last owner** (role change or deactivation); a deleted sole member's org goes ownerless.
 - **The device key's protection is per-authenticator.** `device.js` reports
   it; the Security screen shows that.
 

@@ -263,12 +263,12 @@ await check("change email takes effect unconfirmed and is audited without either
   assert.ok(!JSON.stringify(row).includes("example.com"), "the audit row names no address");
 });
 
-await check("delete refuses a user with a transfer in flight or who is an org's last owner", async () => {
+await check("delete refuses a user with work in flight or who is an org's last owner", async () => {
   await store.addUser(plainUser("u_busy", "busy@example.com"));
   await store.addTransfer({ id: "t_busy", userId: "u_busy", quoteId: "q", rail: "sepa", state: "DEBITED", sendEur: 5, txs: [], createdAt: now, updatedAt: now } as any);
   const busy = await kit.call("DELETE", "/api/admin/users/u_busy");
   assert.equal(busy.status, 409);
-  assert.deepEqual([busy.body.code, busy.body.transferIds], ["OPEN_TRANSFERS", ["t_busy"]]);
+  assert.deepEqual([busy.body.code, busy.body.transferIds], ["IN_FLIGHT", ["t_busy"]]);
   await store.addUser(plainUser("u_boss", "boss@example.com"));
   await store.addOrganisation({ id: "org_co", type: "business", name: "Co", createdAt: now, updatedAt: now } as any);
   await store.addMember({ id: "m_boss", orgId: "org_co", userId: "u_boss", email: "boss@example.com", role: "owner", status: "active", invitedAt: now } as any);

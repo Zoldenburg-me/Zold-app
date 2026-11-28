@@ -664,8 +664,21 @@ export async function conditionalWriteSuite(s: StoreBackend): Promise<void> {
   await s.addOrganisation({ id: "org_del", type: "business", name: "Del Co", createdAt: now, updatedAt: now } as any);
   await s.addMember({ id: "m_del", orgId: "org_del", userId: "u_del", email: "u_del@example.com", name: "Del", role: "owner", status: "active", invitedAt: now } as any);
   await s.addMember({ id: "m_del_staff", orgId: "org_del", userId: "u_b", email: "bo@example.com", role: "admin", status: "active", invitedAt: now } as any);
-  await s.addTransfer({ id: "t_del", userId: "u_del", quoteId: "q_del", rail: "sepa", state: "PAYOUT_SUBMITTED", sendEur: 1, txs: [], createdAt: now, updatedAt: now } as any);
-  assert.deepEqual(await s.deleteUser("u_del"), { ok: false, code: "OPEN_TRANSFERS", transferIds: ["t_del"] });
+  const inFlight = (o: { transferIds?: string[]; cryptoSendIds?: string[]; recoveryIds?: string[] }) =>
+    ({ ok: false, code: "IN_FLIGHT", transferIds: [], cryptoSendIds: [], recoveryIds: [], ...o });
+  // Unsigned CREATED moved nothing; signed, it is being relayed.
+  await s.addTransfer({ id: "t_del", userId: "u_del", quoteId: "q_del", rail: "sepa", state: "CREATED", sendEur: 1, txs: [], auth: { terms: "t" }, createdAt: now, updatedAt: now } as any);
+  await s.addTransfer({ id: "t_del_paid", userId: "u_del", quoteId: "q_del2", rail: "sepa", state: "PAID", sendEur: 1, txs: [], createdAt: now, updatedAt: now } as any);
+  await s.addCryptoSendUnderHold({ id: "cs_del", userId: "u_del", to: `0x${"11".repeat(20)}`, token: "EURE", amount: "1", capEur: 1, state: "SUBMITTED", deadline: Date.now() / 1000 + 600, createdAt: now, updatedAt: now } as any,
+    (await s.holdDailyCap("u_del", 1, 100, () => 0) as any).holdId);
+  await s.addRecoveryRequest({ id: "rr_del", userId: "u_del", status: "REVIEW_PENDING", requestedAt: now, updatedAt: now } as any);
+  assert.deepEqual(await s.deleteUser("u_del"), inFlight({ cryptoSendIds: ["cs_del"], recoveryIds: ["rr_del"] }), "an unsigned CREATED transfer does not block");
+  await s.updateCryptoSendFrom("cs_del", ["SUBMITTED"], { state: "SENT" });
+  await s.updateRecoveryRequest("rr_del", { status: "CANCELED" } as any);
+  assert.ok(await s.claimAuthorization("t_del"));
+  assert.deepEqual(await s.deleteUser("u_del"), inFlight({ transferIds: ["t_del"] }), "a signed CREATED transfer is in flight");
+  await s.updateTransfer("t_del", { state: "PAYOUT_SUBMITTED" } as any);
+  assert.deepEqual(await s.deleteUser("u_del"), inFlight({ transferIds: ["t_del"] }));
   await s.updateTransfer("t_del", { state: "PAID" } as any);
   assert.deepEqual(await s.deleteUser("u_del"), { ok: false, code: "LAST_OWNER", orgIds: ["org_del"] });
   await s.updateMember("m_del_staff", { role: "owner" });

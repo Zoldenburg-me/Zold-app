@@ -943,12 +943,19 @@ export const jsonCore = {
    * Erase a user for a GDPR request (routes/admin-users.ts): the users row,
    * its sessions and payment handle go, and its org member rows lose name and
    * email. Transfers, ledger, documents and audit keep the bare userId, which
-   * no longer resolves to a person. Refused as deleteUserRefusal says.
+   * no longer resolves to a person. Refused as deleteUserRefusal says. The
+   * authorize and crypto-send claims lock the user row (store.lockUser), so
+   * none lands between this check and the delete.
    */
   deleteUser(userId: string, at = new Date().toISOString()): { ok: true } | DeleteUserRefusal {
     const i = db.users.findIndex((u) => u.id === userId);
     if (i < 0) return { ok: false, code: "NOT_FOUND" };
-    const refusal = deleteUserRefusal(db.transfers, db.members, userId);
+    const mine = <T extends { userId?: string }>(list: T[]) => list.filter((x) => x.userId === userId);
+    const orgIds = new Set(mine(db.members).map((m) => m.orgId));
+    const refusal = deleteUserRefusal({
+      transfers: mine(db.transfers), cryptoSends: mine(db.cryptoSends), recoveries: mine(db.recoveryRequests),
+      members: db.members.filter((m) => orgIds.has(m.orgId)),
+    }, userId);
     if (refusal) return refusal;
     db.users.splice(i, 1);
     db.sessions = db.sessions.filter((s) => s.userId !== userId);

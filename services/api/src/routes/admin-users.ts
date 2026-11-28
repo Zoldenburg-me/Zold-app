@@ -29,11 +29,12 @@ export function createAdminUsersRouter() {
       const result = await store.deleteUser(String(req.params.id));
       if (result.ok) return res.json({ deleted: true });
       if (result.code === "NOT_FOUND") return res.status(404).json({ error: "user not found" });
-      if (result.code === "OPEN_TRANSFERS") {
+      if (result.code === "IN_FLIGHT") {
+        const { transferIds, cryptoSendIds, recoveryIds } = result;
         return res.status(409).json({
-          error: "This user has transfers in flight. Resolve them first: the pipeline still reads the account.",
-          code: "OPEN_TRANSFERS",
-          transferIds: result.transferIds,
+          error: "This user has work in flight that still reads the account: a signed or moving transfer (a MANUAL_REVIEW one is closed on the Transactions page), a submitted crypto send or an open recovery. Let it finish or resolve it first.",
+          code: "IN_FLIGHT",
+          transferIds, cryptoSendIds, recoveryIds,
         });
       }
       return res.status(409).json({

@@ -252,7 +252,7 @@ function renderUserDetail(root, id) {
     <section class="card"><div class="card-h"><h2>Support actions</h2>
       <div class="actions"><button type="button" class="btn sm" data-change-email>Change email</button>
       <button type="button" class="btn sm ghost" data-delete-user>Delete user</button></div></div>
-      <div class="card-b"><p class="sub2">For a request the person sent support. Each needs your passkey and is audited. Delete erases the account for good; transfers and the ledger keep only its id.</p></div></section>`;
+      <div class="card-b"><p class="sub2">For a request the person sent support. Each needs your passkey and is audited. Delete erases the account for good; money, bookkeeping and recovery records stay on the bare id.</p></div></section>`;
 }
 
 /* An operator changes the email at a user's request: it takes effect now,
@@ -276,9 +276,10 @@ async function changeUserEmail(root, id) {
 async function deleteUserAccount(id) {
   const u = S.userCache[id].detail.user;
   const safe = u.passkeySafe?.address || u.address;
+  const where = safe ? `Their Safe ${safe} and any money in it stay` : 'Any Safe of theirs and its money stay';
   const typed = prompt(`Delete ${u.name || 'this user'} (${u.email || id}) for good?\n\n` +
-    `Their Safe ${safe} and any money in it stay on chain and stay theirs: tell them before you delete. ` +
-    `Name, email, passkey, sessions and Monerium connection are erased; transfers and the ledger keep only the id.\n\nType the user id to confirm:`);
+    `${where} on chain and stay theirs: tell them before you delete. ` +
+    `The account (name, email, passkey, sessions, Monerium connection, payment page) is erased and their member rows lose name and email. Their transfers, ledger, documents, contacts, payment requests and recovery requests stay, on the bare id.\n\nType the user id to confirm:`);
   if (typed === null) return;
   if (typed.trim() !== id) { alert('The id did not match. Nothing was deleted.'); return; }
   try {

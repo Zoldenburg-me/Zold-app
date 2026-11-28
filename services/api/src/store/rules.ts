@@ -517,22 +517,40 @@ export function settleOutboxOn(r: OutboxRow, attempt: number, outcome: OutboxOut
   return true;
 }
 
-/** Transfer states in which the pipeline may still read the user row. A
- *  CREATED transfer moved nothing and its userOp needs a session to sign. */
-const SETTLED_OR_UNSIGNED = new Set(["CREATED", "PAID", "FAILED", "REFUNDED"]);
+/** A transfer moved no money and never will: settled, or CREATED and never
+ *  signed. A signed one stays CREATED while its debit is relayed
+ *  (transfers/activity.ts), so it is open. */
+const transferClosed = (t: Transfer) =>
+  ["PAID", "FAILED", "REFUNDED"].includes(t.state) || (t.state === "CREATED" && !t.auth?.authorizedAt && !t.moneriumRedeem?.signedAt);
+const RECOVERY_CLOSED = new Set(["FINALIZED", "CANCELED", "EXPIRED"]);
 
-export type DeleteUserRefusal = { ok: false; code: "NOT_FOUND" } | { ok: false; code: "OPEN_TRANSFERS"; transferIds: string[] } | { ok: false; code: "LAST_OWNER"; orgIds: string[] };
+export type DeleteUserRefusal =
+  | { ok: false; code: "NOT_FOUND" }
+  | { ok: false; code: "IN_FLIGHT"; transferIds: string[]; cryptoSendIds: string[]; recoveryIds: string[] }
+  | { ok: false; code: "LAST_OWNER"; orgIds: string[] };
+
+/** The rows deleteUserRefusal weighs, all of one user except `members`,
+ *  which are every member of the orgs the user is in. */
+export interface DeleteUserRows {
+  transfers: Transfer[];
+  cryptoSends: { id: string; state: string }[];
+  recoveries: { id: string; status: string }[];
+  members: Member[];
+}
 
 /**
- * Why a user may not be deleted yet, or null. Refused while a transfer is in
- * flight, and while they are the last active owner of an org that has other
- * active members (an org never loses its last owner). An org they are alone
- * in is theirs and goes ownerless with them.
+ * Why a user may not be deleted yet, or null. Refused while anything that
+ * reads the user row is in flight: a signed or moving transfer, a submitted
+ * crypto send, an open recovery request. And while they are the last active
+ * owner of an org with other active members (an org never loses its last
+ * owner). An org they are alone in is theirs and goes ownerless with them.
  */
-export function deleteUserRefusal(transfers: Transfer[], members: Member[], userId: string): DeleteUserRefusal | null {
-  const open = transfers.filter((t) => t.userId === userId && !SETTLED_OR_UNSIGNED.has(t.state)).map((t) => t.id);
-  if (open.length) return { ok: false, code: "OPEN_TRANSFERS", transferIds: open };
-  const live = members.filter((m) => m.status === "active");
+export function deleteUserRefusal(rows: DeleteUserRows, userId: string): DeleteUserRefusal | null {
+  const transferIds = rows.transfers.filter((t) => !transferClosed(t)).map((t) => t.id);
+  const cryptoSendIds = rows.cryptoSends.filter((c) => c.state === "SUBMITTED").map((c) => c.id);
+  const recoveryIds = rows.recoveries.filter((r) => !RECOVERY_CLOSED.has(r.status)).map((r) => r.id);
+  if (transferIds.length || cryptoSendIds.length || recoveryIds.length) return { ok: false, code: "IN_FLIGHT", transferIds, cryptoSendIds, recoveryIds };
+  const live = rows.members.filter((m) => m.status === "active");
   const orphaned = [...new Set(live.filter((m) => m.userId === userId && m.role === "owner").map((m) => m.orgId))].filter((orgId) => {
     const rest = live.filter((m) => m.orgId === orgId && m.userId !== userId);
     return rest.length > 0 && !rest.some((m) => m.role === "owner");
