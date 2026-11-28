@@ -36,7 +36,7 @@ function accessAllows(req: express.Request, email: string): boolean {
 function creationOptions(challenge: string, userId: string, name: string, email: string, exclude: string[]) {
   return {
     challenge,
-    rp: { id: SECURITY.rpId, name: "Zold operator" },
+    rp: { id: OPERATOR.rpId, name: "Zold operator" },
     user: { id: bufToB64url(Buffer.from(userId)), name: email, displayName: name },
     pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
     authenticatorSelection: { residentKey: "preferred", userVerification: "required" },
@@ -50,11 +50,15 @@ function label(raw: unknown, fallback: string): string {
   return v || fallback;
 }
 
+/** The passkeys that can sign in on this admin host. One saved with no rpId
+ *  was made for the app's RP_ID, as every operator passkey once was. */
+const usable = (o: Operator) => o.credentials.filter((c) => (c.rpId ?? SECURITY.rpId) === OPERATOR.rpId);
+
 const publicOperator = (o: Operator) => ({
   id: o.id,
   name: o.name,
   email: o.email,
-  passkeys: o.credentials.map((c) => ({ label: c.label, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt })),
+  passkeys: usable(o).map((c) => ({ label: c.label, createdAt: c.createdAt, lastUsedAt: c.lastUsedAt })),
 });
 
 export function createOperatorAuthRouter() {
@@ -80,7 +84,7 @@ export function createOperatorAuthRouter() {
       }
       let reg: ReturnType<typeof verifyRegistration>;
       try {
-        reg = verifyRegistration(req.body?.attestationObject, req.body?.clientDataJSON, SECURITY.rpId, [OPERATOR.adminOrigin], `op:enrol:${e.id}`, "operator_enrol");
+        reg = verifyRegistration(req.body?.attestationObject, req.body?.clientDataJSON, OPERATOR.rpId, [OPERATOR.adminOrigin], `op:enrol:${e.id}`, "operator_enrol");
       } catch (err) {
         return res.status(400).json({ error: redactedMessage(err, { keepHosts: true }), code: "REGISTRATION_INVALID" });
       }
@@ -88,7 +92,7 @@ export function createOperatorAuthRouter() {
       await store.lockKey(`operator:${e.email.trim().toLowerCase()}`);
       const existing = await store.findOperatorByEmail(e.email);
       if (existing?.disabledAt) return res.status(403).json({ error: "this operator is disabled", code: "OPERATOR_DISABLED" });
-      if (existing && existing.credentials.length >= OPERATOR.maxPasskeys) {
+      if (existing && usable(existing).length >= OPERATOR.maxPasskeys) {
         return res.status(409).json({ error: `an operator holds at most ${OPERATOR.maxPasskeys} passkeys`, code: "PASSKEY_LIMIT" });
       }
       if ((await store.findOperatorCredential(reg.credentialId))) {
@@ -99,7 +103,7 @@ export function createOperatorAuthRouter() {
         id: `op_${randomBytes(8).toString("hex")}`, name: e.name, email: e.email, createdAt: now, credentials: [],
       }));
       const credential: OperatorCredential = {
-        credentialId: reg.credentialId, key: reg.key, signCount: reg.signCount, label: label(req.body?.label, "Passkey"), createdAt: now,
+        credentialId: reg.credentialId, key: reg.key, signCount: reg.signCount, label: label(req.body?.label, "Passkey"), rpId: OPERATOR.rpId, createdAt: now,
       };
       await store.addOperatorCredential(operator.id, credential);
       // The link is used: nothing awaits between the check above and this.
@@ -113,10 +117,17 @@ export function createOperatorAuthRouter() {
     // Behind Access, only the signed-in person's passkeys are offered.
     const email = accessEmailOf(req);
     const operators = (await store.list("operators")).filter((o) => !o.disabledAt && (email === undefined || o.email === email));
+    const mine = email === undefined ? undefined : operators[0];
+    if (mine && mine.credentials.length && !usable(mine).length) {
+      return res.status(409).json({
+        error: `your passkeys were made for another admin host, not ${OPERATOR.rpId}: enrol a new one with npm run operator:enrol`,
+        code: "PASSKEYS_OTHER_HOST",
+      });
+    }
     res.json({
       challenge: issueChallenge("operator_login"),
-      rpId: SECURITY.rpId,
-      allowCredentials: operators.flatMap((o) => o.credentials.map((c) => ({ type: "public-key", id: c.credentialId }))),
+      rpId: OPERATOR.rpId,
+      allowCredentials: operators.flatMap((o) => usable(o).map((c) => ({ type: "public-key", id: c.credentialId }))),
       userVerification: "required",
       timeout: 120_000,
     });
@@ -139,7 +150,7 @@ export function createOperatorAuthRouter() {
     try {
       ({ signCount } = await verifyAssertion(
         b.authenticatorData, b.clientDataJSON, b.signature, credential.key, credential.signCount,
-        SECURITY.rpId, [OPERATOR.adminOrigin], "operator_login",
+        OPERATOR.rpId, [OPERATOR.adminOrigin], "operator_login",
       ));
     } catch (err) {
       return res.status(401).json({ error: redactedMessage(err, { keepHosts: true }), code: "LOGIN_REFUSED" });
@@ -162,8 +173,8 @@ export function createOperatorAuthRouter() {
     if (!/^\/api\/admin\//i.test(path) || path.includes("?")) return res.status(400).json({ error: "path must be an /api/admin path without a query" });
     res.json({
       challenge: issueChallenge("operator_step_up", operatorStepUpBinding(operator.id, method, path, req.body?.body)),
-      rpId: SECURITY.rpId,
-      allowCredentials: operator.credentials.map((c) => ({ type: "public-key", id: c.credentialId })),
+      rpId: OPERATOR.rpId,
+      allowCredentials: usable(operator).map((c) => ({ type: "public-key", id: c.credentialId })),
       userVerification: "required",
       timeout: 120_000,
     });
@@ -187,12 +198,12 @@ export function createOperatorAuthRouter() {
       // Held per operator, and read again: the passkey cap holds until the write.
       await store.lockKey(`operator:${found.email.trim().toLowerCase()}`);
       const operator = (await store.findOperator(found.id))!;
-      if (operator.credentials.length >= OPERATOR.maxPasskeys) {
+      if (usable(operator).length >= OPERATOR.maxPasskeys) {
         return res.status(409).json({ error: `an operator holds at most ${OPERATOR.maxPasskeys} passkeys`, code: "PASSKEY_LIMIT" });
       }
       let reg: ReturnType<typeof verifyRegistration>;
       try {
-        reg = verifyRegistration(req.body?.attestationObject, req.body?.clientDataJSON, SECURITY.rpId, [OPERATOR.adminOrigin], `op:add:${operator.id}`, "operator_enrol");
+        reg = verifyRegistration(req.body?.attestationObject, req.body?.clientDataJSON, OPERATOR.rpId, [OPERATOR.adminOrigin], `op:add:${operator.id}`, "operator_enrol");
       } catch (err) {
         return res.status(400).json({ error: redactedMessage(err, { keepHosts: true }), code: "REGISTRATION_INVALID" });
       }
@@ -201,7 +212,7 @@ export function createOperatorAuthRouter() {
       }
       const credential: OperatorCredential = {
         credentialId: reg.credentialId, key: reg.key, signCount: reg.signCount,
-        label: label(req.body?.label, `Passkey ${operator.credentials.length + 1}`), createdAt: new Date().toISOString(),
+        label: label(req.body?.label, `Passkey ${usable(operator).length + 1}`), rpId: OPERATOR.rpId, createdAt: new Date().toISOString(),
       };
       await store.addOperatorCredential(operator.id, credential);
       await store.audit(auditEntry("operator.passkey_added", { operator: `operator:${operator.id}`, operatorName: operator.name, passkey: credential.label }));
