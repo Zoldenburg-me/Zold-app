@@ -369,7 +369,7 @@ function paper(check) {
     <h2 class="zb-paper__title">${esc(t.invoice)} ${esc(pv.number || "")}</h2>
     <div class="zb-paper__meta">
       <p><span>${esc(t.date)}</span>${esc(pDate(invoiceDraft.issueDate, lang))}</p>
-      <p><span>${esc(t.supply)}</span>${esc(pDate(invoiceDraft.supplyDate, lang))}</p>
+      <p><span>${esc(t.supply)}</span>${esc(invoiceDraft.supplyPeriod ? `${pDate(invoiceDraft.supplyPeriod.from, lang)} – ${pDate(invoiceDraft.supplyPeriod.to, lang)}` : pDate(invoiceDraft.supplyDate, lang))}</p>
       ${pv.dueDate ? `<p><span>${esc(t.due)}</span>${esc(pDate(pv.dueDate, lang))}</p>` : ""}
     </div>
     <table><thead><tr><th scope="col">${esc(t.item)}</th><th scope="col">${esc(t.qty)}</th><th scope="col">${esc(t.unit)}</th><th scope="col">${esc(t.amount)}</th></tr></thead>
