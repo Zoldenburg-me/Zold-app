@@ -327,6 +327,20 @@ await check("lines made from wallet receipts may be reworded, not reordered: eac
   assert.deepEqual(reworded.data.invoice.lines.map((l: any) => l.receipt?.txHash), [`0x${"1".repeat(64)}`, `0x${"2".repeat(64)}`]);
 });
 
+await check("a service period is corrected as a period; one that ends before it starts is refused", async () => {
+  const monthly = { ...reverseCharge, supplyDate: undefined, supplyPeriod: { from: "2026-10-01", to: "2026-10-31" } };
+  const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", monthly);
+  assert.equal(r.status, 201, JSON.stringify(r.data));
+  const reversed = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, supplyPeriod: { from: "2026-10-31", to: "2026-10-01" } });
+  assert.equal(reversed.status, 422, JSON.stringify(reversed.data));
+  assert.equal((await store.findInvoice(r.data.invoice.id))!.state, "SUBMITTED");
+  const notADay = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, supplyPeriod: { from: "2026-10-01", to: "2026-10-32" } });
+  assert.equal(notADay.status, 422, JSON.stringify(notADay.data));
+  const fixed = await correct(r.data.invoice.id, "u_owner", { acceptWarnings: true, supplyPeriod: { from: "2026-10-01", to: "2026-10-30" } });
+  assert.equal(fixed.status, 201, JSON.stringify(fixed.data));
+  assert.deepEqual(fixed.data.invoice.issued.supplyPeriod, { from: "2026-10-01", to: "2026-10-30" });
+});
+
 await check("an amount that no longer matches is refused, not issued", async () => {
   const r = await call("POST", "/api/orgs/org_de/invoicing/issue", "u_owner", reverseCharge);
   // The correction is built from the original's own lines and treatment, so
