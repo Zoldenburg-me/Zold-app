@@ -245,7 +245,9 @@ export async function payLinkPayee(org: Organisation, user: User, forInvoice = f
   if (!(await linkMethodsFor(org, cryptoOnly ? { payee, cryptoOnly } : { payee }, user)).length) {
     return {
       code: "NO_METHOD",
-      reason: own
+      reason: cryptoOnly
+        ? "Your payment page has no address to take digital dollars yet, and a link here can only be paid that way until the euro account is connected. Set up your payment page under Get paid."
+        : own
         ? "No way to get paid is set up on this account yet: activate your IBAN with Monerium, or set up your payment page to take digital dollars."
         : `A link you make for ${org.name} is paid by bank transfer, and its account has no active IBAN yet.`,
     };
