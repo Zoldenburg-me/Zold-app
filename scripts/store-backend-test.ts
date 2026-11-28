@@ -462,6 +462,9 @@ console.log("ok - store suite on the JSON backend");
     statement_timeout: 30_000,
     idle_in_transaction_session_timeout: 30_000,
     connectionTimeoutMillis: 10_000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    max: 20,
     connectionString: "postgresql://zold_app@/zold?host=/run/postgresql-mainnet&port=5432",
   });
   assert.ok(pgPoolConfig("postgresql:///zold?host=/tmp", real));

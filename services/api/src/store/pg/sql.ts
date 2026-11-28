@@ -107,14 +107,26 @@ export const LOCK_TIMEOUT = "10s";
  * awaits something that never settles still holds its slot. A statement past STATEMENT_TIMEOUT_MS is cancelled (a migration sets
  * its own, longer one). A request waits CONNECT_TIMEOUT_MS for a pooled
  * client, then fails, instead of queueing forever behind a drained pool.
+ * TCP keepalive finds a socket the network dropped without a reset, which no
+ * server-side timeout can see. POOL_MAX stays well under the cluster's
+ * max_connections (scripts/oracle-host/provision.sh, 100); pg's default of
+ * 10 runs out when ten prepares wait on one user's cap lock (holdDailyCap).
  */
 export const STATEMENT_TIMEOUT_MS = 30_000;
 export const IDLE_IN_TX_TIMEOUT_MS = 30_000;
 export const CONNECT_TIMEOUT_MS = 10_000;
+export const POOL_MAX = 20;
+/** The API's client-side bound on one query: a statement the server would
+ *  have cancelled at STATEMENT_TIMEOUT_MS, on a socket that stopped answering.
+ *  Not on the migration, export or import pools: they lift statement_timeout. */
+export const API_QUERY_TIMEOUT_MS = STATEMENT_TIMEOUT_MS + 5_000;
 const BOUNDS = {
   statement_timeout: STATEMENT_TIMEOUT_MS,
   idle_in_transaction_session_timeout: IDLE_IN_TX_TIMEOUT_MS,
   connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
+  max: POOL_MAX,
 } satisfies pg.PoolConfig;
 
 export function poolDatabase(pool: pg.Pool): Database {
@@ -246,6 +258,6 @@ export function pgPoolConfig(url: string, opts: { ca?: string; realMoney: boolea
   return { ...BOUNDS, connectionString: url };
 }
 
-export function openPool(url: string, opts: { ca?: string; realMoney: boolean }): Database {
-  return poolDatabase(new pg.Pool(pgPoolConfig(url, opts)));
+export function openPool(url: string, opts: { ca?: string; realMoney: boolean; queryTimeoutMs?: number }): Database {
+  return poolDatabase(new pg.Pool({ ...pgPoolConfig(url, opts), query_timeout: opts.queryTimeoutMs }));
 }

@@ -18,7 +18,7 @@ import { beginWrites, DATA_DIR, db, endWrites, initStore as initJsonStore, persi
 import { jsonBackend, type StoreBackend } from "./store/backend.js";
 import { createPgStore } from "./store/pg/backend.js";
 import { assertSchemaCurrent } from "./store/pg/migrate.js";
-import { openPool, pgPoolConfig, type Database } from "./store/pg/sql.js";
+import { API_QUERY_TIMEOUT_MS, openPool, pgPoolConfig, type Database } from "./store/pg/sql.js";
 import { DATABASE_CA, DATABASE_URL, IS_REAL_MONEY_CHAIN, STORE_BACKEND } from "./config/env.js";
 import { auditEntry } from "./audit.js";
 import type {
@@ -982,8 +982,9 @@ export const jsonCore = {
     return undefined;
   },
   addOperator(o: Operator) {
-    if (db.operators.some((x) => x.email === o.email)) throw new Error("an operator with that email exists");
-    db.operators.push({ ...o, email: o.email.trim().toLowerCase() });
+    const email = o.email.trim().toLowerCase();
+    if (db.operators.some((x) => x.email === email)) throw new Error("an operator with that email exists");
+    db.operators.push({ ...o, email });
     persist();
     return db.operators[db.operators.length - 1];
   },
@@ -1572,7 +1573,7 @@ export const jsonCore = {
 
 /** The Postgres database when STORE_BACKEND=postgres (config/env.ts). */
 const pgDatabase: Database | undefined =
-  STORE_BACKEND === "postgres" ? openPool(DATABASE_URL, { ca: DATABASE_CA, realMoney: IS_REAL_MONEY_CHAIN }) : undefined;
+  STORE_BACKEND === "postgres" ? openPool(DATABASE_URL, { ca: DATABASE_CA, realMoney: IS_REAL_MONEY_CHAIN, queryTimeoutMs: API_QUERY_TIMEOUT_MS }) : undefined;
 
 /**
  * The store (store/backend.ts): every method async. JSON: behind one mutex,
